@@ -2,6 +2,7 @@
 #![no_main]
 
 mod keyboard;
+mod rtc;
 mod vga;
 
 use core::panic::PanicInfo;
@@ -102,6 +103,7 @@ fn run_command(input: &str) {
             println!("  clear      - Clear the screen");
             println!("  echo TEXT  - Print text");
             println!("  version    - Show version");
+            println!("  date       - Show the current date and time");
             println!("  uname      - Show system information");
             println!("  reboot     - Reboot the machine");
         }
@@ -122,6 +124,20 @@ fn run_command(input: &str) {
 
         "version" => {
             println!("Xinyi kernel version 0.1.0");
+        }
+
+        "date" => {
+            let now = rtc::read();
+
+            println!(
+                "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+                now.year,
+                now.month,
+                now.day,
+                now.hour,
+                now.minute,
+                now.second
+            );
         }
 
         "uname" => {
@@ -381,6 +397,7 @@ pub extern "C" fn rust_main() -> ! {
                                     "clear",
                                     "echo",
                                     "version",
+                                    "date",
                                     "uname",
                                     "reboot",
                                 ];
