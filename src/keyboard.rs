@@ -1,4 +1,3 @@
-
 const DATA_PORT: u16 = 0x60;
 const STATUS_PORT: u16 = 0x64;
 
@@ -8,6 +7,14 @@ const CAPS_LOCK: u8 = 0x3A;
 
 static mut SHIFT_DOWN: bool = false;
 static mut CAPS_LOCK_ON: bool = false;
+static mut EXTENDED: bool = false;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Key {
+    Char(char),
+    ArrowUp,
+    ArrowDown,
+}
 
 unsafe fn inb(port: u16) -> u8 {
     let value: u8;
@@ -32,10 +39,33 @@ fn read_scancode() -> Option<u8> {
     }
 }
 
-pub fn poll_char() -> Option<char> {
+pub fn poll_key() -> Option<Key> {
     let code = read_scancode()?;
 
     unsafe {
+        // Extended PS/2 keys start with 0xE0.
+        if code == 0xE0 {
+            EXTENDED = true;
+            return None;
+        }
+
+        let extended = EXTENDED;
+        EXTENDED = false;
+
+        // Handle arrow keys.
+        if extended {
+            // Ignore extended key-release events.
+            if code & 0x80 != 0 {
+                return None;
+            }
+
+            return match code {
+                0x48 => Some(Key::ArrowUp),
+                0x50 => Some(Key::ArrowDown),
+                _ => None,
+            };
+        }
+
         if code == LEFT_SHIFT || code == RIGHT_SHIFT {
             SHIFT_DOWN = true;
             return None;
@@ -48,7 +78,7 @@ pub fn poll_char() -> Option<char> {
             return None;
         }
 
-        // Ignore key-release events.
+        // Ignore ordinary key-release events.
         if code & 0x80 != 0 {
             return None;
         }
@@ -75,9 +105,9 @@ pub fn poll_char() -> Option<char> {
             0x0C => if shift { '_' } else { '-' },
             0x0D => if shift { '+' } else { '=' },
 
-            0x0E => '\u{8}', // Backspace
+            0x0E => '\u{8}',
             0x0F => '\t',
-            0x1C => '\n', // Enter
+            0x1C => '\n',
             0x39 => ' ',
 
             0x10 => letter('q', shift, caps),
@@ -120,7 +150,15 @@ pub fn poll_char() -> Option<char> {
             _ => return None,
         };
 
-        Some(ch)
+        Some(Key::Char(ch))
+    }
+}
+
+// Keep the existing character-only interface available.
+pub fn poll_char() -> Option<char> {
+    match poll_key()? {
+        Key::Char(ch) => Some(ch),
+        Key::ArrowUp | Key::ArrowDown => None,
     }
 }
 
