@@ -249,11 +249,36 @@ pub extern "C" fn rust_main() -> ! {
                         }
 
                         '\t' => {
-                            for _ in 0..4 {
-                                if length < INPUT_LIMIT {
-                                    input[length] = b' ';
-                                    length += 1;
-                                    print!(" ");
+                            let current =
+                                core::str::from_utf8(&input[..length])
+                                    .unwrap_or("");
+
+                            let commands = [
+                                "help",
+                                "about",
+                                "clear",
+                                "echo",
+                                "version",
+                                "uname",
+                                "reboot",
+                            ];
+
+                            let mut matches = commands
+                                .iter()
+                                .filter(|command| command.starts_with(current));
+
+                            // Complete only if exactly one command matches.
+                            if let Some(command) = matches.next() {
+                                if matches.next().is_none() {
+                                    let remaining = &command[length..];
+
+                                    for byte in remaining.bytes() {
+                                        if length < INPUT_LIMIT {
+                                            input[length] = byte;
+                                            length += 1;
+                                            print!("{}", byte as char);
+                                        }
+                                    }
                                 }
                             }
                         }
