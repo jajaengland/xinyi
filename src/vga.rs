@@ -1,3 +1,4 @@
+
 use core::fmt;
 use core::fmt::Write;
 use core::ptr::{read_volatile, write_volatile};
@@ -16,6 +17,7 @@ pub struct Writer {
     column: usize,
     row: usize,
     color: u8,
+    scroll_count: usize,
 }
 
 impl Writer {
@@ -24,6 +26,7 @@ impl Writer {
             column: 0,
             row: 0,
             color: DEFAULT_COLOR,
+            scroll_count: 0,
         }
     }
 
@@ -95,6 +98,7 @@ impl Writer {
     }
 
     fn scroll(&mut self) {
+        self.scroll_count = self.scroll_count.wrapping_add(1);
         for row in 1..HEIGHT {
             for column in 0..WIDTH {
                 let source = (row * WIDTH + column) * 2;
@@ -127,7 +131,8 @@ impl Writer {
 
     fn write_byte(&mut self, byte: u8) {
         match byte {
-            b'\n' => self.new_line(),
+
+b'\n' => self.new_line(),
 
             b'\r' => self.column = 0,
 
@@ -168,6 +173,13 @@ impl Writer {
         self.put_cell(self.column, self.row, b' ');
         self.update_cursor();
     }
+
+    // Move the visible hardware cursor without changing screen text.
+    pub fn move_cursor(&mut self, column: usize, row: usize) {
+        self.column = column.min(WIDTH - 1);
+        self.row = row.min(HEIGHT - 1);
+        self.update_cursor();
+    }
 }
 
 impl Write for Writer {
@@ -203,9 +215,31 @@ pub fn backspace() {
     }
 }
 
+// Move the hardware cursor without erasing or rewriting text.
+pub fn move_cursor(column: usize, row: usize) {
+    unsafe {
+        let writer = core::ptr::addr_of_mut!(WRITER);
+        (*writer).move_cursor(column, row);
+    }
+}
+
+pub fn cursor_position() -> (usize, usize) {
+    unsafe {
+        let writer = core::ptr::addr_of!(WRITER);
+        ((*writer).column, (*writer).row)
+    }
+}
+
 pub fn _print(arguments: fmt::Arguments) {
     unsafe {
         let writer = core::ptr::addr_of_mut!(WRITER);
         let _ = (*writer).write_fmt(arguments);
+    }
+}
+/// Number of times the VGA text buffer has scrolled since startup or clear.
+pub fn scroll_count() -> usize {
+    unsafe {
+        let writer = core::ptr::addr_of!(WRITER);
+        (*writer).scroll_count
     }
 }

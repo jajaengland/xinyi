@@ -8,6 +8,7 @@ use core::panic::PanicInfo;
 
 const INPUT_LIMIT: usize = 128;
 const HISTORY_LIMIT: usize = 8;
+const PROMPT: &str = "xinyi> ";
 
 #[macro_export]
 macro_rules! print {
@@ -21,11 +22,64 @@ macro_rules! println {
     () => {
         $crate::vga::_print(core::format_args!("\n"))
     };
-
     ($($arg:tt)*) => {{
         $crate::vga::_print(core::format_args!($($arg)*));
         $crate::vga::_print(core::format_args!("\n"));
     }};
+}
+
+// Position the cursor at a character index within the input line.
+// VGA positions are represented as (column, row).
+fn place_input_cursor(
+    start_column: usize,
+    start_row: usize,
+    position: usize,
+) {
+    let absolute = start_row * 80 + start_column + position;
+    let row = absolute / 80;
+    let column = absolute % 80;
+
+    vga::move_cursor(column, row);
+}
+
+// Keep the remembered prompt row aligned when VGA scrolling moves the screen.
+fn sync_prompt_row(prompt_row: &mut usize, last_scroll_count: &mut usize) {
+    let current = vga::scroll_count();
+    let scrolled = current.wrapping_sub(*last_scroll_count);
+    *prompt_row = prompt_row.saturating_sub(scrolled);
+    *last_scroll_count = current;
+}
+
+// Redraw an edited command and remove any leftover characters.
+fn redraw_input(
+    input: &[u8; INPUT_LIMIT],
+    length: usize,
+    cursor_position: usize,
+    old_length: usize,
+    start_column: usize,
+    start_row: &mut usize,
+    last_scroll_count: &mut usize,
+) {
+    sync_prompt_row(start_row, last_scroll_count);
+    vga::move_cursor(start_column, *start_row);
+
+    if let Ok(text) = core::str::from_utf8(&input[..length]) {
+        print!("{}", text);
+    }
+
+    // Erase characters left behind when the command becomes shorter.
+    for _ in length..old_length {
+        print!(" ");
+    }
+
+    // Printing the input may itself have scrolled the display, so update
+    // the saved prompt row before placing the hardware cursor.
+    sync_prompt_row(start_row, last_scroll_count);
+    place_input_cursor(
+        start_column,
+        *start_row,
+        cursor_position,
+    );
 }
 
 fn run_command(input: &str) {
@@ -108,7 +162,7 @@ fn run_command(input: &str) {
 
         _ => {
             println!("Unknown command: {}", command);
-            println!("Type 'help' to see available commands.");
+            println!("Type 'help' for available commands.");
         }
     }
 }
@@ -124,76 +178,115 @@ pub extern "C" fn rust_main() -> ! {
 
     let mut input = [0u8; INPUT_LIMIT];
     let mut length = 0usize;
+    let mut cursor_position = 0usize;
 
     let mut history = [[0u8; INPUT_LIMIT]; HISTORY_LIMIT];
     let mut history_lengths = [0usize; HISTORY_LIMIT];
     let mut history_count = 0usize;
     let mut history_position = 0usize;
 
-    print!("xinyi> ");
+    print!("{}", PROMPT);
+    // The current VGA cursor is immediately after the prompt, which is
+    // where command input should begin.
+    let (prompt_end_column, mut prompt_row) = vga::cursor_position();
+    let mut prompt_column = prompt_end_column;
+    let mut last_scroll_count = vga::scroll_count();
 
     loop {
         if let Some(key) = keyboard::poll_key() {
             match key {
+                keyboard::Key::ArrowLeft => {
+                    if cursor_position > 0 {
+                        cursor_position -= 1;
+                        sync_prompt_row(&mut prompt_row, &mut last_scroll_count);
+
+                        place_input_cursor(
+                            prompt_column,
+                            prompt_row,
+                            cursor_position,
+                        );
+                    }
+                }
+
+                keyboard::Key::ArrowRight => {
+                    if cursor_position < length {
+                        cursor_position += 1;
+                        sync_prompt_row(&mut prompt_row, &mut last_scroll_count);
+
+                        place_input_cursor(
+                            prompt_column,
+                            prompt_row,
+                            cursor_position,
+                        );
+                    }
+                }
+
                 keyboard::Key::ArrowUp => {
                     if history_position > 0 {
+                        let old_length = length;
                         history_position -= 1;
 
-                        // Remove the current line from the display.
-                        while length > 0 {
-                            vga::backspace();
-                            length -= 1;
-                        }
-
                         input.fill(0);
-
-                        // Restore the selected command.
                         length = history_lengths[history_position];
 
                         input[..length].copy_from_slice(
                             &history[history_position][..length],
                         );
 
-                        if let Ok(command) =
-                            core::str::from_utf8(&input[..length])
-                        {
-                            print!("{}", command);
-                        }
+                        cursor_position = length;
+
+                        redraw_input(
+                            &input,
+                            length,
+                            cursor_position,
+                            old_length,
+                            prompt_column,
+                            &mut prompt_row,
+                            &mut last_scroll_count,
+                        );
                     }
                 }
 
                 keyboard::Key::ArrowDown => {
                     if history_position < history_count {
+                        let old_length = length;
                         history_position += 1;
 
-                        // Clear the currently displayed command.
-                        while length > 0 {
-                            vga::backspace();
-                            length -= 1;
-                        }
-
                         input.fill(0);
+                        length = 0;
 
-                        // A position after the newest command is blank.
+                        // Select the next command, or a blank line.
                         if history_position < history_count {
                             length = history_lengths[history_position];
 
                             input[..length].copy_from_slice(
                                 &history[history_position][..length],
                             );
-
-                            if let Ok(command) =
-                                core::str::from_utf8(&input[..length])
-                            {
-                                print!("{}", command);
-                            }
                         }
+
+                        cursor_position = length;
+
+                        redraw_input(
+                            &input,
+                            length,
+                            cursor_position,
+                            old_length,
+                            prompt_column,
+                            &mut prompt_row,
+                            &mut last_scroll_count,
+                        );
                     }
                 }
 
                 keyboard::Key::Char(character) => {
                     match character {
                         '\n' => {
+                            sync_prompt_row(&mut prompt_row, &mut last_scroll_count);
+                            // Move to the next line before running a command.
+                            vga::move_cursor(
+                                (prompt_column + length) % 80,
+                                prompt_row + (prompt_column + length) / 80,
+                            );
                             println!();
 
                             let command =
@@ -213,8 +306,7 @@ pub extern "C" fn rust_main() -> ! {
                                     if history_count == HISTORY_LIMIT {
                                         // Discard the oldest command.
                                         for index in 1..HISTORY_LIMIT {
-                                            history[index - 1] =
-                                                history[index];
+                                            history[index - 1] = history[index];
                                             history_lengths[index - 1] =
                                                 history_lengths[index];
                                         }
@@ -233,51 +325,94 @@ pub extern "C" fn rust_main() -> ! {
                             run_command(command);
 
                             length = 0;
+                            cursor_position = 0;
                             input.fill(0);
                             history_position = history_count;
 
                             println!();
-                            print!("xinyi> ");
+
+                            // Print the next prompt, then remember the
+                            // cursor position immediately after it. Input
+                            // must begin here, not at the start of the prompt.
+                            print!("{}", PROMPT);
+                            let (prompt_end_column, new_prompt_row) = vga::cursor_position();
+                            prompt_column = prompt_end_column;
+                            prompt_row = new_prompt_row;
+                            last_scroll_count = vga::scroll_count();
                         }
 
                         '\u{8}' => {
-                            if length > 0 {
+                            // Delete the character immediately before the
+                            // cursor, shifting the remaining text left.
+                            if cursor_position > 0 {
+                                let old_length = length;
+
+                                for index in cursor_position..length {
+                                    input[index - 1] = input[index];
+                                }
+
                                 length -= 1;
+                                cursor_position -= 1;
                                 input[length] = 0;
-                                vga::backspace();
+
+                                redraw_input(
+                                    &input,
+                                    length,
+                                    cursor_position,
+                                    old_length,
+                                    prompt_column,
+                                    &mut prompt_row,
+                                    &mut last_scroll_count,
+                                );
                             }
                         }
 
                         '\t' => {
-                            let current =
-                                core::str::from_utf8(&input[..length])
-                                    .unwrap_or("");
+                            // Complete commands only when the cursor is at
+                            // the end of the command line.
+                            if cursor_position == length {
+                                let current =
+                                    core::str::from_utf8(&input[..length])
+                                        .unwrap_or("");
 
-                            let commands = [
-                                "help",
-                                "about",
-                                "clear",
-                                "echo",
-                                "version",
-                                "uname",
-                                "reboot",
-                            ];
+                                let commands = [
+                                    "help",
+                                    "about",
+                                    "clear",
+                                    "echo",
+                                    "version",
+                                    "uname",
+                                    "reboot",
+                                ];
 
-                            let mut matches = commands
-                                .iter()
-                                .filter(|command| command.starts_with(current));
+                                let mut matches = commands
+                                    .iter()
+                                    .filter(|command| {
+                                        command.starts_with(current)
+                                    });
 
-                            // Complete only if exactly one command matches.
-                            if let Some(command) = matches.next() {
-                                if matches.next().is_none() {
-                                    let remaining = &command[length..];
+                                // Complete only if exactly one command matches.
+                                if let Some(command) = matches.next() {
+                                    if matches.next().is_none() {
+                                        let remaining = &command[length..];
 
-                                    for byte in remaining.bytes() {
-                                        if length < INPUT_LIMIT {
-                                            input[length] = byte;
-                                            length += 1;
-                                            print!("{}", byte as char);
+                                        for byte in remaining.bytes() {
+                                            if length < INPUT_LIMIT {
+                                                input[length] = byte;
+                                                length += 1;
+                                                cursor_position += 1;
+                                            }
                                         }
+
+                                        redraw_input(
+                                            &input,
+                                            length,
+                                            cursor_position,
+                                            length,
+                                            prompt_column,
+                                            &mut prompt_row,
+                                            &mut last_scroll_count,
+                                        );
                                     }
                                 }
                             }
@@ -285,9 +420,25 @@ pub extern "C" fn rust_main() -> ! {
 
                         ch if ch.is_ascii() && !ch.is_control() => {
                             if length < INPUT_LIMIT {
-                                input[length] = ch as u8;
+                                // Shift the text right to make room for the
+                                // new character at the cursor.
+                                for index in (cursor_position..length).rev() {
+                                    input[index + 1] = input[index];
+                                }
+
+                                input[cursor_position] = ch as u8;
                                 length += 1;
-                                print!("{}", ch);
+                                cursor_position += 1;
+
+                                redraw_input(
+                                    &input,
+                                    length,
+                                    cursor_position,
+                                    length - 1,
+                                    prompt_column,
+                                    &mut prompt_row,
+                                    &mut last_scroll_count,
+                                );
                             }
                         }
 
