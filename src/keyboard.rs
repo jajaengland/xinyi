@@ -14,6 +14,8 @@ pub enum Key {
     Char(char),
     ArrowUp,
     ArrowDown,
+    ArrowLeft,
+    ArrowRight,
 }
 
 unsafe fn inb(port: u16) -> u8 {
@@ -52,7 +54,7 @@ pub fn poll_key() -> Option<Key> {
         let extended = EXTENDED;
         EXTENDED = false;
 
-        // Handle arrow keys.
+        // Handle extended arrow keys.
         if extended {
             // Ignore extended key-release events.
             if code & 0x80 != 0 {
@@ -62,6 +64,8 @@ pub fn poll_key() -> Option<Key> {
             return match code {
                 0x48 => Some(Key::ArrowUp),
                 0x50 => Some(Key::ArrowDown),
+                0x4B => Some(Key::ArrowLeft),
+                0x4D => Some(Key::ArrowRight),
                 _ => None,
             };
         }
@@ -158,7 +162,10 @@ pub fn poll_key() -> Option<Key> {
 pub fn poll_char() -> Option<char> {
     match poll_key()? {
         Key::Char(ch) => Some(ch),
-        Key::ArrowUp | Key::ArrowDown => None,
+        Key::ArrowUp
+        | Key::ArrowDown
+        | Key::ArrowLeft
+        | Key::ArrowRight => None,
     }
 }
 
