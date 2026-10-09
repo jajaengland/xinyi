@@ -1,0 +1,6 @@
+
+[build]
+target = "i686-unknown-none.json"
+
+[target.i686-unknown-none]
+linker = "rust-lld"
