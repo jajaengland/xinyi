@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+mod interrupts;
 mod keyboard;
 mod rtc;
 mod vga;
@@ -114,6 +115,13 @@ fn run_command(input: &str) {
             println!("Written in Rust and x86 assembly.");
         }
 
+        "breakpoint" => {
+    	    println!("Triggering CPU breakpoint exception...");
+    	    unsafe {
+                core::arch::asm!("int3", options(nomem, nostack));
+            }
+        }
+
         "clear" => {
             vga::clear_screen();
         }
@@ -185,6 +193,7 @@ fn run_command(input: &str) {
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> ! {
+    interrupts::init();
     vga::clear_screen();
 
     println!("Welcome to Xinyi.");
@@ -399,6 +408,7 @@ pub extern "C" fn rust_main() -> ! {
                                     "version",
                                     "date",
                                     "uname",
+				    "breakpoint",
                                     "reboot",
                                 ];
 
