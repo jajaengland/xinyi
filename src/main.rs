@@ -107,6 +107,7 @@ fn run_command(input: &str) {
             println!("  date       - Show the current date and time");
             println!("  uname      - Show system information");
             println!("  reboot     - Reboot the machine");
+			println!("  uptime     - Show system uptime")
         }
 
         "about" => {
@@ -183,6 +184,19 @@ fn run_command(input: &str) {
 
             println!("Reset was not confirmed.");
         }
+		"uptime" => {
+			let total_seconds = interrupts::uptime_seconds();
+			let hours = total_seconds / 3600;
+			let minutes = (total_seconds % 3600) / 60;
+			let seconds = total_seconds % 60;
+
+			println!(
+				"Uptime: {:02}:{:02}:{:02}",
+				hours,
+				minutes,
+				seconds
+			);
+		}
 
         _ => {
             println!("Unknown command: {}", command);
@@ -193,7 +207,18 @@ fn run_command(input: &str) {
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> ! {
+    // Install CPU exception and hardware IRQ handlers.
     interrupts::init();
+
+    // Remap the PIC and configure the PIT while interrupts remain disabled.
+    interrupts::remap_pic();
+    interrupts::init_pit();
+
+    // Enable CPU interrupts only after the handlers and timer are ready.
+    unsafe {
+        core::arch::asm!("sti", options(nomem, nostack));
+    }
+
     vga::clear_screen();
 
     println!("Welcome to Xinyi.");

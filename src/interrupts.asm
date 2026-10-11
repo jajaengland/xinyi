@@ -76,3 +76,50 @@ isr_common:
 .halt:
     hlt
     jmp .halt
+
+; Hardware IRQs use IDT vectors 32–47.
+; Unlike CPU exceptions, these stubs return after handling the IRQ.
+
+EXTERN xinyi_irq_handler
+
+%macro IRQ 1
+GLOBAL irq%1
+irq%1:
+    push dword 0
+    push dword (32 + %1)
+    jmp irq_common
+%endmacro
+
+IRQ 0
+IRQ 1
+IRQ 2
+IRQ 3
+IRQ 4
+IRQ 5
+IRQ 6
+IRQ 7
+IRQ 8
+IRQ 9
+IRQ 10
+IRQ 11
+IRQ 12
+IRQ 13
+IRQ 14
+IRQ 15
+
+irq_common:
+    pusha
+    cld
+
+    ; [esp + 32] contains the IDT vector (32–47).
+    mov eax, [esp + 32]
+    push eax
+    call xinyi_irq_handler
+    add esp, 4
+
+    popa
+
+    ; Discard the vector and dummy error code.
+    add esp, 8
+
+    iretd

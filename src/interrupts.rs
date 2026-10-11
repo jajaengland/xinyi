@@ -1,9 +1,15 @@
-
 use core::arch::asm;
 use crate::println;
+use core::sync::atomic::{AtomicU32, Ordering};
+
+static TIMER_TICKS: AtomicU32 = AtomicU32::new(0);
+
+const PIT_FREQUENCY: u32 = 100;
 
 const IDT_ENTRIES: usize = 256;
 const EXCEPTION_COUNT: usize = 32;
+const IRQ_COUNT: usize = 16;
+const IRQ_VECTOR_OFFSET: usize = 32;
 const KERNEL_CODE_SELECTOR: u16 = 0x08;
 
 #[repr(C, packed)]
@@ -80,6 +86,23 @@ unsafe extern "C" {
     fn isr29();
     fn isr30();
     fn isr31();
+
+    fn irq0();
+    fn irq1();
+    fn irq2();
+    fn irq3();
+    fn irq4();
+    fn irq5();
+    fn irq6();
+    fn irq7();
+    fn irq8();
+    fn irq9();
+    fn irq10();
+    fn irq11();
+    fn irq12();
+    fn irq13();
+    fn irq14();
+    fn irq15();
 }
 
 #[no_mangle]
@@ -132,9 +155,109 @@ pub extern "C" fn xinyi_exception_handler(
     }
 }
 
+#[no_mangle]
+pub extern "C" fn xinyi_irq_handler(vector: u32) {
+    if vector == 32 {
+        TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+    }
+
+    unsafe {
+        // Acknowledge the slave PIC first for IRQ vectors 40–47.
+        if (40..48).contains(&vector) {
+            asm!(
+                "out dx, al",
+                in("dx") 0xA0u16,
+                in("al") 0x20u8,
+                options(nomem, nostack, preserves_flags)
+            );
+        }
+
+        // Acknowledge the master PIC.
+        asm!(
+            "out dx, al",
+            in("dx") 0x20u16,
+            in("al") 0x20u8,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+}
+/// Remap the PIC so hardware IRQs use IDT vectors 32–47.
+/// Initially unmask only IRQ0 (the PIT timer).
+pub fn remap_pic() {
+    unsafe {
+        // Start PIC initialization.
+        asm!("out dx, al", in("dx") 0x20u16, in("al") 0x11u8,
+             options(nomem, nostack, preserves_flags));
+        asm!("out dx, al", in("dx") 0xA0u16, in("al") 0x11u8,
+             options(nomem, nostack, preserves_flags));
+
+        // Master PIC starts at vector 32; slave PIC at vector 40.
+        asm!("out dx, al", in("dx") 0x21u16, in("al") 0x20u8,
+             options(nomem, nostack, preserves_flags));
+        asm!("out dx, al", in("dx") 0xA1u16, in("al") 0x28u8,
+             options(nomem, nostack, preserves_flags));
+
+        // Tell each PIC how they are connected.
+        asm!("out dx, al", in("dx") 0x21u16, in("al") 0x04u8,
+             options(nomem, nostack, preserves_flags));
+        asm!("out dx, al", in("dx") 0xA1u16, in("al") 0x02u8,
+             options(nomem, nostack, preserves_flags));
+
+        // Set 8086 mode.
+        asm!("out dx, al", in("dx") 0x21u16, in("al") 0x01u8,
+             options(nomem, nostack, preserves_flags));
+        asm!("out dx, al", in("dx") 0xA1u16, in("al") 0x01u8,
+             options(nomem, nostack, preserves_flags));
+
+        // Mask every IRQ except IRQ0 on the master PIC.
+        asm!("out dx, al", in("dx") 0x21u16, in("al") 0xFEu8,
+             options(nomem, nostack, preserves_flags));
+        asm!("out dx, al", in("dx") 0xA1u16, in("al") 0xFFu8,
+             options(nomem, nostack, preserves_flags));
+    }
+}
+
+/// Configure the PIT to interrupt 100 times per second.
+pub fn init_pit() {
+    let divisor = 1_193_182u32 / PIT_FREQUENCY;
+
+    unsafe {
+        // Channel 0, low byte then high byte, square-wave mode.
+        asm!(
+            "out dx, al",
+            in("dx") 0x43u16,
+            in("al") 0x36u8,
+            options(nomem, nostack, preserves_flags)
+        );
+
+        asm!(
+            "out dx, al",
+            in("dx") 0x40u16,
+            in("al") (divisor & 0xFF) as u8,
+            options(nomem, nostack, preserves_flags)
+        );
+
+        asm!(
+            "out dx, al",
+            in("dx") 0x40u16,
+            in("al") ((divisor >> 8) & 0xFF) as u8,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+}
+
+/// Return the number of timer ticks since PIT initialization.
+pub fn timer_ticks() -> u32 {
+    TIMER_TICKS.load(Ordering::Relaxed)
+}
+
+pub fn uptime_seconds() -> u32 {
+    timer_ticks() / PIT_FREQUENCY
+}
+
 pub fn init() {
     unsafe {
-        let handlers: [u32; EXCEPTION_COUNT] = [
+        let exception_handlers: [u32; EXCEPTION_COUNT] = [
             isr0 as usize as u32,
             isr1 as usize as u32,
             isr2 as usize as u32,
@@ -169,10 +292,37 @@ pub fn init() {
             isr31 as usize as u32,
         ];
 
+        let irq_handlers: [u32; IRQ_COUNT] = [
+            irq0 as usize as u32,
+            irq1 as usize as u32,
+            irq2 as usize as u32,
+            irq3 as usize as u32,
+            irq4 as usize as u32,
+            irq5 as usize as u32,
+            irq6 as usize as u32,
+            irq7 as usize as u32,
+            irq8 as usize as u32,
+            irq9 as usize as u32,
+            irq10 as usize as u32,
+            irq11 as usize as u32,
+            irq12 as usize as u32,
+            irq13 as usize as u32,
+            irq14 as usize as u32,
+            irq15 as usize as u32,
+        ];
+
         let idt = core::ptr::addr_of_mut!(IDT);
 
+        // Install CPU exception handlers.
         for vector in 0..EXCEPTION_COUNT {
-            (*idt)[vector] = IdtEntry::new(handlers[vector]);
+            (*idt)[vector] =
+                IdtEntry::new(exception_handlers[vector]);
+        }
+
+        // Install hardware IRQ handlers at vectors 32–47.
+        for irq in 0..IRQ_COUNT {
+            (*idt)[IRQ_VECTOR_OFFSET + irq] =
+                IdtEntry::new(irq_handlers[irq]);
         }
 
         let pointer = IdtPointer {
