@@ -159,6 +159,8 @@ pub extern "C" fn xinyi_exception_handler(
 pub extern "C" fn xinyi_irq_handler(vector: u32) {
     if vector == 32 {
         TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+    } else if vector == 33 {
+        crate::keyboard::handle_irq();
     }
 
     unsafe {
@@ -182,7 +184,7 @@ pub extern "C" fn xinyi_irq_handler(vector: u32) {
     }
 }
 /// Remap the PIC so hardware IRQs use IDT vectors 32–47.
-/// Initially unmask only IRQ0 (the PIT timer).
+/// Initially unmask IRQ1 and IRQ0 (the PIT timer).
 pub fn remap_pic() {
     unsafe {
         // Start PIC initialization.
@@ -209,11 +211,13 @@ pub fn remap_pic() {
         asm!("out dx, al", in("dx") 0xA1u16, in("al") 0x01u8,
              options(nomem, nostack, preserves_flags));
 
-        // Mask every IRQ except IRQ0 on the master PIC.
-        asm!("out dx, al", in("dx") 0x21u16, in("al") 0xFEu8,
-             options(nomem, nostack, preserves_flags));
-        asm!("out dx, al", in("dx") 0xA1u16, in("al") 0xFFu8,
-             options(nomem, nostack, preserves_flags));
+        // Unmask IRQ0 (PIT timer) and IRQ1 (keyboard).
+		asm!("out dx, al", in("dx") 0x21u16, in("al") 0xFCu8,
+			options(nomem, nostack, preserves_flags));
+
+		// Keep all slave PIC IRQs masked.
+		asm!("out dx, al", in("dx") 0xA1u16, in("al") 0xFFu8,
+			options(nomem, nostack, preserves_flags));
     }
 }
 

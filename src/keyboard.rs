@@ -1,9 +1,18 @@
+use core::sync::atomic::{AtomicUsize, Ordering};
+
 const DATA_PORT: u16 = 0x60;
 const STATUS_PORT: u16 = 0x64;
+const SCANCODE_BUFFER_SIZE: usize = 128;
 
 const LEFT_SHIFT: u8 = 0x2A;
 const RIGHT_SHIFT: u8 = 0x36;
 const CAPS_LOCK: u8 = 0x3A;
+
+// Single-producer (IRQ1), single-consumer (shell) ring buffer.
+static SCANCODE_HEAD: AtomicUsize = AtomicUsize::new(0);
+static SCANCODE_TAIL: AtomicUsize = AtomicUsize::new(0);
+static mut SCANCODE_BUFFER: [u8; SCANCODE_BUFFER_SIZE] =
+    [0; SCANCODE_BUFFER_SIZE];
 
 static mut SHIFT_DOWN: bool = false;
 static mut CAPS_LOCK_ON: bool = false;
@@ -31,14 +40,55 @@ unsafe fn inb(port: u16) -> u8 {
     value
 }
 
-fn read_scancode() -> Option<u8> {
+/// Called by IRQ1. Collects a scancode without printing or decoding it.
+pub fn handle_irq() {
     unsafe {
         if inb(STATUS_PORT) & 1 == 0 {
-            return None;
+            return;
         }
 
-        Some(inb(DATA_PORT))
+        let code = inb(DATA_PORT);
+
+        let head = SCANCODE_HEAD.load(Ordering::Relaxed);
+        let next = (head + 1) % SCANCODE_BUFFER_SIZE;
+        let tail = SCANCODE_TAIL.load(Ordering::Acquire);
+
+        // Leave one slot empty to distinguish a full buffer from an empty one.
+        if next == tail {
+            return;
+        }
+
+        core::ptr::addr_of_mut!(SCANCODE_BUFFER)
+            .cast::<u8>()
+            .add(head)
+            .write(code);
+
+        SCANCODE_HEAD.store(next, Ordering::Release);
     }
+}
+
+/// Gets the next scancode collected by IRQ1.
+fn read_scancode() -> Option<u8> {
+    let tail = SCANCODE_TAIL.load(Ordering::Relaxed);
+    let head = SCANCODE_HEAD.load(Ordering::Acquire);
+
+    if tail == head {
+        return None;
+    }
+
+    let code = unsafe {
+        core::ptr::addr_of!(SCANCODE_BUFFER)
+            .cast::<u8>()
+            .add(tail)
+            .read()
+    };
+
+    SCANCODE_TAIL.store(
+        (tail + 1) % SCANCODE_BUFFER_SIZE,
+        Ordering::Release,
+    );
+
+    Some(code)
 }
 
 pub fn poll_key() -> Option<Key> {
@@ -54,7 +104,6 @@ pub fn poll_key() -> Option<Key> {
         let extended = EXTENDED;
         EXTENDED = false;
 
-        // Handle extended arrow keys.
         if extended {
             // Ignore extended key-release events.
             if code & 0x80 != 0 {
@@ -109,10 +158,10 @@ pub fn poll_key() -> Option<Key> {
             0x0C => if shift { '_' } else { '-' },
             0x0D => if shift { '+' } else { '=' },
 
-            0x0E => '\u{8}',
-            0x0F => '\t',
-            0x1C => '\n',
-            0x39 => ' ',
+            0x0E => '\u{8}', // Backspace
+            0x0F => '\t',    // Tab
+            0x1C => '\n',    // Enter
+            0x39 => ' ',     // Space
 
             0x10 => letter('q', shift, caps),
             0x11 => letter('w', shift, caps),
@@ -158,7 +207,7 @@ pub fn poll_key() -> Option<Key> {
     }
 }
 
-// Keep the existing character-only interface available.
+/// Keep the character-only interface available.
 pub fn poll_char() -> Option<char> {
     match poll_key()? {
         Key::Char(ch) => Some(ch),
