@@ -1,9 +1,20 @@
 #![no_std]
 #![no_main]
 
+mod debug;
+mod gdt;
 mod interrupts;
 mod keyboard;
+mod multiboot;
+mod paging;
+mod phys;
 mod rtc;
+mod task;
+mod usermode;
+mod vfs;
+mod loader;
+mod blockdev;
+mod fat16;
 mod vga;
 
 use core::panic::PanicInfo;
@@ -11,6 +22,41 @@ use core::panic::PanicInfo;
 const INPUT_LIMIT: usize = 128;
 const HISTORY_LIMIT: usize = 8;
 const PROMPT: &str = "xinyi> ";
+
+// Single source of truth for help output and Tab completion.
+// Add new commands here as well as in the run_command dispatch below.
+// Entries are (command name, usage text, description).
+const COMMANDS: &[(&str, &str, &str)] = &[
+    ("help", "help", "Show available commands"),
+    ("about", "about", "About Xinyi"),
+    ("clear", "clear", "Clear the screen"),
+    ("echo", "echo TEXT", "Print text"),
+    ("version", "version", "Show version"),
+    ("date", "date", "Show the current date and time"),
+    ("uname", "uname", "Show system information"),
+    ("uptime", "uptime", "Show system uptime"),
+    (
+        "keyboard",
+        "keyboard",
+        "Show keyboard state and diagnostics",
+    ),
+    ("memory", "memory", "Show bootloader memory information"),
+    ("paging", "paging", "Show paging configuration"),
+    ("frames", "frames", "Show and test physical frame allocation"),
+    ("usermode", "usermode", "Test ring 3 user-mode execution"),
+    ("ps", "ps", "Show running processes"),
+    ("run", "run [prog]", "Run a user program"),
+    ("ls", "ls", "List files"),
+    ("touch", "touch FILE", "Create a file"),
+    ("cat", "cat FILE", "Display file contents"),
+    (
+        "breakpoint",
+        "breakpoint",
+        "Trigger the CPU breakpoint exception",
+    ),
+    ("panic", "panic", "Test the kernel panic handler"),
+    ("reboot", "reboot", "Reboot the machine"),
+];
 
 #[macro_export]
 macro_rules! print {
@@ -84,6 +130,33 @@ fn redraw_input(
     );
 }
 
+// Compare an ASCII command name case-insensitively without allocating.
+fn starts_with_ignore_ascii_case(text: &str, prefix: &str) -> bool {
+    text.len() >= prefix.len()
+        && text.as_bytes()[..prefix.len()]
+            .eq_ignore_ascii_case(prefix.as_bytes())
+}
+
+// Offer a suggestion only when exactly one command matches by prefix.
+// Both directions are checked so truncated and overlong names are covered.
+fn suggest_command(command: &str) -> Option<&'static str> {
+    let mut matches = COMMANDS
+        .iter()
+        .map(|(name, _, _)| *name)
+        .filter(|name| {
+            starts_with_ignore_ascii_case(name, command)
+                || starts_with_ignore_ascii_case(command, name)
+        });
+
+    let suggestion = matches.next()?;
+
+    if matches.next().is_none() {
+        Some(suggestion)
+    } else {
+        None
+    }
+}
+
 fn run_command(input: &str) {
     let input = input.trim();
 
@@ -91,23 +164,18 @@ fn run_command(input: &str) {
         return;
     }
 
-    let (command, argument) = match input.split_once(' ') {
-        Some((command, argument)) => (command, argument.trim()),
+    let (command, argument) = match input.find(char::is_whitespace) {
+        Some(index) => (&input[..index], input[index..].trim()),
         None => (input, ""),
     };
 
     match command {
         "help" => {
             println!("Xinyi commands:");
-            println!("  help       - Show available commands");
-            println!("  about      - About Xinyi");
-            println!("  clear      - Clear the screen");
-            println!("  echo TEXT  - Print text");
-            println!("  version    - Show version");
-            println!("  date       - Show the current date and time");
-            println!("  uname      - Show system information");
-            println!("  reboot     - Reboot the machine");
-			println!("  uptime     - Show system uptime")
+
+            for (_, usage, description) in COMMANDS {
+                println!("  {:<10} - {}", usage, description);
+            }
         }
 
         "about" => {
@@ -121,6 +189,11 @@ fn run_command(input: &str) {
     	    unsafe {
                 core::arch::asm!("int3", options(nomem, nostack));
             }
+        }
+
+        "panic" => {
+            println!("Triggering kernel panic...");
+            panic!("panic command requested");
         }
 
         "clear" => {
@@ -153,6 +226,165 @@ fn run_command(input: &str) {
             println!("Xinyi x86 32-bit");
             println!("Architecture: i686");
             println!("Environment: bare metal / QEMU");
+        }
+
+        "keyboard" => {
+            println!(
+                "Left shift:  {}",
+                if keyboard::left_shift_down() { "down" } else { "up" }
+            );
+            println!(
+                "Right shift: {}",
+                if keyboard::right_shift_down() { "down" } else { "up" }
+            );
+            println!(
+                "Caps lock:   {}",
+                if keyboard::caps_lock_on() { "on" } else { "off" }
+            );
+            println!(
+                "Buffered scancodes: {}",
+                keyboard::queued_scancodes()
+            );
+            println!(
+                "Dropped scancodes:  {}",
+                keyboard::dropped_scancodes()
+            );
+        }
+
+        "memory" => {
+            if let Some((lower, upper)) = multiboot::memory_summary() {
+                println!("Multiboot memory:");
+                println!("  Lower: {} KiB", lower);
+                println!("  Upper: {} KiB", upper);
+            } else {
+                println!("Multiboot memory information unavailable.");
+            }
+
+            let mut regions = 0usize;
+
+            multiboot::for_each_region(|region| {
+                regions += 1;
+
+                if regions <= 16 {
+                    println!(
+                        "  {:#010x}-{:#010x} {}",
+                        region.base,
+                        region.base.wrapping_add(region.length),
+                        multiboot::region_kind(region.kind)
+                    );
+                }
+            });
+
+            if regions == 0 {
+                println!("  Memory map unavailable.");
+            } else if regions > 16 {
+                println!("  ... {} more regions", regions - 16);
+            }
+        }
+
+        "paging" => {
+            let status = paging::status();
+
+            println!(
+                "Paging: {}",
+                if status.enabled { "enabled" } else { "disabled" }
+            );
+
+            if status.enabled {
+                println!("  Page size: 4 MiB (PSE)");
+                println!(
+                    "  Identity-mapped: 0x00000000-{:#010x}",
+                    paging::MAPPED_BYTES
+                );
+            }
+
+            println!("  CR3: {:#010x}", status.page_directory);
+            println!("  CR0: {:#010x}", status.cr0);
+            println!("  CR4: {:#010x}", status.cr4);
+        }
+
+        "frames" => {
+            let stats = phys::stats();
+
+            println!("Physical frames (4 KiB):");
+            println!("  Available: {}", stats.available_frames);
+            println!("  Allocated: {}", stats.allocated_frames);
+            println!("  Free:      {}", stats.free_frames);
+
+            if let Some(frame) = phys::alloc_frame() {
+                println!("  Allocated: {:#010x}", frame);
+                if !phys::free_frame(frame) {
+                    println!("  Failed to free {:#010x}", frame);
+                } else {
+                    println!("  Freed:     {:#010x}", frame);
+                }
+            } else {
+                println!("  Allocation failed.");
+            }
+
+            let stats = phys::stats();
+            println!("  Free now:  {}", stats.free_frames);
+        }
+
+        "usermode" => {
+            println!("Entering user mode (ring 3)...");
+            usermode::enter();
+            println!("Returned from user mode.");
+        }
+
+        "ps" => {
+            println!("PID  State    Stack");
+            if let Some(pid) = task::current_task_id() {
+                println!("{}    Running  kernel", pid);
+            } else {
+                println!("(no tasks)");
+            }
+            println!("Total tasks: {}", task::task_count());
+        }
+
+        "run" => {
+            println!("Launching: test");
+            // Create a test user task
+            if let Some(stack) = loader::create_user_stack() {
+                if let Some(pid) = task::create_task(loader::USER_LOAD_ADDR, stack) {
+                    println!("Started process {} at entry {:#010x}", pid, loader::USER_LOAD_ADDR);
+                    println!("Stack top: {:#010x}", stack);
+                } else {
+                    println!("Failed to create process");
+                }
+            } else {
+                println!("Out of memory");
+            }
+        }
+
+        "ls" => {
+            println!("Files:");
+            println!("  (in-memory filesystem)");
+        }
+
+        "touch" => {
+            if argument.is_empty() {
+                println!("Usage: touch FILE");
+            } else {
+                if vfs::create(argument) {
+                    println!("Created: {}", argument);
+                } else {
+                    println!("Failed to create file");
+                }
+            }
+        }
+
+        "cat" => {
+            if argument.is_empty() {
+                println!("Usage: cat FILE");
+            } else {
+                if let Some((data, size)) = vfs::read(argument) {
+                    let text = core::str::from_utf8(&data[0..size]).unwrap_or("(binary)");
+                    println!("{}", text);
+                } else {
+                    println!("File not found: {}", argument);
+                }
+            }
         }
 
         "reboot" => {
@@ -199,14 +431,38 @@ fn run_command(input: &str) {
 		}
 
         _ => {
-            println!("Unknown command: {}", command);
+            println!("Unknown command: '{}'", command);
+
+            if let Some(suggestion) = suggest_command(command) {
+                println!("Did you mean '{}'?", suggestion);
+            }
+
             println!("Type 'help' for available commands.");
         }
     }
 }
 
 #[no_mangle]
-pub extern "C" fn rust_main() -> ! {
+pub extern "C" fn rust_main(magic: u32, info_addr: u32) -> ! {
+    // Preserve bootloader-provided memory information before anything else.
+    multiboot::init(magic, info_addr);
+
+    // Install the kernel-owned GDT before relying on any segment selectors.
+    gdt::init();
+
+    // Enable identity-mapped paging before installing handlers so every
+    // kernel structure is reachable through the final address space.
+    let paging_result = paging::init();
+
+    // Build the physical frame bitmap from the boot memory map.
+    let phys_stats = phys::init();
+
+    // Initialize task management
+    task::init();
+
+    // Initialize virtual filesystem
+    vfs::init();
+
     // Install CPU exception and hardware IRQ handlers.
     interrupts::init();
 
@@ -220,6 +476,16 @@ pub extern "C" fn rust_main() -> ! {
     }
 
     vga::clear_screen();
+
+    if let Err(reason) = paging_result {
+        println!("Paging disabled: {}", reason);
+        println!();
+    }
+
+    if phys_stats.available_frames == 0 {
+        println!("Warning: no physical frames are available.");
+        println!();
+    }
 
     println!("Welcome to Xinyi.");
     println!("32-bit Rust kernel");
@@ -425,20 +691,9 @@ pub extern "C" fn rust_main() -> ! {
                                     core::str::from_utf8(&input[..length])
                                         .unwrap_or("");
 
-                                let commands = [
-                                    "help",
-                                    "about",
-                                    "clear",
-                                    "echo",
-                                    "version",
-                                    "date",
-                                    "uname",
-				    "breakpoint",
-                                    "reboot",
-                                ];
-
-                                let mut matches = commands
+                                let mut matches = COMMANDS
                                     .iter()
+                                    .map(|(name, _, _)| *name)
                                     .filter(|command| {
                                         command.starts_with(current)
                                     });
@@ -505,7 +760,34 @@ pub extern "C" fn rust_main() -> ! {
 }
 
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
+fn panic(info: &PanicInfo) -> ! {
+    println!();
+    println!("Xinyi: kernel panic!");
+    println!("{}", info.message());
+
+    // Mirror the panic to the debug console so a headless or automated run
+    // still reports why the kernel stopped.
+    debug::write_str("Xinyi panic: ");
+    debug::write_fmt(format_args!("{}", info.message()));
+
+    if let Some(location) = info.location() {
+        println!(
+            "Location: {}:{}:{}",
+            location.file(),
+            location.line(),
+            location.column()
+        );
+        debug::write_str(" at ");
+        debug::write_str(location.file());
+        debug::write_str(":");
+        debug::write_u32(location.line());
+        debug::write_str(":");
+        debug::write_u32(location.column());
+    }
+
+    debug::write_str("\r\n");
+    println!("System halted.");
+
     loop {
         unsafe {
             core::arch::asm!("cli; hlt", options(nomem, nostack));

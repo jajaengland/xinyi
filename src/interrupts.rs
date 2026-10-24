@@ -1,4 +1,5 @@
 use core::arch::asm;
+use crate::debug;
 use crate::println;
 use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -10,6 +11,7 @@ const IDT_ENTRIES: usize = 256;
 const EXCEPTION_COUNT: usize = 32;
 const IRQ_COUNT: usize = 16;
 const IRQ_VECTOR_OFFSET: usize = 32;
+const SYSCALL_VECTOR: usize = 0x80;
 const KERNEL_CODE_SELECTOR: u16 = 0x08;
 
 #[repr(C, packed)]
@@ -39,6 +41,16 @@ impl IdtEntry {
             selector: KERNEL_CODE_SELECTOR,
             zero: 0,
             attributes: 0x8E,
+            offset_high: (handler_address >> 16) as u16,
+        }
+    }
+
+    fn new_user(handler_address: u32) -> Self {
+        Self {
+            offset_low: handler_address as u16,
+            selector: KERNEL_CODE_SELECTOR,
+            zero: 0,
+            attributes: 0xEE, // Present, DPL 3, interrupt gate
             offset_high: (handler_address >> 16) as u16,
         }
     }
@@ -103,12 +115,17 @@ unsafe extern "C" {
     fn irq13();
     fn irq14();
     fn irq15();
+
+    fn isr128(); // syscall
 }
 
 #[no_mangle]
 pub extern "C" fn xinyi_exception_handler(
     vector: u32,
     error_code: u32,
+    eip: u32,
+    cs: u32,
+    eflags: u32,
 ) -> ! {
     let name = match vector {
         0 => "Divide Error",
@@ -146,7 +163,36 @@ pub extern "C" fn xinyi_exception_handler(
     println!("Exception: {}", name);
     println!("Vector: {}", vector);
     println!("Error code: {:#010x}", error_code);
+    println!("EIP: {:#010x}  CS: {:#06x}", eip, cs);
+    println!("EFLAGS: {:#010x}", eflags);
+
+    if vector == 14 {
+        let cr2: u32;
+
+        unsafe {
+            asm!("mov {}, cr2", out(reg) cr2, options(nomem, nostack));
+        }
+
+        println!("CR2 (fault address): {:#010x}", cr2);
+    }
+
     println!("System halted.");
+
+    // Mirror the essential fault information to QEMU's debug console so
+    // faults can be diagnosed from a headless or automated run.
+    debug::write_str("Xinyi exception: ");
+    debug::write_str(name);
+    debug::write_str(" vector=");
+    debug::write_u32(vector);
+    debug::write_str(" error=");
+    debug::write_hex32(error_code);
+    debug::write_str(" eip=");
+    debug::write_hex32(eip);
+    debug::write_str(" cs=");
+    debug::write_hex32(cs);
+    debug::write_str(" eflags=");
+    debug::write_hex32(eflags);
+    debug::write_str("\r\n");
 
     loop {
         unsafe {
@@ -181,6 +227,53 @@ pub extern "C" fn xinyi_irq_handler(vector: u32) {
             in("al") 0x20u8,
             options(nomem, nostack, preserves_flags)
         );
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn xinyi_syscall_handler() -> u32 {
+    // Syscall numbers in EAX, args in EBX, ECX, EDX
+    let mut syscall_num: u32 = 0;
+    let mut arg1: u32 = 0;
+    let mut arg2: u32 = 0;
+    let mut arg3: u32 = 0;
+
+    unsafe {
+        asm!(
+            "mov {0}, eax",
+            "mov {1}, ebx",
+            "mov {2}, ecx",
+            "mov {3}, edx",
+            out(reg) syscall_num,
+            out(reg) arg1,
+            out(reg) arg2,
+            out(reg) arg3,
+            options(nomem, nostack)
+        );
+    }
+
+    match syscall_num {
+        1 => {
+            // sys_exit
+            println!("Syscall: exit({})", arg1);
+            loop {
+                unsafe { asm!("hlt", options(nomem, nostack)); }
+            }
+        }
+        4 => {
+            // sys_write - simplified, just print arg1 as number for now
+            println!("Syscall: write({})", arg1);
+            arg2
+        }
+        20 => {
+            // sys_getpid
+            println!("Syscall: getpid()");
+            1
+        }
+        _ => {
+            println!("Syscall: unknown({})", syscall_num);
+            0xFFFFFFFF
+        }
     }
 }
 /// Remap the PIC so hardware IRQs use IDT vectors 32–47.
@@ -328,6 +421,9 @@ pub fn init() {
             (*idt)[IRQ_VECTOR_OFFSET + irq] =
                 IdtEntry::new(irq_handlers[irq]);
         }
+
+        // Install syscall handler at 0x80 (accessible from ring 3)
+        (*idt)[SYSCALL_VECTOR] = IdtEntry::new_user(isr128 as *const () as usize as u32);
 
         let pointer = IdtPointer {
             limit: (core::mem::size_of::<IdtEntry>() * IDT_ENTRIES - 1)

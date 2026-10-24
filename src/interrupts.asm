@@ -59,13 +59,22 @@ isr_common:
     pusha
     cld
 
-    ; After pusha:
+    ; Interrupt frame after pusha:
     ; [esp + 32] = exception number
     ; [esp + 36] = error code
+    ; [esp + 40] = EIP
+    ; [esp + 44] = CS
+    ; [esp + 48] = EFLAGS
     mov eax, [esp + 32]
     mov edx, [esp + 36]
+    mov ecx, [esp + 40]
+    mov ebx, [esp + 44]
+    mov esi, [esp + 48]
 
-    ; Rust C ABI arguments: (vector, error_code).
+    ; Rust C ABI arguments: (vector, error_code, eip, cs, eflags).
+    push esi
+    push ebx
+    push ecx
     push edx
     push eax
     call xinyi_exception_handler
@@ -122,4 +131,24 @@ irq_common:
     ; Discard the vector and dummy error code.
     add esp, 8
 
+    iretd
+
+; System call handler for int 0x80
+EXTERN xinyi_syscall_handler
+
+GLOBAL isr128
+isr128:
+    ; CPU pushes SS, ESP, EFLAGS, CS, EIP when coming from lower privilege
+    push dword 0      ; dummy error code
+    push dword 0x80   ; vector
+    pusha
+    cld
+
+    call xinyi_syscall_handler
+
+    ; Return value in eax (saved by pusha at offset 28 from esp before pusha? pusha pushes 8 registers, so eax is at esp+28 from original pusha start)
+    mov [esp + 28], eax
+
+    popa
+    add esp, 8
     iretd

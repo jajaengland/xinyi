@@ -4,6 +4,12 @@ const DATA_PORT: u16 = 0x60;
 const STATUS_PORT: u16 = 0x64;
 const SCANCODE_BUFFER_SIZE: usize = 128;
 
+// Upper bound on bytes drained in one interrupt. A PS/2 controller only
+// buffers a few bytes, so this is far above any normal burst while still
+// guaranteeing that the handler terminates if the status port misbehaves.
+const MAX_BYTES_PER_IRQ: usize = 32;
+
+const EXTENDED_PREFIX: u8 = 0xE0;
 const LEFT_SHIFT: u8 = 0x2A;
 const RIGHT_SHIFT: u8 = 0x36;
 const CAPS_LOCK: u8 = 0x3A;
@@ -11,12 +17,19 @@ const CAPS_LOCK: u8 = 0x3A;
 // Single-producer (IRQ1), single-consumer (shell) ring buffer.
 static SCANCODE_HEAD: AtomicUsize = AtomicUsize::new(0);
 static SCANCODE_TAIL: AtomicUsize = AtomicUsize::new(0);
+static DROPPED_SCANCODES: AtomicUsize = AtomicUsize::new(0);
 static mut SCANCODE_BUFFER: [u8; SCANCODE_BUFFER_SIZE] =
     [0; SCANCODE_BUFFER_SIZE];
 
-static mut SHIFT_DOWN: bool = false;
+static mut LEFT_SHIFT_DOWN: bool = false;
+static mut RIGHT_SHIFT_DOWN: bool = false;
 static mut CAPS_LOCK_ON: bool = false;
+static mut CAPS_LOCK_DOWN: bool = false;
 static mut EXTENDED: bool = false;
+
+// Consumer-side copy of the drop counter, used to notice ring-buffer
+// overflow without adding work to normal scancode processing.
+static mut OBSERVED_DROPS: usize = 0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Key {
@@ -40,30 +53,45 @@ unsafe fn inb(port: u16) -> u8 {
     value
 }
 
-/// Called by IRQ1. Collects a scancode without printing or decoding it.
-pub fn handle_irq() {
+/// Append one byte to the ring buffer. Called by the IRQ producer.
+fn push_scancode(code: u8) {
+    let head = SCANCODE_HEAD.load(Ordering::Relaxed);
+    let next = (head + 1) % SCANCODE_BUFFER_SIZE;
+    let tail = SCANCODE_TAIL.load(Ordering::Acquire);
+
+    // Leave one slot empty to distinguish a full buffer from an empty one.
+    if next == tail {
+        // A dropped byte may have been a modifier release. Record the loss
+        // so the consumer can discard its now-untrustworthy modifier state.
+        DROPPED_SCANCODES.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+
     unsafe {
-        if inb(STATUS_PORT) & 1 == 0 {
-            return;
-        }
-
-        let code = inb(DATA_PORT);
-
-        let head = SCANCODE_HEAD.load(Ordering::Relaxed);
-        let next = (head + 1) % SCANCODE_BUFFER_SIZE;
-        let tail = SCANCODE_TAIL.load(Ordering::Acquire);
-
-        // Leave one slot empty to distinguish a full buffer from an empty one.
-        if next == tail {
-            return;
-        }
-
         core::ptr::addr_of_mut!(SCANCODE_BUFFER)
             .cast::<u8>()
             .add(head)
             .write(code);
+    }
 
-        SCANCODE_HEAD.store(next, Ordering::Release);
+    SCANCODE_HEAD.store(next, Ordering::Release);
+}
+
+/// Called by IRQ1. Collects scancodes without printing or decoding them.
+///
+/// The controller is drained completely rather than reading a single byte.
+/// Its hardware queue is small, so leaving bytes behind while handling other
+/// interrupts can make it overflow and silently lose key releases.
+pub fn handle_irq() {
+    for _ in 0..MAX_BYTES_PER_IRQ {
+        unsafe {
+            if inb(STATUS_PORT) & 1 == 0 {
+                return;
+            }
+
+            let code = inb(DATA_PORT);
+            push_scancode(code);
+        }
     }
 }
 
@@ -91,12 +119,34 @@ fn read_scancode() -> Option<u8> {
     Some(code)
 }
 
+/// Discard modifier state if the producer had to drop scancodes.
+///
+/// Without this, losing a release event can leave a Shift key logically held
+/// until that same key is pressed and released again. Treating overflow as a
+/// state reset is conservative: a key may appear unshifted, but it cannot
+/// remain stuck.
+fn resynchronize_after_drop() {
+    let dropped = DROPPED_SCANCODES.load(Ordering::Acquire);
+
+    unsafe {
+        if dropped != OBSERVED_DROPS {
+            OBSERVED_DROPS = dropped;
+            LEFT_SHIFT_DOWN = false;
+            RIGHT_SHIFT_DOWN = false;
+            CAPS_LOCK_DOWN = false;
+            EXTENDED = false;
+        }
+    }
+}
+
 pub fn poll_key() -> Option<Key> {
+    resynchronize_after_drop();
+
     let code = read_scancode()?;
 
     unsafe {
         // Extended PS/2 keys start with 0xE0.
-        if code == 0xE0 {
+        if code == EXTENDED_PREFIX {
             EXTENDED = true;
             return None;
         }
@@ -105,7 +155,9 @@ pub fn poll_key() -> Option<Key> {
         EXTENDED = false;
 
         if extended {
-            // Ignore extended key-release events.
+            // Ignore extended key-release events. The embedded Shift codes
+            // used by Print Screen are also ignored here; they are fake
+            // modifiers and do not represent the physical Shift keys.
             if code & 0x80 != 0 {
                 return None;
             }
@@ -119,15 +171,28 @@ pub fn poll_key() -> Option<Key> {
             };
         }
 
-        if code == LEFT_SHIFT || code == RIGHT_SHIFT {
-            SHIFT_DOWN = true;
+        if code == LEFT_SHIFT {
+            LEFT_SHIFT_DOWN = true;
             return None;
         }
 
-        if code == (LEFT_SHIFT | 0x80)
-            || code == (RIGHT_SHIFT | 0x80)
-        {
-            SHIFT_DOWN = false;
+        if code == RIGHT_SHIFT {
+            RIGHT_SHIFT_DOWN = true;
+            return None;
+        }
+
+        if code == (LEFT_SHIFT | 0x80) {
+            LEFT_SHIFT_DOWN = false;
+            return None;
+        }
+
+        if code == (RIGHT_SHIFT | 0x80) {
+            RIGHT_SHIFT_DOWN = false;
+            return None;
+        }
+
+        if code == (CAPS_LOCK | 0x80) {
+            CAPS_LOCK_DOWN = false;
             return None;
         }
 
@@ -136,12 +201,18 @@ pub fn poll_key() -> Option<Key> {
             return None;
         }
 
+        // Toggle only on the press edge. Holding Caps Lock generates repeated
+        // make codes, which must not flip the state back and forth.
         if code == CAPS_LOCK {
-            CAPS_LOCK_ON = !CAPS_LOCK_ON;
+            if !CAPS_LOCK_DOWN {
+                CAPS_LOCK_DOWN = true;
+                CAPS_LOCK_ON = !CAPS_LOCK_ON;
+            }
+
             return None;
         }
 
-        let shift = SHIFT_DOWN;
+        let shift = LEFT_SHIFT_DOWN || RIGHT_SHIFT_DOWN;
         let caps = CAPS_LOCK_ON;
 
         let ch = match code {
@@ -216,6 +287,29 @@ pub fn poll_char() -> Option<char> {
         | Key::ArrowLeft
         | Key::ArrowRight => None,
     }
+}
+
+pub fn left_shift_down() -> bool {
+    unsafe { LEFT_SHIFT_DOWN }
+}
+
+pub fn right_shift_down() -> bool {
+    unsafe { RIGHT_SHIFT_DOWN }
+}
+
+pub fn caps_lock_on() -> bool {
+    unsafe { CAPS_LOCK_ON }
+}
+
+pub fn queued_scancodes() -> usize {
+    let head = SCANCODE_HEAD.load(Ordering::Acquire);
+    let tail = SCANCODE_TAIL.load(Ordering::Acquire);
+
+    (head + SCANCODE_BUFFER_SIZE - tail) % SCANCODE_BUFFER_SIZE
+}
+
+pub fn dropped_scancodes() -> usize {
+    DROPPED_SCANCODES.load(Ordering::Relaxed)
 }
 
 fn letter(lower: char, shift: bool, caps: bool) -> char {
