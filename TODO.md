@@ -137,8 +137,13 @@ A longer-term goal is to run applications with less privilege than the kernel.
 
 ## Filesystem and Storage
 
-- [ ] Investigate disk access in the emulator.
-- [ ] Design a block-device interface.
+- [x] Investigate disk access in the emulator.
+  - Implemented ATA/IDE PIO driver for primary controller.
+  - Added disk read/write operations.
+  - Integrated with block device interface.
+- [x] Design a block-device interface.
+  - Implemented BlockDevice trait.
+  - Created RamDisk and AtaDisk implementations.
 - [x] Choose a simple filesystem format to support first.
   - Implemented FAT16 support with block device abstraction.
   - Created block device interface and RAM disk implementation.
