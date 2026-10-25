@@ -15,6 +15,9 @@ mod vfs;
 mod loader;
 mod blockdev;
 mod fat16;
+mod ata;
+mod diskfs;
+mod installer;
 mod vga;
 
 use core::panic::PanicInfo;
@@ -54,7 +57,8 @@ const COMMANDS: &[(&str, &str, &str)] = &[
         "breakpoint",
         "Trigger the CPU breakpoint exception",
     ),
-    ("panic", "panic", "Test the kernel panic handler"),
+    ("disk", "disk", "Test disk access"),
+    ("install", "install", "Install Xinyi to disk"),
     ("reboot", "reboot", "Reboot the machine"),
 ];
 
@@ -385,6 +389,16 @@ fn run_command(input: &str) {
                     println!("File not found: {}", argument);
                 }
             }
+        }
+
+        "disk" => {
+            diskfs::init();
+            diskfs::test();
+        }
+
+        "install" => {
+            println!("Installing to primary disk (drive 0)...");
+            installer::install_to_disk(0);
         }
 
         "reboot" => {
