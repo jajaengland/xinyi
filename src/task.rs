@@ -17,7 +17,6 @@ pub enum TaskState {
     Zombie,
 }
 
-#[derive(Clone, Copy)]
 pub struct Task {
     pub id: u32,
     pub state: TaskState,
@@ -26,11 +25,14 @@ pub struct Task {
     pub user_stack: u32,
     pub esp: u32,
     pub context: Context,
+    _address_space: crate::paging::AddressSpace,
+    program: crate::loader::LoadedProgram,
+    _kernel_frames: crate::loader::Frames,
 }
 
 const MAX_TASKS: usize = 16;
 
-static mut TASKS: [Option<Task>; MAX_TASKS] = [None; MAX_TASKS];
+static mut TASKS: [Option<Task>; MAX_TASKS] = [const { None }; MAX_TASKS];
 static mut CURRENT_TASK: i32 = -1;
 static mut NEXT_TASK_ID: u32 = 1;
 
@@ -44,18 +46,24 @@ pub fn init() {
     }
 }
 
-pub fn create_task(entry_point: u32, user_stack: u32) -> Option<u32> {
+pub fn create_task(program: crate::loader::LoadedProgram) -> Option<u32> {
+    if task_count() == MAX_TASKS {
+        return None;
+    }
     let task_id = unsafe { NEXT_TASK_ID };
-    unsafe { NEXT_TASK_ID += 1; }
+    let next_id = task_id.checked_add(1)?;
 
     // Allocate kernel stack from physical memory
-    let kernel_stack_phys = crate::phys::alloc_frame()? as u32;
-    let kernel_stack = kernel_stack_phys + 4096; // top of stack
+    let kernel_frames = crate::loader::Frames::new(crate::loader::STACK_PAGES)?;
+    let kernel_stack = kernel_frames.top();
+    let address_space = crate::paging::AddressSpace::new(&program)?;
+    let entry_point = crate::paging::USER_BASE;
+    let user_stack = crate::paging::USER_STACK_TOP - 4;
 
     let task = Task {
         id: task_id,
         state: TaskState::Ready,
-        page_directory: crate::paging::status().page_directory,
+        page_directory: address_space.directory(),
         kernel_stack,
         user_stack,
         esp: kernel_stack,
@@ -66,12 +74,16 @@ pub fn create_task(entry_point: u32, user_stack: u32) -> Option<u32> {
             ebp: 0,
             eip: entry_point,
         },
+        _address_space: address_space,
+        program,
+        _kernel_frames: kernel_frames,
     };
 
     unsafe {
         for (i, slot) in TASKS.iter_mut().enumerate().take(MAX_TASKS) {
             if slot.is_none() {
                 *slot = Some(task);
+                NEXT_TASK_ID = next_id;
                 if CURRENT_TASK == -1 {
                     CURRENT_TASK = i as i32;
                     if let Some(t) = TASKS[i].as_mut() {
@@ -86,6 +98,78 @@ pub fn create_task(entry_point: u32, user_stack: u32) -> Option<u32> {
     None
 }
 
+pub fn describe(id: u32) -> Option<(u32, u32, u32, u32, u32)> {
+    unsafe {
+        TASKS
+            .iter()
+            .flatten()
+            .find(|task| task.id == id)
+            .map(|task| {
+                (
+                    task.program.image.base(),
+                    task.program.size,
+                    task.program.stack.top() - 4,
+                    task.kernel_stack,
+                    task.page_directory,
+                )
+            })
+    }
+}
+pub fn execute(id: u32) -> bool {
+    let task = unsafe {
+        let slots = &mut *core::ptr::addr_of_mut!(TASKS);
+        let Some(index) = slots
+            .iter()
+            .position(|slot| slot.as_ref().is_some_and(|task| task.id == id))
+        else {
+            return false;
+        };
+        let task = slots[index].take().unwrap();
+        if CURRENT_TASK == index as i32 {
+            CURRENT_TASK = slots
+                .iter()
+                .position(Option::is_some)
+                .map_or(-1, |index| index as i32);
+        }
+        task
+    };
+    let Task {
+        program,
+        _address_space,
+        _kernel_frames,
+        ..
+    } = task;
+    crate::usermode::execute(program, _address_space, _kernel_frames, id, 0);
+    true
+}
+
+// Only paused records remain in the table; execution consumes a record.
+pub fn remove(id: u32) -> bool {
+    unsafe {
+        for index in 0..MAX_TASKS {
+            if TASKS[index].as_ref().is_some_and(|task| task.id == id) {
+                if TASKS[index].as_ref().unwrap().page_directory
+                    == crate::paging::status().page_directory
+                {
+                    return false;
+                }
+                TASKS[index] = None;
+                if CURRENT_TASK == index as i32 {
+                    CURRENT_TASK = TASKS
+                        .iter()
+                        .position(Option::is_some)
+                        .map_or(-1, |i| i as i32);
+                    if CURRENT_TASK >= 0 {
+                        TASKS[CURRENT_TASK as usize].as_mut().unwrap().state = TaskState::Running;
+                    }
+                }
+                return true;
+            }
+        }
+    }
+    false
+}
+
 pub fn current_task_id() -> Option<u32> {
     unsafe {
         if CURRENT_TASK >= 0 {
@@ -97,9 +181,7 @@ pub fn current_task_id() -> Option<u32> {
 }
 
 pub fn task_count() -> usize {
-    unsafe {
-        TASKS.iter().filter(|t| t.is_some()).count()
-    }
+    unsafe { TASKS.iter().filter(|t| t.is_some()).count() }
 }
 
 pub fn schedule() {

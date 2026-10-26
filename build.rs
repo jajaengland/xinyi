@@ -30,6 +30,15 @@ fn main() {
 
     assemble(&boot_asm, &boot_obj);
     assemble(&interrupts_asm, &interrupts_obj);
+    for name in ["disk_mbr", "disk_stage2", "demo"] {
+        let source = manifest_dir.join(if name == "demo" { "programs" } else { "src" }).join(format!("{}.asm", name));
+        let output = out_dir.join(format!("{}.bin", name));
+        let status = Command::new("nasm").args(["-f", "bin"])
+            .arg(&source).arg("-o").arg(&output).status()
+            .expect("Failed to run NASM for disk loader");
+        assert!(status.success(), "Disk loader assembly failed");
+        println!("cargo:rerun-if-changed={}", source.display());
+    }
 
     println!("cargo:rustc-link-arg={}", boot_obj.display());
     println!("cargo:rustc-link-arg={}", interrupts_obj.display());

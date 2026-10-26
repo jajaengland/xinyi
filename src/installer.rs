@@ -1,59 +1,73 @@
-// Install functionality
-use crate::{ata::AtaDisk, blockdev::BlockDevice, println, print};
-
+// Shell-only installation state. Destructive tests attach private QEMU fixtures.
+use crate::{
+    blockdev::BlockDevice,
+    bootdisk::{self, InstallPlan, Kernel},
+    diskfs,
+    diskfs::DISK,
+    fat16::{Error, Result},
+};
+const MBR: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/disk_mbr.bin"));
+const STAGE2: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/disk_stage2.bin"));
+static mut PENDING: Option<InstallPlan> = None;
 extern "C" {
     static _kernel_start: u8;
+    static _kernel_file_end: u8;
     static _kernel_end: u8;
+    static _kernel_snapshot_start: u8;
+    fn _start();
 }
-
-pub fn install_to_disk(drive: u8) {
-    println!("Installing Xinyi to disk...");
-    
-    let disk = AtaDisk::new(drive);
-    if !disk.init() {
-        println!("Failed to initialize disk");
-        return;
+fn image() -> Result<(&'static [u8], Kernel)> {
+    let start = core::ptr::addr_of!(_kernel_start) as u32;
+    let bytes = core::ptr::addr_of!(_kernel_file_end) as u32 - start;
+    let memory = core::ptr::addr_of!(_kernel_end) as u32 - start;
+    if start != bootdisk::LOAD || bytes == 0 || bytes as usize > bootdisk::MAX_IMAGE {
+        return Err(Error::InvalidKernel);
     }
-    
-    println!("Disk initialized, writing kernel...");
-    
-    // Get kernel size
-    let kernel_start = unsafe { &_kernel_start as *const u8 as u32 };
-    let kernel_end = unsafe { &_kernel_end as *const u8 as u32 };
-    let kernel_size = kernel_end - kernel_start;
-    
-    println!("Kernel size: {} bytes", kernel_size);
-    
-    // Write kernel starting at sector 64 (after bootloader area)
-    let mut sector = [0u8; 512];
-    let kernel_ptr = kernel_start as *const u8;
-    
-    let mut bytes_written: u32 = 0;
-    let mut sector_num: u32 = 64;
-    
-    while bytes_written < kernel_size {
-        // Clear sector
-        for b in sector.iter_mut() {
-            *b = 0;
-        }
-        
-        // Copy up to 512 bytes
-        let mut copied = 0;
-        while copied < 512 && bytes_written < kernel_size {
-            let byte = unsafe { *kernel_ptr.add(bytes_written as usize) };
-            sector[copied] = byte;
-            copied += 1;
-            bytes_written += 1;
-        }
-        
-        if !disk.write_block(sector_num, &sector) {
-            println!("Failed to write sector {}", sector_num);
-            return;
-        }
-        
-        sector_num += 1;
+    let data = unsafe {
+        core::slice::from_raw_parts(core::ptr::addr_of!(_kernel_snapshot_start), bytes as usize)
+    };
+    let kernel = Kernel {
+        entry: _start as *const () as u32,
+        bytes,
+        memory,
+        checksum: bootdisk::checksum(data),
+    };
+    kernel.validate()?;
+    Ok((data, kernel))
+}
+pub fn cancel() {
+    unsafe {
+        *core::ptr::addr_of_mut!(PENDING) = None;
     }
-    
-    println!("Installation complete!");
-    println!("Written {} sectors starting at sector 64", sector_num - 64);
+}
+pub fn prepare() -> Result<InstallPlan> {
+    cancel();
+    if diskfs::is_mounted() {
+        return Err(Error::Mounted);
+    }
+    let (_, kernel) = image()?;
+    diskfs::init_disk()?;
+    let mut plan = bootdisk::plan(&DISK, kernel)?;
+    plan.target = diskfs::target()?;
+    unsafe {
+        *core::ptr::addr_of_mut!(PENDING) = Some(plan);
+    }
+    Ok(plan)
+}
+pub fn confirm() -> Result<()> {
+    let plan = unsafe { *core::ptr::addr_of!(PENDING) };
+    cancel();
+    let plan = plan.ok_or(Error::InstallConfirmationRequired)?;
+    if diskfs::is_mounted() {
+        return Err(Error::Mounted);
+    }
+    diskfs::init_disk()?;
+    if DISK.block_count() != plan.disk_sectors || diskfs::target()? != plan.target {
+        return Err(Error::Io);
+    }
+    let (bytes, kernel) = image()?;
+    if kernel != plan.kernel {
+        return Err(Error::InvalidKernel);
+    }
+    bootdisk::install(&DISK, plan, bytes, MBR, STAGE2)
 }

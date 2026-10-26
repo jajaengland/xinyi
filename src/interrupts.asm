@@ -1,6 +1,8 @@
 BITS 32
 
 EXTERN xinyi_exception_handler
+EXTERN user_mode_return
+EXTERN xinyi_user_should_return
 
 SECTION .text
 
@@ -58,6 +60,12 @@ ISR_NOERR 31
 isr_common:
     pusha
     cld
+    mov ebp, esp
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
 
     ; Interrupt frame after pusha:
     ; [esp + 32] = exception number
@@ -65,21 +73,16 @@ isr_common:
     ; [esp + 40] = EIP
     ; [esp + 44] = CS
     ; [esp + 48] = EFLAGS
-    mov eax, [esp + 32]
-    mov edx, [esp + 36]
-    mov ecx, [esp + 40]
-    mov ebx, [esp + 44]
-    mov esi, [esp + 48]
-
-    ; Rust C ABI arguments: (vector, error_code, eip, cs, eflags).
-    push esi
-    push ebx
-    push ecx
-    push edx
-    push eax
+    and esp, -16
+    sub esp, 12
+    push dword [ebp + 48]
+    push dword [ebp + 44]
+    push dword [ebp + 40]
+    push dword [ebp + 36]
+    push dword [ebp + 32]
     call xinyi_exception_handler
-
-    ; The Rust handler returns !; it should never return.
+    test eax, eax
+    jnz user_mode_return
     cli
 
 .halt:
@@ -119,13 +122,26 @@ IRQ 15
 irq_common:
     pusha
     cld
-
-    ; [esp + 32] contains the IDT vector (32–47).
-    mov eax, [esp + 32]
-    push eax
+    mov ebx, esp
+    push ds
+    push es
+    push fs
+    push gs
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov esi, esp
+    and esp, -16
+    sub esp, 12
+    push dword [ebx + 32]
     call xinyi_irq_handler
-    add esp, 4
-
+    mov esp, esi
+    pop gs
+    pop fs
+    pop es
+    pop ds
     popa
 
     ; Discard the vector and dummy error code.
@@ -144,11 +160,226 @@ isr128:
     pusha
     cld
 
+    ; Pass the saved register frame, never the compiler's live registers.
+    mov ebx, esp
+    push ds
+    push es
+    push fs
+    push gs
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov esi, esp
+    ; i386 C ABI: 16-byte alignment immediately before CALL.
+    and esp, -16
+    sub esp, 12
+    push ebx
     call xinyi_syscall_handler
 
-    ; Return value in eax (saved by pusha at offset 28 from esp before pusha? pusha pushes 8 registers, so eax is at esp+28 from original pusha start)
-    mov [esp + 28], eax
+    ; EBX/ESI survive the C call. Only saved EAX receives the result.
+    mov [ebx + 28], eax
+    call xinyi_user_should_return
+    test eax, eax
+    jnz user_mode_return
+    mov esp, esi
+    pop gs
+    pop fs
+    pop es
+    pop ds
 
     popa
     add esp, 8
     iretd
+
+; Position-independent blob copied into read-only user pages. Relative calls
+; and branches must stay inside user_probe_start..user_probe_end.
+SECTION .rodata.userprobe
+GLOBAL user_probe_start
+GLOBAL user_probe_end
+user_probe_start:
+    push ebx
+    call usermode_syscall_probe
+    mov ebx, eax             ; success marker: fd=1, zero-byte write
+    mov eax, 4
+    xor ecx, ecx
+    xor edx, edx
+    int 0x80
+    pop edx                 ; supervisor physical alias supplied by kernel
+    test ebx, ebx
+    jz .bad
+    cmp esi, 1
+    je .kernel_read
+    cmp esi, 2
+    je .kernel_write
+    cmp esi, 3
+    je .kernel_stack
+    cmp esi, 4
+    je .page_table
+    cmp esi, 5
+    je .code_write
+    cmp esi, 6
+    je .stack_guard
+    cmp esi, 7
+    je .vga
+    cmp esi, 8
+    je .kernel_exec
+    cmp esi, 9
+    je .image_alias
+    cmp esi, 10
+    je .exit
+    cmp esi, 11
+    je .bad
+    cmp esi, 12
+    je .null_segments
+    cmp esi, 13
+    je .exit_df
+    cli
+.bad:
+    ud2
+.kernel_read:
+    mov eax, [0x100000]
+    jmp .bad
+.kernel_write:
+    mov dword [0x100000], 0
+    jmp .bad
+.kernel_stack:
+    mov eax, [edi]
+    jmp .bad
+.page_table:
+    mov eax, [ebp]
+    jmp .bad
+.code_write:
+    mov byte [0x40000000], 0
+    jmp .bad
+.stack_guard:
+    mov byte [0x403fb000], 0
+    jmp .bad
+.vga:
+    mov eax, [0xb8000]
+    jmp .bad
+.kernel_exec:
+    mov eax, 0x100000
+    jmp eax
+.image_alias:
+    mov eax, [edx]
+    jmp .bad
+.null_segments:
+    xor eax, eax
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ecx, 5000000
+.spin:
+    loop .spin
+    jmp .exit
+.exit_df:
+    std
+.exit:
+    mov eax, 1
+    mov ebx, 42
+    int 0x80
+    jmp .bad
+
+; Ring-3 regression probe used by the usermode command. It checks argument
+; delivery (debug console), return values, other GPRs, stack, segments and
+; restored DF/IF across repeated calls. No kernel helpers run in ring 3.
+GLOBAL usermode_syscall_probe
+usermode_syscall_probe:
+    push ebp
+    push ebx
+    push esi
+    push edi
+    sub esp, 8
+    mov [esp], esp
+    mov dword [esp + 4], 3
+    xor eax, eax
+    mov fs, ax
+    mov gs, ax
+.again:
+    mov ebx, 0x11223344
+    mov ecx, 0x55667788
+    mov edx, 0x99aabbcc
+    mov esi, 0x13579bdf
+    mov edi, 0x2468ace0
+    mov ebp, 0x76543210
+    mov eax, 20
+    std
+    int 0x80
+    cmp eax, 1
+    jne .failed
+    pushfd
+    pop eax
+    and eax, 0x600
+    cmp eax, 0x600             ; DF and IF restored by IRET
+    jne .failed
+    cld                       ; Rust/C require a clear direction flag
+    call .check_registers
+    mov eax, 4
+    int 0x80
+    cmp eax, -9               ; the sentinel EBX is an invalid descriptor
+    jne .failed
+    call .check_registers
+    mov eax, 0x7fffffff
+    int 0x80
+    cmp eax, -1
+    jne .failed
+    call .check_registers
+    cmp esp, [esp]
+    jne .failed
+    mov ax, ds
+    cmp ax, 0x23
+    jne .failed
+    mov ax, es
+    cmp ax, 0x23
+    jne .failed
+    mov ax, fs
+    test ax, ax
+    jne .failed
+    mov ax, gs
+    test ax, ax
+    jne .failed
+    dec dword [esp + 4]
+    jnz .again
+    mov eax, 1
+    jmp .done
+.failed:
+    xor eax, eax
+.done:
+    cld
+    mov dx, 0x23
+    mov fs, dx
+    mov gs, dx
+    add esp, 8
+    pop edi
+    pop esi
+    pop ebx
+    pop ebp
+    ret
+.check_registers:
+    cmp ebx, 0x11223344
+    jne .bad_register
+    cmp ecx, 0x55667788
+    jne .bad_register
+    cmp edx, 0x99aabbcc
+    jne .bad_register
+    cmp esi, 0x13579bdf
+    jne .bad_register
+    cmp edi, 0x2468ace0
+    jne .bad_register
+    cmp ebp, 0x76543210
+    jne .bad_register
+    ret
+.bad_register:
+    add esp, 4                ; discard local helper return address
+    jmp .failed
+user_probe_end:
+
+SECTION .bss
+GLOBAL user_return_esp
+GLOBAL user_return_cr3
+align 4
+user_return_esp: resd 1
+user_return_cr3: resd 1

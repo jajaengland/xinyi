@@ -4,6 +4,7 @@
 mod debug;
 mod gdt;
 mod interrupts;
+mod syscall_frame;
 mod keyboard;
 mod multiboot;
 mod paging;
@@ -11,20 +12,34 @@ mod phys;
 mod rtc;
 mod task;
 mod usermode;
+mod user_buffer;
 mod vfs;
 mod loader;
 mod blockdev;
 mod fat16;
+mod fs_path;
 mod ata;
+mod ata_poll;
+mod ata_capacity;
+mod idle;
+mod pci;
+mod disk_target;
 mod diskfs;
 mod installer;
+mod bootdisk;
 mod vga;
 
 use core::panic::PanicInfo;
 
 const INPUT_LIMIT: usize = 128;
 const HISTORY_LIMIT: usize = 8;
-const PROMPT: &str = "xinyi> ";
+fn print_prompt() {
+    let mut path = [0; fs_path::MAX_PATH];
+    let length = diskfs::pwd(&mut path);
+    // Paths are canonical ASCII 8.3 components supplied by the filesystem.
+    let directory = core::str::from_utf8(&path[..length]).unwrap_or("/");
+    print!("xinyi:{}> ", directory);
+}
 
 // Single source of truth for help output and Tab completion.
 // Add new commands here as well as in the run_command dispatch below.
@@ -46,19 +61,34 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("memory", "memory", "Show bootloader memory information"),
     ("paging", "paging", "Show paging configuration"),
     ("frames", "frames", "Show and test physical frame allocation"),
-    ("usermode", "usermode", "Test ring 3 user-mode execution"),
+    ("usermode", "usermode [probe]", "Test protected ring 3 execution"),
     ("ps", "ps", "Show running processes"),
-    ("run", "run [prog]", "Run a user program"),
-    ("ls", "ls", "List files"),
+    ("run", "run [demo|FILE]", "Run a user program and wait for its exit"),
+    ("spawn", "spawn [demo]", "Create a paused demo task record (diagnostic)"),
+    ("kill", "kill PID", "Remove a task record and free its memory"),
+    ("ls", "ls [PATH]", "List files and folders"),
     ("touch", "touch FILE", "Create a file"),
+    ("delete", "delete FILE", "Delete a file from the active filesystem"),
+    ("mkdir", "mkdir PATH", "Create a folder"),
+    ("rmdir", "rmdir PATH", "Remove an empty folder"),
+    ("cd", "cd [PATH]", "Change directory; no path returns to root"),
+    ("pwd", "pwd", "Show the current directory"),
+    (
+        "write",
+        "write FILE [TEXT]",
+        "Replace or clear file contents (up to 1024 bytes)",
+    ),
     ("cat", "cat FILE", "Display file contents"),
+    ("mount", "mount", "Mount FAT16 on the selected IDE disk"),
+    ("unmount", "unmount", "Return to the in-memory filesystem"),
+    ("format", "format", "Preview destructive primary-disk FAT16 format"),
     (
         "breakpoint",
         "breakpoint",
         "Trigger the CPU breakpoint exception",
     ),
-    ("disk", "disk", "Test disk access"),
-    ("install", "install", "Install Xinyi to disk"),
+    ("disk", "disk [scan|select]", "Test, scan, or explicitly select an IDE disk"),
+    ("install", "install", "Preview bootable selected-disk installation"),
     ("reboot", "reboot", "Reboot the machine"),
 ];
 
@@ -173,6 +203,13 @@ fn run_command(input: &str) {
         None => (input, ""),
     };
 
+    // Formatting requires a fresh preview immediately followed by confirmation.
+    if command != "format" || argument != "confirm" {
+        diskfs::cancel_format();
+    }
+    if command != "install" || argument != "confirm" {
+        installer::cancel();
+    }
     match command {
         "help" => {
             println!("Xinyi commands:");
@@ -295,7 +332,8 @@ fn run_command(input: &str) {
             );
 
             if status.enabled {
-                println!("  Page size: 4 MiB (PSE)");
+                println!("  Kernel: supervisor 4 MiB pages (PSE)");
+                println!("  User: private 4 KiB code/stack mappings");
                 println!(
                     "  Identity-mapped: 0x00000000-{:#010x}",
                     paging::MAPPED_BYTES
@@ -332,48 +370,130 @@ fn run_command(input: &str) {
 
         "usermode" => {
             println!("Entering user mode (ring 3)...");
-            usermode::enter();
+            usermode::enter(argument);
             println!("Returned from user mode.");
         }
 
         "ps" => {
-            println!("PID  State    Stack");
+            println!("Prototype task records (not scheduled):");
             if let Some(pid) = task::current_task_id() {
-                println!("{}    Running  kernel", pid);
+                println!("Current record: {}", pid);
             } else {
                 println!("(no tasks)");
             }
             println!("Total tasks: {}", task::task_count());
         }
 
-        "run" => {
-            println!("Launching: test");
-            // Create a test user task
-            if let Some(stack) = loader::create_user_stack() {
-                if let Some(pid) = task::create_task(loader::USER_LOAD_ADDR, stack) {
-                    println!("Started process {} at entry {:#010x}", pid, loader::USER_LOAD_ADDR);
-                    println!("Stack top: {:#010x}", stack);
+        "run" | "spawn" => {
+            if command == "spawn" && !argument.is_empty() && argument != "demo" {
+                println!("Only the built-in demo task record is supported.");
+                return;
+            }
+            let mut file = [0; fat16::MAX_FILE_SIZE];
+            let bytes = if argument.is_empty() || argument == "demo" {
+                loader::DEMO_BINARY
+            } else {
+                match diskfs::read(argument, &mut file) {
+                    Ok(0) => { println!("Program is empty."); return; }
+                    Ok(size) => &file[..size],
+                    Err(error) => { println!("Storage: {}", error.message()); return; }
+                }
+            };
+            if let Some(program) = loader::load_binary(bytes) {
+                if let Some(pid) = task::create_task(program) {
+                    if command == "run" {
+                        println!("Running process {}...", pid);
+                        task::execute(pid);
+                        return;
+                    }
+                    let (entry, size, user_stack, kernel_stack, directory) = task::describe(pid).unwrap();
+                    println!("Created task record {} (not executing)", pid);
+                    println!("Program: {:#010x} ({} bytes)", entry, size);
+                    println!("User stack backing top: {:#010x}", user_stack);
+                    println!("Kernel stack top: {:#010x}", kernel_stack);
+                    println!("Page directory: {:#010x}", directory);
                 } else {
-                    println!("Failed to create process");
+                    println!("Failed to create task record");
                 }
             } else {
                 println!("Out of memory");
             }
         }
 
+        "kill" => {
+            match argument.parse::<u32>() {
+                Ok(pid) if task::remove(pid) => println!("Removed task record {}", pid),
+                Ok(_) => println!("Task record not found"),
+                Err(_) => println!("Usage: kill PID"),
+            }
+        }
+
+        "pwd" => {
+            let mut path = [0; fs_path::MAX_PATH];
+            let length = diskfs::pwd(&mut path);
+            println!("{}", core::str::from_utf8(&path[..length]).unwrap());
+        }
+        "cd" => {
+            if let Err(error) = diskfs::cd(if argument.is_empty() { "/" } else { argument }) {
+                println!("Storage: {}", error.message());
+            }
+        }
+        "mkdir" | "rmdir" => {
+            if argument.is_empty() { println!("Usage: {} PATH", command); }
+            else {
+                let result = if command == "mkdir" { diskfs::mkdir(argument) } else { diskfs::rmdir(argument) };
+                match result {
+                    Ok(()) => println!("{}: {}", if command == "mkdir" { "Created directory" } else { "Removed directory" }, argument),
+                    Err(error) => println!("Storage: {}", error.message()),
+                }
+            }
+        }
         "ls" => {
-            println!("Files:");
-            println!("  (in-memory filesystem)");
+            println!(
+                "Files ({}):",
+                if diskfs::is_mounted() { "FAT16 disk" } else { "RAM, not persistent" }
+            );
+            let mut count = 0;
+            let mut directories = 0;
+            if let Err(error) = diskfs::list(argument, |name, size, directory| {
+                let mut text = [0u8; 12];
+                let len = fat16::display_name(name, &mut text);
+                if directory {
+                    println!("  {}/  <DIR>", core::str::from_utf8(&text[..len]).unwrap_or("(non-ASCII)"));
+                    directories += 1;
+                    return;
+                }
+                println!(
+                    "  {:<12} {} bytes",
+                    core::str::from_utf8(&text[..len]).unwrap_or("(non-ASCII)"),
+                    size
+                );
+                count += 1;
+            }) {
+                println!("Storage: {}", error.message());
+            }
+            println!("{} file(s)", count);
+            if directories != 0 { println!("{} folder(s)", directories); }
         }
 
         "touch" => {
             if argument.is_empty() {
                 println!("Usage: touch FILE");
             } else {
-                if vfs::create(argument) {
-                    println!("Created: {}", argument);
-                } else {
-                    println!("Failed to create file");
+                match diskfs::create(argument) {
+                    Ok(()) => println!("Created: {}", argument),
+                    Err(error) => println!("Storage: {}", error.message()),
+                }
+            }
+        }
+
+        "delete" => {
+            if argument.is_empty() {
+                println!("Usage: delete FILE");
+            } else {
+                match diskfs::delete(argument) {
+                    Ok(()) => println!("Deleted: {}", argument),
+                    Err(error) => println!("Storage: {}", error.message()),
                 }
             }
         }
@@ -382,23 +502,105 @@ fn run_command(input: &str) {
             if argument.is_empty() {
                 println!("Usage: cat FILE");
             } else {
-                if let Some((data, size)) = vfs::read(argument) {
-                    let text = core::str::from_utf8(&data[0..size]).unwrap_or("(binary)");
-                    println!("{}", text);
-                } else {
-                    println!("File not found: {}", argument);
+                let mut data = [0; fat16::MAX_FILE_SIZE];
+                match diskfs::read(argument, &mut data) {
+                    Ok(size) => println!(
+                        "{}",
+                        core::str::from_utf8(&data[..size]).unwrap_or("(binary)")
+                    ),
+                    Err(error) => println!("Storage: {}", error.message()),
                 }
             }
         }
 
-        "disk" => {
-            diskfs::init();
-            diskfs::test();
+        "write" => {
+            if !argument.is_empty() {
+                let (name, text) = match argument.find(char::is_whitespace) {
+                    Some(index) => (&argument[..index], argument[index..].trim_start()),
+                    None => (argument, ""),
+                };
+                match diskfs::write(name, text.as_bytes()) {
+                    Ok(()) => println!("Wrote {} bytes to {}", text.len(), name),
+                    Err(error) => println!("Storage: {}", error.message()),
+                }
+            } else {
+                println!("Usage: write FILE [TEXT] (create it with touch first)");
+            }
         }
+        "mount" => match diskfs::mount() {
+            Ok(start) => println!("Mounted FAT16 at sector {}. File commands now use disk.", start),
+            Err(error) => println!("Mount failed: {}", error.message()),
+        },
+        "unmount" => match diskfs::unmount() {
+            Ok(()) => println!("Unmounted. File commands now use RAM (not persistent)."),
+            Err(error) => println!("Unmount failed: {}", error.message()),
+        },
+        "disk" => match argument {
+            "" => diskfs::test(),
+            "scan" => diskfs::scan(),
+            _ if argument.starts_with("select ") => diskfs::select_command(&argument[7..]),
+            _ => println!("Usage: disk select BB:DD.F primary|secondary master|slave"),
+        },
+        "format" => match argument {
+            "" => match diskfs::prepare_format() {
+                Ok(plan) => {
+                    println!("Target: selected IDE disk, {} sectors ({} MiB).", plan.disk_sectors, plan.disk_sectors / 2048);
+                    diskfs::report_target();
+                    println!("WARNING: removes all partitions, files, and bootability on this disk.");
+                    println!("This includes any installed OS. Quick format is not a secure erase.");
+                    println!("Creates a {} MiB FAT16 data partition at sector 2048.", plan.volume_sectors / 2048);
+                    if plan.disk_sectors > fat16::FormatPlan::START + plan.volume_sectors {
+                        println!("Remaining disk space will be unallocated (FAT16 size limit).");
+                    }
+                    println!("Boot source is not detected; verify this is the intended target.");
+                    println!("To erase this disk, enter: format confirm");
+                    println!("Any other command cancels confirmation.");
+                }
+                Err(error) => println!("Format refused: {}", error.message()),
+            },
+            "confirm" => match diskfs::confirm_format() {
+                Ok(()) => println!("Format complete. Run mount to use the empty FAT16 disk."),
+                Err(error) => println!("Format failed: {}", error.message()),
+            },
+            _ => println!("Usage: format, then format confirm. Unmount first."),
+        },
 
         "install" => {
-            println!("Installing to primary disk (drive 0)...");
-            installer::install_to_disk(0);
+            if diskfs::is_mounted() {
+                installer::cancel();
+                println!("Unmount the filesystem before installing Xinyi.");
+                return;
+            }
+            match argument {
+                "" => match installer::prepare() {
+                    Ok(plan) => {
+                        println!("Target: selected IDE disk, {} MiB.", plan.disk_sectors/2048);
+                        diskfs::report_target();
+                        println!("Installs the BIOS bootloader and {} kernel bytes.",plan.kernel.bytes);
+                        if plan.preserve_data {
+                            println!("Existing compatible FAT16 data and partition table will be preserved.");
+                            println!("The current bootloader will be replaced.");
+                        } else {
+                            println!("WARNING: all existing partitions, files, and OS boot loaders will be replaced.");
+                            println!("Creates a separate FAT16 data partition (up to 2 GiB).");
+                            if plan.disk_sectors > fat16::FormatPlan::START + fat16::FormatPlan::MAX_VOLUME_SECTORS {
+                                println!("Remaining disk space will be unallocated.");
+                            }
+                        }
+                        println!("To install, enter: install confirm");
+                        println!("Any other command cancels confirmation.");
+                    }
+                    Err(error) => println!("Install refused: {}",error.message()),
+                },
+                "confirm" => match installer::confirm() {
+                    Ok(()) => {
+                        println!("Installation complete: bootloader, kernel, and FAT16 data are ready.");
+                        println!("Boot the selected IDE disk in legacy BIOS mode. Run mount for files.");
+                    }
+                    Err(error) => println!("Install failed: {}",error.message()),
+                },
+                _ => println!("Usage: install, then install confirm. Unmount first."),
+            }
         }
 
         "reboot" => {
@@ -460,6 +662,7 @@ fn run_command(input: &str) {
 pub extern "C" fn rust_main(magic: u32, info_addr: u32) -> ! {
     // Preserve bootloader-provided memory information before anything else.
     multiboot::init(magic, info_addr);
+    diskfs::restore_boot_target();
 
     // Install the kernel-owned GDT before relying on any segment selectors.
     gdt::init();
@@ -515,7 +718,7 @@ pub extern "C" fn rust_main(magic: u32, info_addr: u32) -> ! {
     let mut history_count = 0usize;
     let mut history_position = 0usize;
 
-    print!("{}", PROMPT);
+    print_prompt();
     // The current VGA cursor is immediately after the prompt, which is
     // where command input should begin.
     let (prompt_end_column, mut prompt_row) = vga::cursor_position();
@@ -664,7 +867,7 @@ pub extern "C" fn rust_main(magic: u32, info_addr: u32) -> ! {
                             // Print the next prompt, then remember the
                             // cursor position immediately after it. Input
                             // must begin here, not at the start of the prompt.
-                            print!("{}", PROMPT);
+                            print_prompt();
                             let (prompt_end_column, new_prompt_row) = vga::cursor_position();
                             prompt_column = prompt_end_column;
                             prompt_row = new_prompt_row;
@@ -768,7 +971,7 @@ pub extern "C" fn rust_main(magic: u32, info_addr: u32) -> ! {
                 }
             }
         } else {
-            core::hint::spin_loop();
+            idle::wait_for_input();
         }
     }
 }

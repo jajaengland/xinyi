@@ -236,6 +236,12 @@ pub fn _print(arguments: fmt::Arguments) {
         let _ = (*writer).write_fmt(arguments);
     }
 }
+pub fn write_bytes(bytes: &[u8]) {
+    let writer = core::ptr::addr_of_mut!(WRITER);
+    for &byte in bytes {
+        unsafe { (*writer).write_byte(byte); }
+    }
+}
 /// Number of times the VGA text buffer has scrolled since startup or clear.
 pub fn scroll_count() -> usize {
     unsafe {

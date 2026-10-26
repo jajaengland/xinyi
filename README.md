@@ -6,6 +6,8 @@ Xinyi is an experimental 32-bit x86 kernel written primarily in Rust, with a sma
 
 The project is being developed as a learning project, with the long-term goal of building a small operating system with a shell, applications, and eventually a graphical interface.
 
+Automated development tests use QEMU with disposable image files. The user handles real-hardware testing when needed. The dc7800 resumed working after its RAM was reconfigured, and Xinyi boots there again.
+
 ## Current Features
 
 - 32-bit x86 bare-metal kernel
@@ -24,10 +26,13 @@ The project is being developed as a learning project, with the long-term goal of
 - Timer-based uptime tracking
 - Interrupt-driven PS/2 keyboard input using a ring buffer
 - Bootloader memory-summary and memory-map reporting
-- Identity-mapped paging using 4 MiB PSE pages
+- Supervisor kernel mappings with private 4 KiB user code/stack pages
 - Ring 3 user-mode entry with a TSS-backed kernel stack
 - `int 0x80` system-call interface
-- Basic in-memory process table and filesystem commands
+- Synchronous protected user-program execution, text output and exit/fault recovery
+- File listing, creation, reading, and replacement in RAM or a mounted FAT16 volume
+- FAT16 nested folders and file persistence with ASCII 8.3 names and files up to 1024 bytes
+- Primary IDE PIO disk access and a BIOS bootable installer with a separate FAT16 data partition
 - Reboot command
 
 ## Requirements
@@ -86,19 +91,204 @@ If the build cannot find NASM on Windows, add MSYS2's tools to `PATH` for the se
 | `memory` | Show the multiboot memory summary and memory map |
 | `paging` | Show paging configuration and control-register state |
 | `frames` | Show physical frame allocation statistics and run a self-test |
-| `usermode` | Test ring 3 user-mode execution |
-| `ps` | Show running processes |
-| `run [prog]` | Run a user program |
-| `ls` | List files |
+| `usermode [probe]` | Run a protected user probe, report its exit/fault, and return to the shell |
+| `ps` | Show current task ID and total task records |
+| `run [demo\|FILE]` | Execute the built-in demo or a flat program file and wait for completion |
+| `spawn [demo]` | Create a paused demo task record for diagnostics |
+| `kill PID` | Remove a task record and release its program and stack frames |
+| `ls [PATH]` | List files and folders in the current or specified directory |
+| `mkdir PATH` | Create a folder (its parent must exist) |
+| `cd [PATH]` | Change directory; no path returns to root |
+| `pwd` | Show the current directory |
+| `rmdir PATH` | Remove an empty folder |
 | `touch FILE` | Create a file |
+| `delete FILE` | Delete a file from the active filesystem |
+| `write FILE [TEXT]` | Replace an existing file's contents; omit TEXT to clear it |
 | `cat FILE` | Display file contents |
+| `mount` | Mount a FAT16 volume on the selected IDE disk |
+| `unmount` | Flush/detach the volume and return to RAM files |
+| `format` | Preview a destructive FAT16 quick format of the selected IDE disk |
+| `format confirm` | Execute the immediately preceding format preview |
 | `breakpoint` | Test the CPU breakpoint exception handler |
 | `panic` | Test the kernel panic handler |
+| `disk` | Identify the target IDE master, report model/errors, and read sector 0 |
+| `disk scan` | Report PCI storage controllers and probe IDE drive positions without changing the target |
+| `disk select BB:DD.F secondary master` | Select a controller/channel/drive; primary/slave and legacy are also supported |
+| `install` | Preview a bootable installation on the selected IDE disk |
+| `install confirm` | Execute the immediately preceding installation preview |
 | `reboot` | Attempt to reboot the machine |
 
 The shell also supports command history, cursor movement, Backspace, and Tab completion for uniquely matching commands.
 
+The prompt shows the current directory, for example `xinyi:/>` or `xinyi:/DOCS>`. It updates after `cd`, mounting or unmounting a disk; `pwd` remains available.
+
+`install` refuses mounted disks and previews whether it will preserve compatible existing FAT16 data or replace the disk layout. Only an immediately following `install confirm` writes. The `panic` dispatch works but is currently missing from the help/completion table.
+
 Unknown commands are reported with a quoted name. When exactly one known command matches by prefix, the shell also prints a case-insensitive "Did you mean" suggestion. Commands are separated from their arguments by whitespace, and repeated spaces are ignored.
+
+## Repeatable Smoke Checks
+
+After building, run `python tools/smoke.py` with Python 3 and QEMU on `PATH`. Use `--qemu PATH` or `--kernel PATH` to override their locations. The script starts headless QEMU, connects to QMP over local loopback, injects paced PS/2 keys, and reads VGA memory. It creates and removes its own temporary 10 MiB IDE fixture under `target/smoke`; existing disk images are never attached.
+
+Checks cover boot, memory reporting, paging, frame alloc/free counts, keyboard diagnostics, shell input/editing/history/completion, basic VFS creation/reading, task-record creation, disk sector reads, uptime, panic/breakpoint diagnostics, and ring 3 `getpid` followed by the expected protection fault. Each fatal check uses a fresh VM. The transcript is saved to `target/smoke/transcript.txt`. These checks do not establish multitasking, persistent storage, working installation, or user-memory isolation.
+
+For storage checks, run:
+
+```powershell
+rustc --edition=2021 --test tools/storage_tests.rs -o target/storage-tests.exe
+.\target\storage-tests.exe
+python tools/storage_qemu.py
+python tools/folders_qemu.py
+python tools/format_qemu.py
+python tools/reliability_qemu.py
+python tools/lba48_qemu.py
+python tools/install_qemu.py
+python tools/ata_qemu.py
+python tools/syscall_qemu.py
+python tools/isolation_qemu.py
+python tools/user_recovery_qemu.py
+python tools/programs_qemu.py
+rustc --edition=2021 --test tools/user_buffer_tests.rs -o target/user-buffer-tests.exe
+.\target\user-buffer-tests.exe
+rustc --edition=2021 --test tools/phys_tests.rs -o target/phys-tests.exe
+.\target\phys-tests.exe
+python tools/task_memory_qemu.py
+```
+
+The host tests cover file/cluster boundaries, full filesystems, malformed volumes/chains, mirror mismatches, and injected write/flush failures. The QEMU tests create disposable FAT16 volumes, read host-created files in the guest, write files in the guest, reboot and start a fresh VM, then independently read back the image on the host. Both whole-volume and primary MBR-partition layouts are checked, along with a missing disk and RAM fallback. Results are saved to `target/smoke/storage-transcript.txt`.
+
+For `syscall_qemu.py`, build both profiles first: `cargo +nightly build -Z build-std=core` and `cargo +nightly build --release -Z build-std=core`. It checks repeated calls with distinct arguments, returns, preserved registers/segments/stack and restored flags before a recoverable privilege fault. It verifies invalid-descriptor handling and uses a zero-byte write as its success marker. Results are saved to `target/smoke/syscall-transcript.txt`; `--kernel PATH` checks a single build.
+
+`task_memory_qemu.py` checks both profiles with 8 MiB of RAM: program bytes and zeroed allocation tails/stacks, distinct owned page directories/tables and their permissions, all 16 task slots, repeated full-table refusals without leaks, complete reclamation through `kill`, slot reuse, and the protected ring-3/syscall probe. It saves `target/smoke/task-memory-transcript.txt`. `phys_tests.rs` checks contiguous allocation, fragmentation, exhaustion and balanced release without booting a guest. Actual execution and scheduling of task records remain future work.
+
+`isolation_qemu.py` checks both profiles with 8 MiB RAM. It verifies real ring-3 faults for kernel reads/writes/execution, access to the syscall stack, page directory, VGA and physical image alias, writes to read-only user code, and writes into the unmapped stack guard. Fault addresses/error codes are checked, kernel bytes remain unchanged, and each fault returns to a usable shell. A CPU without PSE must refuse user setup without leaking frames. Results are saved to `target/smoke/isolation-transcript.txt`.
+
+`usermode exit` runs the diagnostic probe and exits with code 42. Plain `usermode` demonstrates a recoverable privilege fault. The kernel restores its address space, stack, segments, flags and TSS stack before reclaiming memory. `run demo` executes a hello-world process; `mount` followed by `run hello.bin` executes a flat image from the active filesystem. Execution is synchronous; scheduling remains pending.
+
+`user_recovery_qemu.py` repeats normal exits and faults in the same 8 MiB VM for debug and release builds. It independently reads CR3 and TSS ESP0, checks frame balance and restored flags, exercises timer IRQs with null user segments using deterministic virtual time, and verifies that a subsequent kernel breakpoint remains fatal. Its transcript is `target/smoke/user-recovery-transcript.txt`.
+
+Formatter tests cover layout sizing, metadata replacement, write/flush failures, mounted-disk refusal, preview cancellation, one-use confirmation, and empty/missing disks. `format_qemu.py` formats only its private disposable images and verifies host readback and cold-boot persistence; its transcript is `target/smoke/format-transcript.txt`.
+
+`reliability_qemu.py` samples the idle virtual CPU's halted state, checks repeated keyboard wakeups and advancing uptime, and verifies format/fresh-install refusal on a private sparse 3 TiB QCOW2 disk beyond the current block-interface limit without guest-data allocation. It needs `qemu-img` on `PATH` and saves `target/smoke/reliability-transcript.txt`. These are emulator checks, not physical temperature or power measurements.
+
+`lba48_qemu.py` uses private sparse 160 GiB QCOW2 images to verify FAT16 reads/writes beyond the 128 GiB boundary, independent host readback, unchanged low-address aliases, cold-boot persistence, preserving installation with a high-address partition, and BIOS disk-only boot. A fresh installation also checks backup-GPT cleanup at the actual disk end. It needs `qemu-img` and `qemu-io` and saves `target/smoke/lba48-transcript.txt`.
+
+Installer tests verify the installed payload against the original ELF image, including after runtime state changes. They then boot the IDE disk with **no `-kernel`, CD, or floppy**, test memory/allocation/paging and persistent files at 32/128 MiB RAM, reinstall from the running installed system while preserving data, and reject corrupt headers/payloads or insufficient RAM. Host tests also check conflicting layouts, changed targets, and write failures. Results are in `target/smoke/install-transcript.txt`. `python tools/install_qemu.py --output target/xinyi-installed.img` saves a new verified bootable image and refuses to overwrite an existing file.
+
+ATA tests verify read-only scans with disks in primary-master, primary-slave, and secondary-master positions, reject an unsupported AHCI controller, and check that scanning never redirects file/format/install operations to a discovered disk. `target/smoke/ata-transcript.txt` records these diagnostics. Native-mode PCI BAR decoding and tick-based timeout behavior have host tests; the available QEMU IDE models exercise compatibility-mode I/O, not the physical HP ICH9 native-mode path.
+
+## Writing Programs
+
+See [the SDK guide](sdk/README.md) and [the Rust hello example](programs/hello/main.rs). `tools/build_program.py` builds a flat image; `tools/program_disk.py` packages it into a new FAT16 data image. `programs_qemu.py` verifies built-in/file execution, console output, real process IDs, invalid buffers, cleanup and unchanged disk contents in both kernel profiles. Its transcript is `target/smoke/programs-transcript.txt`.
+
+## Diagnosing a Disk That BIOS Detects but Xinyi Does Not
+
+Keep the controller in IDE emulation mode and boot a newly built image, then run:
+
+```text
+disk
+disk scan
+```
+
+The driver now discovers the first PCI IDE controller instead of assuming ports `0x1f0`/`0x3f6`. Compatibility-mode channels retain the legacy addresses; native-mode channels use BIOS-assigned PCI I/O BARs. PCI configuration is read only: Xinyi does not switch controller modes, enable disabled decoding, or rewrite BARs. That controller's primary master is the default until an explicit or installed target is supplied. A scan can identify a disk at a different channel/slot, but never makes it the format/install target automatically. Scan while unmounted.
+
+Diagnostics include PCI vendor/device IDs, interface/command flags, BARs and controller mapping fields, plus per-drive status/error registers, signature, model and accessible capacity. They distinguish absent drives, timed-out polls, ATA errors, ATAPI optical devices, unsupported sector sizes, and unavailable routing. IDENTIFY gets a five-second PIT deadline, normal commands two seconds, and flush ten seconds. A separate stagnant-timer poll bound prevents an infinite loop; the former total-iteration limit could expire too early on hardware.
+
+The HP photos confirmed the WDC drive at PCI `00:1f.2`, secondary master (`0x170`/`0x376`), while the old default was `00:03.2` primary master. Choose the detected disk explicitly in the updated build:
+
+```text
+disk select 00:1f.2 secondary master
+disk
+mount
+```
+
+Selection issues IDENTIFY without writing disk sectors, displays the model/capacity, and retains the prior target if identification fails. It is refused while mounted. Mounting, formatting, and installation share the selected device; destructive previews include its path and model. Any selection command cancels pending destructive confirmations. A disk can identify successfully while mount still rejects a non-FAT16 filesystem.
+
+Installation saves the PCI controller identity/channel/drive in a checksummed header record. The BIOS loader passes it to the kernel, and installed boots restore the same target. If the saved controller is unavailable or changed, access fails rather than selecting another controller. Images moved to another computer may need a new explicit selection. `disk select legacy secondary master` is also supported; PCI paths are preferred when known.
+
+The WDC's earlier 131071 MiB report was the LBA28 accessible-range limit. The driver now uses LBA48 PIO and extended cache flushes when IDENTIFY supplies valid LBA48 capacity; legacy-only devices retain LBA28 commands. `disk` reports the addressing mode. The block interface still limits the accessible sector count to `u32::MAX` (just under 2 TiB with 512-byte sectors), retaining the full capacity separately. Whole-disk formatting and fresh installation are refused if full capacity is unknown or exceeds that range. Compatible existing FAT16 partitions entirely within the accessible range can still be mounted and preserved during installation. FAT16 volumes remain capped just below 2 GiB. AHCI/RAID and USB mass-storage access remain unsupported. QEMU verifies explicit selection and saved-target restoration; physical LBA48 behavior has not yet been verified.
+
+## Using Persistent Storage
+
+Create a new FAT16 data image and attach it to QEMU (the image tool refuses to overwrite a file):
+
+```powershell
+python tools/mkfat16.py target/xinyi-data.img
+qemu-system-i386 -kernel target/i686-unknown-none/debug/rust-os -drive file=target/xinyi-data.img,format=raw,if=ide,index=0
+```
+
+In Xinyi:
+
+```text
+mount
+touch note.txt
+write note.txt hello from xinyi
+ls
+cat note.txt
+reboot
+mount
+cat note.txt
+```
+
+Mounting is explicit on every boot. Until `mount` succeeds, file commands use a separate RAM filesystem; mounting/unmounting never copies files between the two. Names are case-insensitive ASCII 8.3 names, listed in uppercase. Files are limited to 1024 bytes; the shell's existing 128-byte input-line limit also limits each typed `write` command. `touch` rejects existing names and `write` requires an existing file. Shell whitespace trimming applies to file text too.
+
+Folders work on both backends:
+
+```text
+mkdir docs
+cd docs
+touch note.txt
+write note.txt hello
+pwd
+ls
+cd ..
+cat /docs/note.txt
+```
+
+All file commands, including `run`, accept relative or absolute paths. `/` is the root; slash/backslash separators, `.` and `..` are supported. `ls PATH` lists another folder without changing directory. `rmdir` removes empty folders only and refuses the root, current folder and ancestors; use `delete` for files. Fresh mount, unmount and disk-error fallback reset navigation to root. Paths have at most eight components; FAT16 subdirectories are bounded to 32 clusters and RAM shares 32 slots between files/folders. Non-ASCII short names display a placeholder; navigation still requires ASCII 8.3 names.
+
+`folders_qemu.py` checks host-created folders, nested file/program paths, RAM navigation, cold-boot persistence on both volume layouts, mirrored FATs and cluster reclamation with an independent recursive reader. Corrupt-folder fallback and OEM-name display are also checked. Transcripts are in `target/smoke/folders-transcript.txt` and, for `--corrupt-only`, `target/smoke/folders-errors-transcript.txt`.
+
+`delete FILE` removes a file from the active backend, using the same case-insensitive ASCII 8.3 names. FAT16 deletion refuses read-only files, directories, files over the current 1024-byte limit, and invalid chains. It flushes the deleted directory entry before releasing clusters in each FAT copy. The slot and clusters can then be reused; file data is not securely erased. RAM deletion clears and releases its file slot.
+
+The driver accepts 512-byte-sector FAT16 whole-volume images or the first supported primary MBR FAT16 partition. Writes update FAT mirrors and flush the device cache. I/O or chain-corruption errors detach the disk filesystem and announce the return to RAM. There is no journal or power-loss recovery: an interrupted metadata write can leave leaked clusters or inconsistent FAT copies. A failed delete can leave a file removed with some space unreclaimed. Long filenames, append, and files larger than 1 KiB are future work. `mkfat16.py --partitioned PATH` creates the MBR layout; neither layout is an OS installer or bootable kernel image.
+
+To initialize or replace the selected IDE disk's filesystem from inside Xinyi:
+
+```text
+unmount
+format
+format confirm
+mount
+```
+
+Read the preview before confirming: this is a **whole-disk destructive quick format**, including existing partitions and bootability. It targets the selected IDE disk, whose path, model, and accessible capacity appear in the preview. It does not infer an ATA target from BIOS drive numbering. It refuses mounted disks. `format` only previews; `format confirm` must be the next command, and every confirmation attempt is consumed. Any other command cancels the preview. The formatter creates one FAT16 LBA partition at sector 2048, with two FATs and an empty root directory. It selects a supported cluster size and uses at most just under 2 GiB; excess disk space remains unallocated and is announced in the preview. Too-small disks are refused before writing. Old primary/backup GPT metadata is cleared. Free data is not securely erased. It flushes and reads back metadata before reporting completion; after a failed format the disk remains unmounted and may require reformatting.
+
+The formatter creates a data disk; `install` adds a bootable system. Formatting an installed disk removes its bootloader, so use `install` again afterward.
+
+Before arming a format preview or writing any format metadata, the driver must establish that its accessible sector count equals the full physical count. Otherwise formatting is refused, including fresh installation. This ensures backup GPT metadata is cleared at the actual end of the device, rather than the LBA28 access boundary. The FAT16 volume-size cap above still applies to fully accessible disks.
+
+## Installing and Booting From the IDE Disk
+
+In a running Xinyi session with a writable IDE disk selected (use disk select first if needed):
+
+```text
+unmount
+install
+install confirm
+```
+
+Read the preview: a valid MBR/FAT16 layout whose partitions all start at or beyond sector 2048 can retain its data and partition table. The bootloader is replaced. Whole-volume FAT images, earlier/overlapping partitions, GPT, blank disks, and unsupported layouts instead get a **destructive new FAT16 layout** after confirmation, with up to just under 2 GiB used and the remainder unallocated. `install` alone is read-only; any other command cancels confirmation. Installation checks the target again, reads back writes, flushes, and publishes the bootable MBR last. An interrupted/failed installation may leave the disk unbootable and require recovery or a new installation; it is not an atomic update.
+
+The installed system boots in **legacy BIOS mode** on x86 with BIOS EDD disk reads, E820 memory reporting, and an A20-capable PC platform. UEFI/Secure Boot, NVMe/AHCI storage, and real hardware have not been validated. The bootloader loads the kernel independently of FAT16; after boot, run `mount` to access its data partition. No automatic mount is performed.
+
+To test a saved installed image, close the initial QEMU session and launch **without `-kernel`**:
+
+```powershell
+qemu-system-i386 -m 128M -drive file=target/xinyi-installed.img,format=raw,if=ide,index=0 -boot c
+```
+
+Rebooting a QEMU session that still has `-kernel` on its command line reloads that supplied kernel and does not prove that the installed disk can boot. The standalone command above uses only the disk. The root-level untracked bootloader/image experiments are older artifacts; the current loader is built from `src/disk_mbr.asm` and `src/disk_stage2.asm`.
 
 ## Project Documentation
 
@@ -109,7 +299,7 @@ Unknown commands are reported with a quoted name. When exactly one known command
 
 Xinyi is an experimental kernel and is not intended for production use. Features and internal interfaces may change as development continues.
 
-The kernel currently builds with a small number of dead-code warnings for helper functions that are intentionally being kept available during development.
+The installation-capable debug build on 25 October 2026 succeeds with 22 warnings (the initial baseline had 43), including unused prototype code/imports and references to mutable statics in task management. These warnings have not all been audited; see the current baseline and priorities in `TODO.md`.
 
 The keyboard IRQ drains all pending PS/2 bytes on each interrupt. If the kernel's scancode ring buffer overflows, it counts the dropped bytes and resets Shift and extended-prefix state so a lost release cannot leave a modifier stuck. Caps Lock toggles only on the press edge, so holding the key or auto-repeat cannot flip it repeatedly. The `keyboard` command reports this state and the drop count.
 

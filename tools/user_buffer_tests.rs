@@ -1,0 +1,20 @@
+#[path = "../src/user_buffer.rs"] mod user_buffer;
+#[test]
+fn console_ranges_accept_only_complete_image_or_stack_buffers() {
+    use user_buffer::readable;
+    assert!(readable(0x40000000, 32, 32));
+    assert!(readable(0x4000001f, 1, 32));
+    assert!(!readable(0x4000001f, 2, 32));
+    assert!(!readable(0x40000020, 1, 32));
+    assert!(readable(0x403fc000, 1024, 32));
+    assert!(readable(0x403fffff, 1, 32));
+    assert!(!readable(0x403fffff, 2, 32));
+    for address in [0, 0x100000, 0xb8000, 0x40010000, 0x403fbfff, 0x40400000, 0xffffffff] {
+        assert!(!readable(address, 1, 32));
+    }
+    assert!(!readable(0xfffffff0, 32, 32));
+    assert!(!readable(0x403fc000, 1025, 32));
+    assert!(!readable(0x40000000, 1, 0));
+    assert!(!readable(0x40000000, 1, 65537));
+    assert!(readable(0xffffffff, 0, 32));
+}

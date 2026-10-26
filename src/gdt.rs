@@ -185,4 +185,7 @@ pub fn set_kernel_stack(stack: u32) {
         (*tss_ptr).esp0 = stack;
     }
 }
+pub fn kernel_stack() -> u32 {
+    unsafe { (*core::ptr::addr_of!(TSS)).esp0 }
+}
 

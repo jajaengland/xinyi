@@ -139,6 +139,12 @@ pub fn init() -> Stats {
 
     let (kernel_start, kernel_end) = kernel_range();
     reserve_range(kernel_start, kernel_end);
+    // Private user mappings replace this part of the identity map. Never
+    // allocate physical RAM here, or its kernel alias would become ambiguous.
+    reserve_range(
+        paging::USER_BASE as u64,
+        paging::USER_BASE as u64 + paging::USER_WINDOW_BYTES as u64,
+    );
 
     // Redundant while these live inside the kernel image, but explicit so the
     // allocations remain safe if their placement changes later.
@@ -175,34 +181,34 @@ pub fn init() -> Stats {
     }
 }
 
-fn claim(frame: usize) -> bool {
-    if is_used(frame) {
-        return false;
-    }
-
-    set_used(frame);
-    HINT.store(frame as u32 + 1, Ordering::Relaxed);
-    FREE_FRAMES.fetch_sub(1, Ordering::Relaxed);
-
-    true
-}
-
 /// Allocate one 4 KiB frame. Returns its physical (and identity-mapped) address.
 pub fn alloc_frame() -> Option<u64> {
+    alloc_frames(1)
+}
+
+/// Claim a contiguous run, leaving the bitmap unchanged on failure.
+/// Allocation is serialized in shell context; IRQ handlers never allocate.
+pub fn alloc_frames(count: usize) -> Option<u64> {
+    if count == 0 || count > MAX_FRAMES || count > FREE_FRAMES.load(Ordering::Relaxed) as usize {
+        return None;
+    }
     let hint = HINT.load(Ordering::Relaxed) as usize;
-
-    for frame in hint..MAX_FRAMES {
-        if claim(frame) {
-            return Some(frame as u64 * FRAME_SIZE);
+    // Full fallback also finds runs straddling the original hint.
+    for first in [hint.min(MAX_FRAMES), 0] {
+        let mut run = 0;
+        for frame in first..MAX_FRAMES {
+            run = if is_used(frame) { 0 } else { run + 1 };
+            if run == count {
+                let start = frame + 1 - count;
+                for allocated in start..=frame {
+                    set_used(allocated);
+                }
+                HINT.store(frame as u32 + 1, Ordering::Relaxed);
+                FREE_FRAMES.fetch_sub(count as u32, Ordering::Relaxed);
+                return Some(start as u64 * FRAME_SIZE);
+            }
         }
     }
-
-    for frame in 0..hint.min(MAX_FRAMES) {
-        if claim(frame) {
-            return Some(frame as u64 * FRAME_SIZE);
-        }
-    }
-
     None
 }
 

@@ -126,7 +126,12 @@ pub extern "C" fn xinyi_exception_handler(
     eip: u32,
     cs: u32,
     eflags: u32,
-) -> ! {
+) -> u32 {
+    let mut fault_address = 0;
+    if vector == 14 {
+        unsafe { asm!("mov {}, cr2", out(reg) fault_address, options(nomem, nostack)); }
+    }
+    let recover = crate::usermode::request_fault(cs, vector, error_code, eip, fault_address);
     let name = match vector {
         0 => "Divide Error",
         1 => "Debug",
@@ -167,16 +172,12 @@ pub extern "C" fn xinyi_exception_handler(
     println!("EFLAGS: {:#010x}", eflags);
 
     if vector == 14 {
-        let cr2: u32;
-
-        unsafe {
-            asm!("mov {}, cr2", out(reg) cr2, options(nomem, nostack));
-        }
-
-        println!("CR2 (fault address): {:#010x}", cr2);
+        println!("CR2 (fault address): {:#010x}", fault_address);
+        debug::write_fmt(format_args!("Fault address: {:08x}\n", fault_address));
     }
 
-    println!("System halted.");
+    if recover { println!("User fault; returning to shell."); }
+    else { println!("System halted."); }
 
     // Mirror the essential fault information to QEMU's debug console so
     // faults can be diagnosed from a headless or automated run.
@@ -193,6 +194,8 @@ pub extern "C" fn xinyi_exception_handler(
     debug::write_str(" eflags=");
     debug::write_hex32(eflags);
     debug::write_str("\r\n");
+
+    if recover { return 1; }
 
     loop {
         unsafe {
@@ -231,47 +234,28 @@ pub extern "C" fn xinyi_irq_handler(vector: u32) {
 }
 
 #[no_mangle]
-pub extern "C" fn xinyi_syscall_handler() -> u32 {
-    // Syscall numbers in EAX, args in EBX, ECX, EDX
-    let mut syscall_num: u32 = 0;
-    let mut arg1: u32 = 0;
-    let mut arg2: u32 = 0;
-    let mut arg3: u32 = 0;
-
-    unsafe {
-        asm!(
-            "mov {0}, eax",
-            "mov {1}, ebx",
-            "mov {2}, ecx",
-            "mov {3}, edx",
-            out(reg) syscall_num,
-            out(reg) arg1,
-            out(reg) arg2,
-            out(reg) arg3,
-            options(nomem, nostack)
-        );
-    }
+pub extern "C" fn xinyi_syscall_handler(frame: &crate::syscall_frame::SyscallFrame) -> u32 {
+    let syscall_num = frame.eax;
+    let (arg1, arg2, arg3) = (frame.ebx, frame.ecx, frame.edx);
+    debug::write_fmt(format_args!(
+        "Syscall frame: nr={} args={:08x}/{:08x}/{:08x} cs={:04x}\n",
+        syscall_num, arg1, arg2, arg3, frame.cs
+    ));
 
     match syscall_num {
         1 => {
             // sys_exit
-            println!("Syscall: exit({})", arg1);
-            loop {
-                unsafe { asm!("hlt", options(nomem, nostack)); }
-            }
+            if crate::usermode::request_exit(frame.cs, arg1) { 0 }
+            else { 0xffffffff }
         }
         4 => {
-            // sys_write - simplified, just print arg1 as number for now
-            println!("Syscall: write({})", arg1);
-            arg2
+            crate::usermode::write(frame.cs, arg1, arg2, arg3)
         }
         20 => {
             // sys_getpid
-            println!("Syscall: getpid()");
-            1
+            crate::usermode::getpid()
         }
         _ => {
-            println!("Syscall: unknown({})", syscall_num);
             0xFFFFFFFF
         }
     }

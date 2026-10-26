@@ -11,9 +11,25 @@ align 4
 section .text
 global _start
 extern rust_main
+extern _kernel_start
+extern _kernel_file_size
+extern _kernel_snapshot_start
+extern user_return_esp
+extern user_return_cr3
 
 _start:
     cli
+    cld
+    ; Preserve the initialized kernel before Rust mutates any global state.
+    ; The linker reserves this copy inside the allocator's kernel range.
+    mov ebp, eax
+    mov edx, ebx
+    mov esi, _kernel_start
+    mov edi, _kernel_snapshot_start
+    mov ecx, _kernel_file_size
+    rep movsb
+    mov eax, ebp
+    mov ebx, edx
     mov esp, stack_top
     and esp, 0xFFFFFFF0
 
@@ -59,13 +75,35 @@ tss_flush:
     ret
 
 ; Enter ring 3 at the given entry point.
-; void enter_user_mode(u32 entry)
+; void enter_user_mode(u32 entry, u32 user_stack, u32 probe_mode,
+;                      u32 kernel_stack, u32 directory, u32 image)
 ;
 ; Builds the IRET frame manually:
 ;   SS, ESP, EFLAGS, CS, EIP
 global enter_user_mode
 enter_user_mode:
-    mov edx, [esp + 4]      ; entry point
+    ; Preserve the caller's C ABI state on the original shell stack.
+    push ebp
+    push ebx
+    push esi
+    push edi
+    pushfd
+    push ds
+    push es
+    push fs
+    push gs
+    mov [user_return_esp], esp
+    mov eax, cr3
+    mov [user_return_cr3], eax
+    cli
+    mov edx, [esp + 40]     ; entry point
+    mov ecx, [esp + 44]     ; user stack
+    mov esi, [esp + 48]     ; probe mode
+    mov edi, [esp + 52]     ; supervisor stack probe
+    mov ebp, [esp + 56]     ; private directory
+    mov ebx, [esp + 60]     ; physical image alias
+    mov eax, ebp
+    mov cr3, eax
 
     mov ax, 0x23            ; user data selector (DPL 3)
     mov ds, ax
@@ -74,12 +112,36 @@ enter_user_mode:
     mov gs, ax
 
     push dword 0x23         ; SS
-    push dword 0x700000     ; ESP (identity-mapped user stack)
-    pushfd
-    or dword [esp], 0x200   ; set IF
+    push ecx               ; owned identity-mapped user stack
+    push dword 0x202        ; IF set; IOPL/NT/VM/DF clear
     push dword 0x1B         ; CS (user code, DPL 3)
     push edx                ; EIP
     iret
+
+; Called only after Rust exception/syscall handlers have returned normally.
+; Discard the finished user interrupt stack, never unwinding Rust frames.
+global user_mode_return
+user_mode_return:
+    cli
+    cld
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov eax, [user_return_cr3]
+    mov cr3, eax
+    mov esp, [user_return_esp]
+    pop gs
+    pop fs
+    pop es
+    pop ds
+    popfd
+    pop edi
+    pop esi
+    pop ebx
+    pop ebp
+    ret
 
 section .bss
 align 16

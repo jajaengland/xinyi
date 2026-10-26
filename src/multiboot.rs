@@ -32,11 +32,7 @@ pub struct Region {
 }
 
 unsafe fn read_u32(base: u32, offset: u32) -> u32 {
-    core::ptr::read_unaligned(
-        (base as *const u8)
-            .add(offset as usize)
-            .cast::<u32>(),
-    )
+    core::ptr::read_unaligned((base as *const u8).add(offset as usize).cast::<u32>())
 }
 
 unsafe fn read_u32_at(base: *const u8, offset: usize) -> u32 {
@@ -84,6 +80,18 @@ pub fn info_address() -> Option<u32> {
     }
 }
 
+pub fn disk_target() -> Option<crate::disk_target::Target> {
+    // Our BIOS loader places the validated header extension after the standard info.
+    if INFO_ADDR.load(Ordering::Relaxed) != 0x4000 {
+        return None;
+    }
+    let mut record = [0; 20];
+    unsafe {
+        core::ptr::copy_nonoverlapping(0x4080 as *const u8, record.as_mut_ptr(), 20);
+    }
+    crate::disk_target::Target::decode(&record)
+}
+
 /// Return the physical address and byte length of the multiboot memory map.
 pub fn mmap_range() -> Option<(u32, u32)> {
     let info_addr = INFO_ADDR.load(Ordering::Relaxed);
@@ -112,8 +120,7 @@ pub fn for_each_region(mut visit: impl FnMut(Region)) {
         return;
     }
 
-    let length =
-        unsafe { read_u32(info_addr, INFO_MMAP_LENGTH_OFFSET) } as usize;
+    let length = unsafe { read_u32(info_addr, INFO_MMAP_LENGTH_OFFSET) } as usize;
     let address = unsafe { read_u32(info_addr, INFO_MMAP_ADDR_OFFSET) };
 
     if address == 0 || length < MMAP_ENTRY_MIN_SIZE || length > MMAP_MAX_BYTES {
@@ -128,9 +135,7 @@ pub fn for_each_region(mut visit: impl FnMut(Region)) {
 
         // The size field excludes itself, so each entry occupies size + 4
         // bytes. Reject corrupt or truncated entries.
-        if size < MMAP_ENTRY_MIN_SIZE
-            || size > length - offset - core::mem::size_of::<u32>()
-        {
+        if size < MMAP_ENTRY_MIN_SIZE || size > length - offset - core::mem::size_of::<u32>() {
             break;
         }
 
