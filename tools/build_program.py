@@ -76,8 +76,6 @@ def main():
     with args.output.open("wb" if args.force else "xb") as stream:
         stream.write(image)
     print(f"Built {args.output.resolve()}: {len(image)} bytes")
-    if len(image) > 1024:
-        print("This exceeds the current FAT16 file limit; use a smaller program until larger files are supported.")
 
 
 if __name__ == "__main__":

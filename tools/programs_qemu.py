@@ -61,7 +61,7 @@ def main():
                                 str(ROOT / f"programs/{source}/main.rs"), "--output", str(binary)], check=True)
                 files[name] = binary.read_bytes()
                 assert 0 < len(files[name]) <= 1024, (name, len(files[name]))
-            files.update({"BAD.BIN": b"\x0f\x0b", "EMPTY.BIN": b"", "BIG.BIN": bytes(1025)})
+            files.update({"BAD.BIN": b"\x0f\x0b", "EMPTY.BIN": b"", "BIG.BIN": bytes(65537)})
             image = directory / "programs.img"
             seed(image, files)
             original = hashlib.sha256(image.read_bytes()).digest()
@@ -105,8 +105,8 @@ def main():
                     command("run bad.bin", "User program faulted: vector=6 ")
                     assert free_frames() == held
                     command("run empty.bin", "Program is empty.")
-                    command("run missing.bin", "Storage: file not found")
-                    command("run big.bin", "Storage: file exceeds 1024 bytes")
+                    command("run missing.bin", "Program: file not found")
+                    command("run big.bin", "Program: program exceeds 64 KiB")
                     screen = command("run hello.bin", "User program exited with code 0.")
                     assert "Running process 7" in screen and "Hello from Rust on Xinyi!" in screen
                     command("kill 2", "Removed task record 2")

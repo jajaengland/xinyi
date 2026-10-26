@@ -10,6 +10,69 @@ static mut SELECTED: Option<crate::disk_target::Target> = None;
 static mut MOUNTED: Option<Fat16<'static>> = None;
 static mut FORMAT_PENDING: Option<FormatPlan> = None;
 static mut CWD: crate::fs_path::Path = crate::fs_path::Path::ROOT;
+#[derive(Clone,Copy)]
+struct Drive {target:crate::disk_target::Target,channel:crate::pci::IdeChannel,model:[u8;40],sectors:u32,fat:bool,apps:bool}
+static mut DRIVES:[Option<Drive>;16]=[None;16];
+static mut DISCOVERED:bool=false;
+fn discover() {
+    if unsafe {DISCOVERED} {return;}
+    let mut drives=[None;16];let mut count=0;let mut ide=false;
+    let mut probe=|target:crate::disk_target::Target,channel:crate::pci::IdeChannel| {
+        if count==16 || drives[..count].iter().flatten().any(|d:&Drive|d.channel==channel&&d.target.drive()==target.drive()) {return;}
+        let disk=AtaDisk::at(channel,target.drive());
+        if disk.init() {
+            let fs=Fat16::new(&disk).ok();
+            drives[count]=Some(Drive{target,channel,model:disk.model_name(),sectors:disk.block_count(),fat:fs.is_some(),apps:fs.is_some_and(|fs|fs.is_directory("/APPS").is_ok())});
+            count+=1;
+        }
+    };
+    crate::pci::for_each_storage(|c| {
+        if c.subclass!=1 {return;} ide=true;
+        for secondary in [false,true] {if let Some(channel)=crate::pci::ide_channel(c.interface,c.command,c.bars,secondary) {
+            for slave in [false,true] {probe(crate::disk_target::Target{bdf:(c.bus as u32)<<16|(c.slot as u32)<<8|c.function as u32,
+                id:(c.device as u32)<<16|c.vendor as u32,position:secondary as u8|(slave as u8)<<1},channel);}
+        }}
+    });
+    if !ide {for secondary in [false,true] {for slave in [false,true] {probe(crate::disk_target::Target::legacy(secondary,slave),
+        if secondary {crate::pci::IdeChannel::SECONDARY}else{crate::pci::IdeChannel::PRIMARY});}}}
+    unsafe {DRIVES=drives;DISCOVERED=true;}
+}
+pub fn list_drives() {
+    discover();let drives=unsafe {*core::ptr::addr_of!(DRIVES)};
+    println!("Available drives (use NUMBER to open):");
+    for (index,drive) in drives.iter().enumerate() {if let Some(drive)=drive {
+        println!("  {}: {} - {} MiB {}{}",index+1,core::str::from_utf8(&drive.model).unwrap_or("ATA disk").trim(),drive.sectors/2048,
+            if drive.fat {"FAT16"}else{"unformatted/unsupported"},if target().ok()==Some(drive.target) {" [selected]"}else{""});
+    }}
+    if drives[0].is_none() {println!("No supported IDE drives found.");}
+}
+pub fn use_drive(number:usize,mount_it:bool)->Result<()> {
+    discover();
+    let drive=number.checked_sub(1).and_then(|i|unsafe {(*core::ptr::addr_of!(DRIVES)).get(i).copied().flatten()}).ok_or(Error::NotFound)?;
+    // Verify the new disk/filesystem before detaching the current one.
+    let candidate=AtaDisk::at(drive.channel,drive.target.drive());
+    if !candidate.init() {return Err(Error::Io);}
+    if mount_it {Fat16::new(&candidate)?;}
+    unmount()?;
+    unsafe {SELECTED=Some(drive.target);}
+    DISK.adopt(&candidate);
+    if mount_it {mount()?;println!("Drive {} ready. Files are persistent.",number);}
+    else {println!("Selected drive {}.",number);}
+    Ok(())
+}
+pub fn startup_mount() {
+    if crate::multiboot::disk_target().is_some() {
+        match mount() {Ok(_)=>{println!("System drive ready. Type apps or edit FILE.");return;},Err(_)=>{}}
+        // Never silently substitute another drive for a remembered installed target.
+        println!("System drive unavailable. Use disks, then use NUMBER.");return;
+    }
+    discover();let drives=unsafe {*core::ptr::addr_of!(DRIVES)};
+    let app_drives=drives.iter().flatten().filter(|d|d.apps).count();
+    let fat_drives=drives.iter().flatten().filter(|d|d.fat).count();
+    let choice=drives.iter().position(|d|d.is_some_and(|d|if app_drives==1 {d.apps}else{app_drives==0&&fat_drives==1&&d.fat}));
+    if let Some(index)=choice {if use_drive(index+1,true).is_ok() {return;}}
+    println!("Use disks, then use NUMBER to open a drive. No drive was formatted.");
+}
 fn reset_directory() {
     unsafe {
         *core::ptr::addr_of_mut!(CWD) = crate::fs_path::Path::ROOT;
@@ -197,8 +260,13 @@ pub fn mount() -> Result<u32> {
     init_disk()?;
     let fs = Fat16::new(&DISK)?;
     let start = fs.start_sector();
+    let has_apps=fs.is_directory("/APPS").is_ok();
+    let selected=target().ok();
     unsafe {
         *core::ptr::addr_of_mut!(MOUNTED) = Some(fs);
+        for drive in (&mut *core::ptr::addr_of_mut!(DRIVES)).iter_mut().flatten() {
+            if Some(drive.target)==selected {drive.fat=true;drive.apps=has_apps;}
+        }
     }
     reset_directory();
     Ok(start)
@@ -262,6 +330,19 @@ pub fn read(name: &str, output: &mut [u8; MAX_FILE_SIZE]) -> Result<usize> {
     let result = match unsafe { &*core::ptr::addr_of!(MOUNTED) } {
         Some(fs) => fs.read(name, output),
         None => vfs::read(name, output),
+    };
+    finish(result)
+}
+pub fn read_program(name: &str, output: &mut [u8]) -> Result<usize> {
+    let mut buffer = [0; crate::fs_path::MAX_PATH];
+    let length = absolute(name, &mut buffer)?;
+    let name = core::str::from_utf8(&buffer[..length]).unwrap();
+    let result = match unsafe { &*core::ptr::addr_of!(MOUNTED) } {
+        Some(fs) => fs.read_program(name, output),
+        None => match output.get_mut(..MAX_FILE_SIZE) {
+            Some(bytes) => vfs::read(name, bytes.try_into().unwrap()),
+            None => Err(Error::TooLarge),
+        },
     };
     finish(result)
 }

@@ -23,6 +23,56 @@ use blockdev::{BlockDevice, RamDisk};
 use fat16::{format_disk, Error, Fat16, FormatPlan};
 use std::cell::{Cell, RefCell};
 
+#[test]
+fn installer_program_writes_replace_large_images_without_leaking_clusters() {
+    let disk=Disk::new(false);let fs=Fat16::new(&disk).unwrap();
+    fs.mkdir("apps").unwrap();fs.create("apps/edit.bin").unwrap();
+    let input=vec![0x5a;65536];fs.write_program("apps/edit.bin",&input).unwrap();
+    let mut output=vec![0;65536];assert_eq!(fs.read_program("apps/edit.bin",&mut output),Ok(65536));assert_eq!(input,output);
+    fs.write_program("apps/edit.bin",&[0x33;5000]).unwrap();
+    assert_eq!(fs.read_program("apps/edit.bin",&mut output),Ok(5000));assert!(output[..5000].iter().all(|&b|b==0x33));
+    fs.delete("apps/edit.bin").unwrap();fs.rmdir("apps").unwrap();
+    assert!(disk.bytes.borrow()[512+4..33*512].iter().all(|&b|b==0));
+}
+
+#[test]
+fn program_reader_accepts_64k_fragmented_chains_and_rejects_corruption_before_copy() {
+    let disk = Disk::new(false);
+    let fs = Fat16::new(&disk).unwrap();
+    fs.create("large.bin").unwrap();
+    let root = 65 * 512;
+    {
+        let mut bytes=disk.bytes.borrow_mut();
+        bytes[root+26..root+28].copy_from_slice(&2u16.to_le_bytes());
+        bytes[root+28..root+32].copy_from_slice(&65536u32.to_le_bytes());
+    }
+    for i in 0..128 {
+        let cluster=2+i*2;
+        disk.set_fat(cluster, if i==127 {0xffff} else {(cluster+2) as u16});
+        disk.bytes.borrow_mut()[(67+cluster-2)*512..(68+cluster-2)*512].fill(i as u8);
+    }
+    let mut output=vec![0;65536];
+    assert_eq!(fs.read_program("large.bin",&mut output),Ok(65536));
+    for i in 0..128 {assert!(output[i*512..(i+1)*512].iter().all(|&v|v==i as u8));}
+    assert_eq!(fs.read("large.bin",&mut [0;1024]),Err(Error::TooLarge));
+    let original=disk.bytes.borrow().clone();
+    output.fill(0xaa);
+    disk.set_fat(256,2); // A cycle after the final required cluster is invalid.
+    assert_eq!(fs.read_program("large.bin",&mut output),Err(Error::Corrupt));
+    assert!(output.iter().all(|&v|v==0xaa));
+    *disk.bytes.borrow_mut()=original.clone();
+    disk.bytes.borrow_mut()[root+28..root+32].copy_from_slice(&65537u32.to_le_bytes());
+    assert_eq!(fs.read_program("large.bin",&mut output),Err(Error::ProgramTooLarge));
+    assert!(output.iter().all(|&v|v==0xaa));
+    *disk.bytes.borrow_mut()=original;
+    fs.delete("large.bin").unwrap();
+    for i in 0..128 {
+        let at=512+(2+i*2)*2;
+        assert_eq!(&disk.bytes.borrow()[at..at+2], &[0,0]);
+        assert_eq!(&disk.bytes.borrow()[at+32*512..at+32*512+2], &[0,0]);
+    }
+}
+
 struct Disk {
     bytes: RefCell<Vec<u8>>,
     fail_after: Cell<Option<usize>>,

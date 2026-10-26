@@ -13,6 +13,11 @@ mod rtc;
 mod task;
 mod usermode;
 mod user_buffer;
+mod terminal;
+mod speaker;
+mod files_api;
+mod canvas;
+mod graphics;
 mod vfs;
 mod loader;
 mod blockdev;
@@ -46,6 +51,7 @@ fn print_prompt() {
 // Entries are (command name, usage text, description).
 const COMMANDS: &[(&str, &str, &str)] = &[
     ("help", "help", "Show available commands"),
+    ("graphics", "graphics", "Test framebuffer graphics; Escape returns to text"),
     ("about", "about", "About Xinyi"),
     ("clear", "clear", "Clear the screen"),
     ("echo", "echo TEXT", "Print text"),
@@ -63,7 +69,11 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("frames", "frames", "Show and test physical frame allocation"),
     ("usermode", "usermode [probe]", "Test protected ring 3 execution"),
     ("ps", "ps", "Show running processes"),
-    ("run", "run [demo|FILE]", "Run a user program and wait for its exit"),
+    ("apps", "apps", "List programs installed in /APPS"),
+    ("edit", "edit [FILE]", "Open a text file in the editor"),
+    ("disks", "disks", "List available numbered drives"),
+    ("use", "use NUMBER", "Select a numbered drive and mount its filesystem"),
+    ("run", "run [NAME|FILE]", "Run a bundled application or program file"),
     ("spawn", "spawn [demo]", "Create a paused demo task record (diagnostic)"),
     ("kill", "kill PID", "Remove a task record and free its memory"),
     ("ls", "ls [PATH]", "List files and folders"),
@@ -79,7 +89,7 @@ const COMMANDS: &[(&str, &str, &str)] = &[
         "Replace or clear file contents (up to 1024 bytes)",
     ),
     ("cat", "cat FILE", "Display file contents"),
-    ("mount", "mount", "Mount FAT16 on the selected IDE disk"),
+    ("mount", "mount [NUMBER]", "Open a drive or mount the selected filesystem"),
     ("unmount", "unmount", "Return to the in-memory filesystem"),
     ("format", "format", "Preview destructive primary-disk FAT16 format"),
     (
@@ -88,7 +98,7 @@ const COMMANDS: &[(&str, &str, &str)] = &[
         "Trigger the CPU breakpoint exception",
     ),
     ("disk", "disk [scan|select]", "Test, scan, or explicitly select an IDE disk"),
-    ("install", "install", "Preview bootable selected-disk installation"),
+    ("install", "install [NUMBER]", "Preview installation and copying /APPS to a drive"),
     ("reboot", "reboot", "Reboot the machine"),
 ];
 
@@ -108,6 +118,34 @@ macro_rules! println {
         $crate::vga::_print(core::format_args!($($arg)*));
         $crate::vga::_print(core::format_args!("\n"));
     }};
+}
+
+fn launch_program(name:&str,arguments:&str) {
+    if arguments.len()>128 {println!("Program arguments exceed 128 bytes.");return;}
+    let Some(staging)=loader::Frames::new(loader::MAX_BINARY_BYTES/4096) else {println!("Out of memory");return;};
+    let data=unsafe {core::slice::from_raw_parts_mut(staging.base() as *mut u8,loader::MAX_BINARY_BYTES)};
+    let explicit=name.contains('/')||name.contains('\\');
+    let mut path=[0u8;32];
+    let result=if explicit {diskfs::read_program(name,data)} else {
+        match diskfs::read_program(name,data) {
+            Err(fat16::Error::NotFound)=>{
+                let extension=if name.contains('.') {""}else{".bin"};
+                let length=6+name.len()+extension.len();
+                if length>path.len() {println!("Invalid program name.");return;}
+                path[..6].copy_from_slice(b"/APPS/");path[6..6+name.len()].copy_from_slice(name.as_bytes());
+                path[6+name.len()..length].copy_from_slice(extension.as_bytes());
+                diskfs::read_program(core::str::from_utf8(&path[..length]).unwrap(),data)
+            }
+            result=>result,
+        }
+    };
+    let size=match result {Ok(0)=>{println!("Program is empty.");return;},Ok(size)=>size,
+        Err(error)=>{println!("Program: {}",error.message());return;}};
+    let Some(mut program)=loader::load_binary(&data[..size]) else {println!("Out of memory");return;};
+    drop(staging);
+    program.arguments[..arguments.len()].copy_from_slice(arguments.as_bytes());program.argument_length=arguments.len();
+    if let Some(pid)=task::create_task(program) {println!("Running process {}...",pid);task::execute(pid);}
+    else {println!("Failed to create task record");}
 }
 
 // Position the cursor at a character index within the input line.
@@ -384,22 +422,48 @@ fn run_command(input: &str) {
             println!("Total tasks: {}", task::task_count());
         }
 
+        "graphics"=>graphics::demo(),
+        "apps" => {
+            if let Err(error) = diskfs::list("/APPS", |name,size,directory| {
+                if !directory {
+                    let mut text=[0;12]; let length=fat16::display_name(name,&mut text);
+                    println!("  {} ({} bytes)",core::str::from_utf8(&text[..length]).unwrap_or("?"),size);
+                }
+            }) { println!("Applications: {}. Use disks and use NUMBER to choose a drive.",error.message()); }
+        }
+        "edit" => launch_program("edit", argument),
+        "disks" => diskfs::list_drives(),
+        "use" => match argument.parse::<usize>() {
+            Ok(number) => if let Err(error)=diskfs::use_drive(number,true) {println!("Drive: {}",error.message());},
+            Err(_) => println!("Usage: use NUMBER (see disks)"),
+        },
+
         "run" | "spawn" => {
+            if command == "run" && !argument.is_empty() && argument != "demo" {
+                let (name,args)=argument.split_once(char::is_whitespace).unwrap_or((argument,""));
+                launch_program(name,args.trim());
+                return;
+            }
             if command == "spawn" && !argument.is_empty() && argument != "demo" {
                 println!("Only the built-in demo task record is supported.");
                 return;
             }
-            let mut file = [0; fat16::MAX_FILE_SIZE];
-            let bytes = if argument.is_empty() || argument == "demo" {
-                loader::DEMO_BINARY
+            let program = if argument.is_empty() || argument == "demo" {
+                loader::load_binary(loader::DEMO_BINARY)
             } else {
-                match diskfs::read(argument, &mut file) {
+                // The staging buffer lives in owned frames, not the 16 KiB
+                // kernel stack. Drop it before creating/running the task.
+                let Some(staging) = loader::Frames::new(loader::MAX_BINARY_BYTES / 4096) else {
+                    println!("Out of memory"); return;
+                };
+                let file = unsafe { core::slice::from_raw_parts_mut(staging.base() as *mut u8, loader::MAX_BINARY_BYTES) };
+                match diskfs::read_program(argument, file) {
                     Ok(0) => { println!("Program is empty."); return; }
-                    Ok(size) => &file[..size],
+                    Ok(size) => loader::load_binary(&file[..size]),
                     Err(error) => { println!("Storage: {}", error.message()); return; }
                 }
             };
-            if let Some(program) = loader::load_binary(bytes) {
+            if let Some(program) = program {
                 if let Some(pid) = task::create_task(program) {
                     if command == "run" {
                         println!("Running process {}...", pid);
@@ -527,6 +591,10 @@ fn run_command(input: &str) {
                 println!("Usage: write FILE [TEXT] (create it with touch first)");
             }
         }
+        "mount" if !argument.is_empty()=>match argument.parse::<usize>() {
+            Ok(number)=>if let Err(error)=diskfs::use_drive(number,true) {println!("Mount failed: {}",error.message());},
+            Err(_)=>println!("Usage: mount [NUMBER]"),
+        },
         "mount" => match diskfs::mount() {
             Ok(start) => println!("Mounted FAT16 at sector {}. File commands now use disk.", start),
             Err(error) => println!("Mount failed: {}", error.message()),
@@ -536,6 +604,7 @@ fn run_command(input: &str) {
             Err(error) => println!("Unmount failed: {}", error.message()),
         },
         "disk" => match argument {
+            "list" => diskfs::list_drives(),
             "" => diskfs::test(),
             "scan" => diskfs::scan(),
             _ if argument.starts_with("select ") => diskfs::select_command(&argument[7..]),
@@ -566,13 +635,8 @@ fn run_command(input: &str) {
         },
 
         "install" => {
-            if diskfs::is_mounted() {
-                installer::cancel();
-                println!("Unmount the filesystem before installing Xinyi.");
-                return;
-            }
             match argument {
-                "" => match installer::prepare() {
+                "" => match installer::prepare_friendly(None) {
                     Ok(plan) => {
                         println!("Target: selected IDE disk, {} MiB.", plan.disk_sectors/2048);
                         diskfs::report_target();
@@ -595,11 +659,20 @@ fn run_command(input: &str) {
                 "confirm" => match installer::confirm() {
                     Ok(()) => {
                         println!("Installation complete: bootloader, kernel, and FAT16 data are ready.");
-                        println!("Boot the selected IDE disk in legacy BIOS mode. Run mount for files.");
+                        if diskfs::mount().is_ok() {println!("Installed drive ready. Type apps or edit FILE.");}
                     }
                     Err(error) => println!("Install failed: {}",error.message()),
                 },
-                _ => println!("Usage: install, then install confirm. Unmount first."),
+                _ => match argument.parse::<usize>() {
+                    Ok(number)=>match installer::prepare_friendly(Some(number)) {
+                        Ok(plan)=>{
+                            println!("Install on drive {}: {} MiB. {}",number,plan.disk_sectors/2048,
+                                if plan.preserve_data {"Existing FAT16 files are preserved; matching apps replaced."}else{"WARNING: all partitions and files on this drive will be replaced."});
+                            println!("To install, enter: install confirm");
+                        }
+                        Err(error)=>println!("Install refused: {}",error.message()),
+                    },Err(_)=>println!("Usage: install [NUMBER], then install confirm."),
+                },
             }
         }
 
@@ -707,6 +780,7 @@ pub extern "C" fn rust_main(magic: u32, info_addr: u32) -> ! {
     println!("Welcome to Xinyi.");
     println!("32-bit Rust kernel");
     println!("Type 'help' to see commands.");
+    diskfs::startup_mount();
     println!();
 
     let mut input = [0u8; INPUT_LIMIT];
@@ -728,6 +802,7 @@ pub extern "C" fn rust_main(magic: u32, info_addr: u32) -> ! {
     loop {
         if let Some(key) = keyboard::poll_key() {
             match key {
+                keyboard::Key::Special(_) => {},
                 keyboard::Key::ArrowLeft => {
                     if cursor_position > 0 {
                         cursor_position -= 1;
@@ -978,6 +1053,7 @@ pub extern "C" fn rust_main(magic: u32, info_addr: u32) -> ! {
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
+    graphics::restore();
     println!();
     println!("Xinyi: kernel panic!");
     println!("{}", info.message());

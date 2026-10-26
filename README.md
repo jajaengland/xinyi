@@ -30,10 +30,17 @@ Automated development tests use QEMU with disposable image files. The user handl
 - Ring 3 user-mode entry with a TSS-backed kernel stack
 - `int 0x80` system-call interface
 - Synchronous protected user-program execution, text output and exit/fault recovery
+- Foreground program keyboard events, cursor/colour control, positioned text drawing and interrupt-based waits
+- Coloured text-cell rows, cursor hiding, FAT16 programs up to 64 KiB and a playable text-mode Tetris demo
+- Snake with growth, pause/restart, wall/body collisions and a PC-speaker beep for each eaten dot
+- Programs are ordinary replaceable FAT16 files in `/APPS`; `apps` lists them and `run NAME` searches that directory
+- Full-screen ASCII text editor with open/save/save-as, scrolling, one-level undo/redo and unsaved-change prompts
+- Automatic system-drive mounting plus numbered `disks` / `use NUMBER` / `install NUMBER` commands
 - File listing, creation, reading, and replacement in RAM or a mounted FAT16 volume
 - FAT16 nested folders and file persistence with ASCII 8.3 names and files up to 1024 bytes
 - Primary IDE PIO disk access and a BIOS bootable installer with a separate FAT16 data partition
 - Reboot command
+- An 800x600, 32-bit QEMU graphics test with clipped lines, filled/outlined triangles, bitmap text, arrow-key movement and restoration of the text console
 
 ## Requirements
 
@@ -46,6 +53,7 @@ Required tools include:
 - NASM assembler
 - QEMU system emulator for x86
 - Cargo and the Rust build tools
+- Python 3 for building and packaging application files
 
 The project uses a custom target specification: `i686-unknown-none.json`.
 
@@ -55,6 +63,22 @@ Run this from the repository root:
 
 `cargo +nightly build -Z build-std=core`
 
+Both debug and release builds compile the sources listed in `programs/apps.txt` into **separate application files**, not kernel resources. The release packager places `HELLO.BIN`, `EDIT.BIN`, `TETRIS.BIN` and `SNAKE.BIN` in the FAT16 `/APPS` directory. They can be deleted or replaced without rebuilding the kernel. `run NAME` searches the current directory and then `/APPS`; explicit paths load the specified file.
+
+The installed system drive mounts automatically. Use `apps`, `run snake`, `run tetris` or `edit note.txt` directly. On an uninstalled boot, a unique application volume (or sole FAT16 volume) is opened automatically. With multiple candidates, use `disks` and `use NUMBER`; no PCI-address typing is necessary. Switching validates the destination before detaching the current drive. Unsupported/blank drives remain available as installation targets but are not formatted automatically.
+
+`install NUMBER` stages application files from the currently mounted `/APPS`, previews the destination, and copies them after `install confirm`. Existing compatible user files are preserved; matching destination app files are replaced. Cancellation releases staging memory without disk writes. Launching a bare kernel without an app filesystem is a development-only, kernel-only installation path.
+
+The editor supports 1 KiB ASCII files, newline insertion, Backspace/Delete, arrows, Home/End, Page Up/Down, Ctrl+Home/End, scrolling, Ctrl+S Save, Ctrl+Shift+S Save As, Ctrl+O Open, Ctrl+N New, one-level Ctrl+Z/Y undo/redo and Ctrl+Q/Escape Quit. Unsaved changes and Save As overwrites require a choice; failed saves retain the document. CRLF is normalized to LF and tabs expand to four spaces when loading.
+
+To build a distributable bootable image and verify its applications in QEMU:
+
+```powershell
+python tools/build_release.py
+```
+
+This creates a fresh directory under `target/releases/` containing `xinyi.img`, the release kernel, a Windows QEMU launcher with speaker audio, usage notes, the application manifest and SHA-256 checksums. It tests filesystem app loading, persistent editor saves, native BIOS boot and copying apps onto another drive before producing the image. `target/latest-release.json` records the result. Existing output directories/images are refused. This creates local release artifacts; it does not publish a GitHub release.
+
 ## Run in QEMU
 
 After a successful build, run:
@@ -62,6 +86,10 @@ After a successful build, run:
 `qemu-system-i386 -kernel target/i686-unknown-none/debug/rust-os`
 
 ## Debugging
+
+Type `graphics` to try the framebuffer test on QEMU's standard VGA device (`-vga std`). Arrow keys move the box and Escape returns to the shell. This is an initial kernel/display diagnostic, not a desktop or a graphics API for applications. The current backend deliberately refuses other display devices; dc7800/other hardware needs a separate VBE or native graphics path. The editor and games remain ordinary files in `/APPS`.
+
+The renderer caches the static scene in an owned RAM back buffer. Box movement updates only its old/new footprints instead of redrawing and copying the whole screen. Held arrows use a 50 Hz timer-paced movement path, with immediate taps and release tracking, while idle time still uses HLT. Normal exit restores the VGA text registers, palette, font and memory, then frees the buffers; fatal diagnostics also attempt text restoration. Low-memory and unsupported-display paths leave the shell usable. `python tools/graphics_qemu.py` checks both kernel profiles and saves graphics screenshots under `target/smoke/`.
 
 Fault and panic details are mirrored to QEMU's debug console at I/O port `0xE9`. To capture them without opening a display:
 
@@ -93,7 +121,7 @@ If the build cannot find NASM on Windows, add MSYS2's tools to `PATH` for the se
 | `frames` | Show physical frame allocation statistics and run a self-test |
 | `usermode [probe]` | Run a protected user probe, report its exit/fault, and return to the shell |
 | `ps` | Show current task ID and total task records |
-| `run [demo\|FILE]` | Execute the built-in demo or a flat program file and wait for completion |
+| `run [NAME\|FILE]` | Search the current directory and /APPS for a program |
 | `spawn [demo]` | Create a paused demo task record for diagnostics |
 | `kill PID` | Remove a task record and release its program and stack frames |
 | `ls [PATH]` | List files and folders in the current or specified directory |
@@ -105,7 +133,11 @@ If the build cannot find NASM on Windows, add MSYS2's tools to `PATH` for the se
 | `delete FILE` | Delete a file from the active filesystem |
 | `write FILE [TEXT]` | Replace an existing file's contents; omit TEXT to clear it |
 | `cat FILE` | Display file contents |
-| `mount` | Mount a FAT16 volume on the selected IDE disk |
+| `disks` | List supported drives by number |
+| `use NUMBER` | Select a drive and open its FAT16 filesystem |
+| `edit [FILE]` | Open/create a text file in /APPS/EDIT.BIN |
+| `apps` | List the files in /APPS |
+| `mount [NUMBER]` | Open a numbered drive or mount the selected disk |
 | `unmount` | Flush/detach the volume and return to RAM files |
 | `format` | Preview a destructive FAT16 quick format of the selected IDE disk |
 | `format confirm` | Execute the immediately preceding format preview |
@@ -249,9 +281,9 @@ All file commands, including `run`, accept relative or absolute paths. `/` is th
 
 `folders_qemu.py` checks host-created folders, nested file/program paths, RAM navigation, cold-boot persistence on both volume layouts, mirrored FATs and cluster reclamation with an independent recursive reader. Corrupt-folder fallback and OEM-name display are also checked. Transcripts are in `target/smoke/folders-transcript.txt` and, for `--corrupt-only`, `target/smoke/folders-errors-transcript.txt`.
 
-`delete FILE` removes a file from the active backend, using the same case-insensitive ASCII 8.3 names. FAT16 deletion refuses read-only files, directories, files over the current 1024-byte limit, and invalid chains. It flushes the deleted directory entry before releasing clusters in each FAT copy. The slot and clusters can then be reused; file data is not securely erased. RAM deletion clears and releases its file slot.
+`delete FILE` removes a file from the active backend, using the same case-insensitive ASCII 8.3 names. FAT16 deletion refuses read-only files, directories, files over the 64 KiB program limit, and invalid chains. It flushes the deleted directory entry before releasing clusters in each FAT copy. The slot and clusters can then be reused; file data is not securely erased. RAM deletion clears and releases its file slot.
 
-The driver accepts 512-byte-sector FAT16 whole-volume images or the first supported primary MBR FAT16 partition. Writes update FAT mirrors and flush the device cache. I/O or chain-corruption errors detach the disk filesystem and announce the return to RAM. There is no journal or power-loss recovery: an interrupted metadata write can leave leaked clusters or inconsistent FAT copies. A failed delete can leave a file removed with some space unreclaimed. Long filenames, append, and files larger than 1 KiB are future work. `mkfat16.py --partitioned PATH` creates the MBR layout; neither layout is an OS installer or bootable kernel image.
+The driver accepts 512-byte-sector FAT16 whole-volume images or the first supported primary MBR FAT16 partition. Writes update FAT mirrors and flush the device cache. I/O or chain-corruption errors detach the disk filesystem and announce the return to RAM. There is no journal or power-loss recovery: an interrupted metadata write can leave leaked clusters or inconsistent FAT copies. A failed delete can leave a file removed with some space unreclaimed. Long filenames, append and general read/write access to files larger than 1 KiB are future work; the separate program reader and deletion support files up to 64 KiB. `mkfat16.py --partitioned PATH` creates the MBR layout; neither layout is an OS installer or bootable kernel image.
 
 To initialize or replace the selected IDE disk's filesystem from inside Xinyi:
 

@@ -30,6 +30,31 @@ Items are grouped by their current status. A planned feature should only be mark
 
 ## Near-Term Priorities
 
+### Filesystem Applications, Editor and Drive Use
+
+- [x] Compile hello, EDIT, Tetris and Snake as separate files from `programs/apps.txt`; package them in FAT16 `/APPS`, with no kernel app registry or fallback.
+- [x] Resolve `run NAME` through the current directory and `/APPS`; list actual files with `apps`.
+- [x] Add bounded file read/save calls and argument passing with user pointer validation.
+- [x] Implement a real 1 KiB ASCII editor: open/new, insert/delete/newlines, scrolling/navigation, one-level undo/redo, save/save-as, overwrite and unsaved-change choices, and document retention on errors.
+- [x] Automatically open the installed drive or an unambiguous FAT16/application volume. Add numbered drive listing/selection and mounted source-to-destination installation with application-file copying.
+- [x] Test editor persistence across cold boots, dynamic app deletion, invalid syscall buffers, numbered drive refusal and installation/cancellation; release packaging uses this filesystem workflow.
+- [ ] Extend text files and the editor beyond the current 1024-byte cap when the storage/user-memory APIs grow; add Unicode and richer editing features later.
+
+### Text Editor Direction
+
+The DOS-style editor foundation is implemented within the current 1 KiB ASCII file limit; graphics now begins with a separate QEMU display diagnostic.
+
+- [x] Expose foreground keyboard press events with navigation keys and Shift/Ctrl/Alt/Caps modifiers.
+- [x] Provide clear/colour/cursor/query calls and validated positioned row drawing without scrolling.
+- [x] Provide a wrapping tick counter and PIT-backed sleeping/input waits which halt the CPU.
+- [x] Build a protected typing demo (`programs/terminal/main.rs`); this changes screen cells only and does not save files.
+- [x] Add coloured cell-row drawing and cursor hiding/restoration for full-screen applications.
+- [x] Load FAT16 programs up to 64 KiB through a bounded validated chain and owned staging frames; delete larger program files safely. General file reads/writes and RAM files remain limited to 1 KiB.
+- [x] Build a protected text-mode Tetris demo with seven-piece bags, rotation/kicks, ghost/next piece, scoring, line clears, increasing speed, pause, restart and clean exit. Six host game tests and debug/release QEMU gameplay/loading checks cover its foundations.
+- [x] Add program filesystem calls and a way to pass a filename to the editor.
+- [ ] Support writable program data/edit buffers and lift the 1024-byte program/file limit when needed.
+- [x] Build the editor: insert/delete, line navigation, scrolling, status bar, save and quit with unsaved-change handling.
+
 ### Initial Verified Baseline — 25 October 2026 (Before Storage Work)
 
 - `cargo +nightly build -Z build-std=core` succeeds on the installed Windows nightly toolchain with NASM on `PATH`; it reports 43 warnings.
@@ -169,14 +194,14 @@ A longer-term goal is to run applications with less privilege than the kernel.
   - Verified `getpid` from ring 3 in the `usermode` command; the handler runs on the TSS kernel stack and returns to user mode.
 
 - [ ] Define and integrate a safe executable format and loading strategy.
-  - Flat images linked at `0x40000000` now execute in protected mappings. The host builder extracts code/read-only data from a compiled ELF and rejects writable globals. ELF parsing in the kernel and a writable-data layout remain unfinished; disk programs are still limited to 1024 bytes.
+  - Flat images linked at `0x40000000` now execute in protected mappings. The host builder extracts code/read-only data from a compiled ELF and rejects writable globals. ELF parsing in the kernel and a writable-data layout remain unfinished; FAT16 programs may now be up to 64 KiB; ordinary file reads/writes and RAM files remain limited to 1024 bytes.
 - [x] Implement basic synchronous process creation and termination.
   - `run` creates and consumes a task record, executing its owned image and reclaiming it after exit/fault. `getpid` returns that process's ID. `spawn`/`kill` manage paused diagnostic records; concurrent processes are not yet scheduled.
   - `ps` reports the current ID and total records, not a full process list.
 - [ ] Implement and verify scheduling and multitasking.
   - The context structure and round-robin state-selection prototype exist. `schedule()` does not switch CPU state and is never called by the timer IRQ.
 - [x] Launch simple flat applications from the shell.
-  - `run demo` prints hello world; `run FILE` reads an image from the active RAM/FAT16 backend and waits for exit/fault. `programs/hello/main.rs` and the SDK guide show the host build workflow. Arguments, input and filesystem syscalls remain future work.
+  - `run demo` prints hello world; `run FILE` reads an image from the active RAM/FAT16 backend and waits for exit/fault. `programs/hello/main.rs` and the SDK guide show the host build workflow. Bounded filename arguments and file read/save calls are implemented; richer file APIs remain future work.
 
 ## Filesystem and Storage
 
@@ -206,10 +231,14 @@ FAT16 remains the current filesystem. FAT32 and volumes larger than the current 
 
 The long-term goal includes a graphical interface inspired by classic desktop systems.
 
-- [ ] Research graphics modes and framebuffer access.
-- [ ] Design a graphics abstraction separate from VGA text output.
-- [ ] Implement basic pixel and drawing operations.
-- [ ] Add bitmap font rendering.
+- [x] Establish a first QEMU-standard-VGA framebuffer backend at 800x600x32, separate from the text console.
+- [x] Add a checked-stride RAM canvas with clipped pixels, rectangles and lines, plus filled/outlined triangles.
+- [x] Render bitmap text using the saved BIOS 8x16 font.
+- [x] Add an interactive graphics diagnostic with arrow-key movement, Escape recovery and owned-buffer reclamation; debug/release QEMU also verify fatal diagnostics and refusal paths.
+- [ ] Add hardware VBE/native graphics support; the current backend refuses the dc7800 and other unimplemented adapters.
+- [ ] Add protected user-program graphics surfaces and input APIs.
+- [x] Cache static graphics, update only dirty box regions, and use press/release tracking with timer-paced held-arrow movement; QEMU verifies release stopping and triangle restoration.
+- [ ] Add mouse input and pointer rendering.
 - [ ] Develop a simple window or panel system.
 - [ ] Design a basic desktop and application-launching interface.
 - [ ] Preserve a text-mode or diagnostic path for debugging.
@@ -224,6 +253,9 @@ The long-term goal includes a graphical interface inspired by classic desktop sy
 - [ ] Add networking tests and diagnostics.
 
 ## Audio
+
+- [x] Add a bounded foreground PC-speaker tone call on PIT channel 2, with timer-based halted waits and speaker shutdown on return/exit/fault cleanup.
+- [x] Use it for Snake food feedback; verify gameplay and actual recorded QEMU audio in debug/release builds. QEMU manual playback uses the DirectSound backend on Windows.
 
 - [ ] Research audio hardware emulation available in QEMU.
 - [ ] Choose an initial audio device or output interface.

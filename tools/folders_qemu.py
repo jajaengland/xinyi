@@ -127,6 +127,7 @@ def main():
                             return screen
 
                         if boot == 1:
+                            command("unmount", "Unmounted.")
                             command("mkdir ram", "Created directory: ram")
                             command("cd ram")
                             command("touch ramonly", "Created: ramonly")

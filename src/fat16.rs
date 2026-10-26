@@ -1,6 +1,7 @@
 // Bounded FAT16 root-directory storage. No heap, directories, or long names.
 use crate::blockdev::BlockDevice;
 pub const MAX_FILE_SIZE: usize = 1024;
+pub const MAX_PROGRAM_SIZE: usize = 64 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
     Io,
@@ -10,6 +11,8 @@ pub enum Error {
     Exists,
     Full,
     TooLarge,
+    ProgramTooLarge,
+    OutOfMemory,
     Corrupt,
     ReadOnly,
     NotFile,
@@ -36,6 +39,8 @@ impl Error {
             Self::Exists => "file already exists",
             Self::Full => "filesystem is full",
             Self::TooLarge => "file exceeds 1024 bytes",
+            Self::ProgramTooLarge => "program exceeds 64 KiB",
+            Self::OutOfMemory => "not enough memory",
             Self::Corrupt => "invalid FAT chain or inconsistent metadata",
             Self::ReadOnly => "file is read-only",
             Self::NotFile => "path is a directory (expected a regular file)",
@@ -701,12 +706,16 @@ impl<'a> Fat16<'a> {
     }
     // Validate the complete bounded chain before reading or replacing a file.
     fn chain(&self, entry: &Entry) -> Result<([u16; 2], usize)> {
-        if entry.size() > MAX_FILE_SIZE {
-            return Err(Error::TooLarge);
+        self.bounded_chain::<2>(entry, MAX_FILE_SIZE)
+    }
+    fn bounded_chain<const N: usize>(&self, entry: &Entry, limit: usize) -> Result<([u16; N], usize)> {
+        if entry.size() > limit {
+            return Err(if limit == MAX_FILE_SIZE { Error::TooLarge } else { Error::ProgramTooLarge });
         }
         let count = (entry.size() + self.sectors_per_cluster as usize * 512 - 1)
             / (self.sectors_per_cluster as usize * 512);
-        let mut chain = [0; 2];
+        if count > N { return Err(Error::Corrupt); }
+        let mut chain = [0; N];
         let mut next = entry.cluster();
         if count == 0 {
             return if next == 0 {
@@ -735,12 +744,19 @@ impl<'a> Fat16<'a> {
         self.data_start + (cluster as u32 - 2) * self.sectors_per_cluster
     }
     pub fn read(&self, name: &str, output: &mut [u8; MAX_FILE_SIZE]) -> Result<usize> {
+        self.read_bounded(name, output, MAX_FILE_SIZE)
+    }
+    pub fn read_program(&self, name: &str, output: &mut [u8]) -> Result<usize> {
+        self.read_bounded(name, output, MAX_PROGRAM_SIZE)
+    }
+    fn read_bounded(&self, name: &str, output: &mut [u8], limit: usize) -> Result<usize> {
         let (directory, name) = self.parent(name)?;
         let entry = directory.find(&name)?;
         if entry.data[11] & 0x10 != 0 {
             return Err(Error::NotFile);
         }
-        let (chain, count) = self.chain(&entry)?;
+        let (chain, count) = self.bounded_chain::<128>(&entry, limit)?;
+        if entry.size() > output.len() { return Err(Error::TooLarge); }
         let mut copied = 0;
         for cluster in &chain[..count] {
             for sector in 0..self.sectors_per_cluster {
@@ -757,9 +773,13 @@ impl<'a> Fat16<'a> {
         Ok(copied)
     }
     pub fn write(&self, name: &str, input: &[u8]) -> Result<()> {
-        if input.len() > MAX_FILE_SIZE {
-            return Err(Error::TooLarge);
-        }
+        self.write_bounded(name,input,MAX_FILE_SIZE)
+    }
+    pub fn write_program(&self,name:&str,input:&[u8])->Result<()> {
+        self.write_bounded(name,input,MAX_PROGRAM_SIZE)
+    }
+    fn write_bounded(&self,name:&str,input:&[u8],limit:usize)->Result<()> {
+        if input.len()>limit {return Err(Error::TooLarge);}
         let (directory, name) = self.parent(name)?;
         if directory.directory_readonly {
             return Err(Error::ReadOnly);
@@ -771,10 +791,10 @@ impl<'a> Fat16<'a> {
         if entry.data[11] & 1 != 0 {
             return Err(Error::ReadOnly);
         }
-        let (old, old_count) = self.chain(&entry)?;
+        let (old, old_count) = self.bounded_chain::<128>(&entry,limit)?;
         let count = (input.len() + self.sectors_per_cluster as usize * 512 - 1)
             / (self.sectors_per_cluster as usize * 512);
-        let mut chain = [0u16; 2];
+        let mut chain = [0u16; 128];
         let mut found = 0;
         // Select free clusters without changing metadata; a full disk is a clean error.
         for cluster in 2..=(self.clusters + 1).min(0xffef) {
@@ -826,7 +846,7 @@ impl<'a> Fat16<'a> {
         if entry.data[11] & 1 != 0 {
             return Err(Error::ReadOnly);
         }
-        let (chain, count) = self.chain(&entry)?;
+        let (chain, count) = self.bounded_chain::<128>(&entry, MAX_PROGRAM_SIZE)?;
         // Persist the tombstone before releasing clusters. A failed operation
         // may leak space, but must not leave a live entry pointing to free data.
         entry.data[0] = 0xe5;

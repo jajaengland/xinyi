@@ -164,6 +164,7 @@ pub extern "C" fn xinyi_exception_handler(
     };
 
     println!();
+    if !recover {crate::graphics::restore();}
     println!("Xinyi: CPU exception!");
     println!("Exception: {}", name);
     println!("Vector: {}", vector);
@@ -255,6 +256,8 @@ pub extern "C" fn xinyi_syscall_handler(frame: &crate::syscall_frame::SyscallFra
             // sys_getpid
             crate::usermode::getpid()
         }
+        50..=56 => crate::terminal::syscall(frame.cs, syscall_num, arg1, arg2, arg3),
+        57..=59 => crate::files_api::syscall(frame.cs,syscall_num,arg1,arg2,arg3),
         _ => {
             0xFFFFFFFF
         }

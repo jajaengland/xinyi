@@ -193,6 +193,19 @@ impl Write for Writer {
 }
 
 static mut WRITER: Writer = Writer::new();
+static mut CURSOR_VISIBLE: bool = true;
+
+pub fn cursor_visible() -> bool { unsafe { CURSOR_VISIBLE } }
+pub fn set_cursor_visible(visible: bool) {
+    unsafe {
+        core::arch::asm!("out dx, al", in("dx") VGA_CONTROL, in("al") 0x0au8, options(nomem, nostack, preserves_flags));
+        let mut value: u8;
+        core::arch::asm!("in al, dx", in("dx") VGA_DATA, out("al") value, options(nomem, nostack, preserves_flags));
+        value = (value & !0x20) | if visible { 0 } else { 0x20 };
+        core::arch::asm!("out dx, al", in("dx") VGA_DATA, in("al") value, options(nomem, nostack, preserves_flags));
+        CURSOR_VISIBLE = visible;
+    }
+}
 
 pub fn clear_screen() {
     unsafe {
@@ -205,6 +218,24 @@ pub fn set_color(color: u8) {
     unsafe {
         let writer = core::ptr::addr_of_mut!(WRITER);
         (*writer).set_color(color);
+    }
+}
+
+pub fn color() -> u8 {
+    unsafe { (*core::ptr::addr_of!(WRITER)).color }
+}
+
+/// Overwrite cells without changing the cursor, interpreting controls or scrolling.
+/// The caller validates the entire span before the first cell is changed.
+pub fn draw_text(column: usize, row: usize, color: u8, bytes: &[u8]) {
+    assert!(column < WIDTH && row < HEIGHT && bytes.len() <= WIDTH - column);
+    for (index, &byte) in bytes.iter().enumerate() {
+        let offset = (row * WIDTH + column + index) * 2;
+        let character = if byte < 32 || byte == 127 { b' ' } else { byte };
+        unsafe {
+            write_volatile(VGA_BUFFER.add(offset), character);
+            write_volatile(VGA_BUFFER.add(offset + 1), color);
+        }
     }
 }
 

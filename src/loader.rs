@@ -48,6 +48,8 @@ pub struct LoadedProgram {
     pub image: Frames,
     pub stack: Frames,
     pub size: u32,
+    pub arguments: [u8; 128],
+    pub argument_length: usize,
 }
 pub fn load_binary(data: &[u8]) -> Option<LoadedProgram> {
     if data.is_empty() || data.len() > MAX_BINARY_BYTES {
@@ -62,5 +64,7 @@ pub fn load_binary(data: &[u8]) -> Option<LoadedProgram> {
         image,
         stack,
         size: data.len() as u32,
+        arguments: [0;128],
+        argument_length: 0,
     })
 }

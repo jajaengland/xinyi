@@ -34,7 +34,8 @@ def main():
                         transcript.append(guest.command("disk scan","Unmount the filesystem before scanning"))
                         guest.command("unmount","File commands now use RAM")
                     else:
-                        transcript.append(guest.command("disk","No ATA disk found"))
+                        transcript.append(guest.command("disk","Valid boot signature"))
+                        guest.command("unmount","File commands now use RAM")
                     screen = guest.command("disk scan","Scan leaves the selected target unchanged.")
                     transcript.append(f"[index={index}]\n{screen}\n")
                     assert "class=01/01" in screen
@@ -42,9 +43,9 @@ def main():
                     assert expected in screen, screen
                     assert "QEMU HARDDISK" in screen, screen
                     if index != 0:
-                        # Scanning must never redirect mount/format/install to a found disk.
-                        guest.command("mount","Mount failed: disk I/O failed")
-                        guest.command("install","Install refused: disk I/O failed")
+                        # Automatic discovery already selected the sole filesystem; scanning does not change it.
+                        guest.command("mount","Mounted FAT16 at sector 0")
+                        guest.command("unmount","File commands now use RAM")
                     position = "secondary master" if index == 2 else f"primary {'master' if index == 0 else 'slave'}"
                     selected = guest.command(f"disk select 00:01.1 {position}","Disk target selected")
                     transcript.append(selected)

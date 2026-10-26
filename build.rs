@@ -20,6 +20,19 @@ fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
+    // Nested Cargo uses a separate target directory in build_program.py, so it
+    // never waits on this kernel build's target lock. Build apps from source
+    // for every kernel build as separate files for filesystem packaging.
+    let python = env::var("PYTHON").unwrap_or_else(|_| "python".into());
+    let status = Command::new(python)
+        .arg(manifest_dir.join("tools/build_apps.py"))
+        .arg("--output-dir").arg(&out_dir)
+        .status().expect("Standard applications require Python 3 on PATH (or PYTHON)");
+    assert!(status.success(), "Application build failed");
+    for path in ["programs", "sdk", "tools/build_apps.py", "tools/build_program.py", "i686-unknown-none.json"] {
+        println!("cargo:rerun-if-changed={path}");
+    }
+
     let boot_asm = manifest_dir.join("src").join("boot.asm");
     let boot_obj = out_dir.join("boot.o");
 

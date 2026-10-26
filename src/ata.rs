@@ -296,6 +296,11 @@ impl AtaDisk {
         self.delay();
         self.wait(true, true, 200)
     }
+    pub fn model_name(&self)->[u8;40] {
+        let mut name=[0;40];
+        for i in 0..10 {name[i*4..i*4+4].copy_from_slice(&self.model[i].load(Ordering::Relaxed).to_le_bytes());}
+        name
+    }
     pub fn report(&self) {
         let channel = self.channel();
         let value = self.failure.load(Ordering::Relaxed);

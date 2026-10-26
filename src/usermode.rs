@@ -33,6 +33,8 @@ struct RunState {
     pid: u32,
     image_size: u32,
     directory: u32,
+    arguments: [u8;128],
+    argument_length: usize,
 }
 static mut RUN: RunState = RunState {
     active: false,
@@ -40,6 +42,8 @@ static mut RUN: RunState = RunState {
     pid: 0,
     image_size: 0,
     directory: 0,
+    arguments: [0;128],
+    argument_length: 0,
 };
 fn kernel_flags() -> u32 {
     let flags: u32;
@@ -120,6 +124,20 @@ pub fn write(cs: u32, fd: u32, pointer: u32, length: u32) -> u32 {
     }
     crate::vga::write_bytes(&copy[..length as usize]);
     length
+}
+
+pub fn active_image(cs: u32) -> Option<u32> {
+    let state = unsafe { &*core::ptr::addr_of!(RUN) };
+    if state.active && state.outcome.is_none() && cs & 3 == 3
+        && paging::status().page_directory == state.directory {
+        Some(state.image_size)
+    } else {
+        None
+    }
+}
+pub fn arguments() -> ([u8;128],usize) {
+    let state=unsafe {&*core::ptr::addr_of!(RUN)};
+    (state.arguments,state.argument_length)
 }
 pub fn enter(argument: &str) {
     if unsafe { (*core::ptr::addr_of!(RUN)).active } {
@@ -210,11 +228,14 @@ pub fn execute(
         gdt::USER_DATA_SELECTOR
     );
 
+    crate::terminal::begin();
     unsafe {
         (*core::ptr::addr_of_mut!(RUN)).active = true;
         (*core::ptr::addr_of_mut!(RUN)).pid = pid;
         (*core::ptr::addr_of_mut!(RUN)).image_size = program.size;
         (*core::ptr::addr_of_mut!(RUN)).directory = space.directory();
+        (*core::ptr::addr_of_mut!(RUN)).arguments = program.arguments;
+        (*core::ptr::addr_of_mut!(RUN)).argument_length = program.argument_length;
         enter_user_mode(
             paging::USER_BASE,
             paging::USER_STACK_TOP - 4,
@@ -247,6 +268,7 @@ pub fn execute(
         crate::interrupts::timer_ticks().wrapping_sub(started),
         restored_flags
     ));
+    crate::terminal::finish();
     match outcome {
         Outcome::Exit(code) => println!("User program exited with code {}.", code),
         Outcome::Fault {

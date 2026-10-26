@@ -26,6 +26,9 @@ static mut RIGHT_SHIFT_DOWN: bool = false;
 static mut CAPS_LOCK_ON: bool = false;
 static mut CAPS_LOCK_DOWN: bool = false;
 static mut EXTENDED: bool = false;
+static mut CTRL_DOWN: [bool; 2] = [false; 2];
+static mut ALT_DOWN: [bool; 2] = [false; 2];
+static mut ARROWS_DOWN: [bool;4] = [false;4]; // Up, Down, Left, Right.
 
 // Consumer-side copy of the drop counter, used to notice ring-buffer
 // overflow without adding work to normal scancode processing.
@@ -38,6 +41,7 @@ pub enum Key {
     ArrowDown,
     ArrowLeft,
     ArrowRight,
+    Special(u16),
 }
 
 unsafe fn inb(port: u16) -> u8 {
@@ -135,6 +139,9 @@ fn resynchronize_after_drop() {
             RIGHT_SHIFT_DOWN = false;
             CAPS_LOCK_DOWN = false;
             EXTENDED = false;
+            CTRL_DOWN = [false; 2];
+            ALT_DOWN = [false; 2];
+            ARROWS_DOWN = [false;4];
         }
     }
 }
@@ -154,7 +161,17 @@ pub fn poll_key() -> Option<Key> {
         let extended = EXTENDED;
         EXTENDED = false;
 
+        // Track both left and right modifiers, including their release bytes.
+        let pressed = code & 0x80 == 0;
+        match code & 0x7f {
+            0x1d => { CTRL_DOWN[extended as usize] = pressed; return None; }
+            0x38 => { ALT_DOWN[extended as usize] = pressed; return None; }
+            _ => (),
+        }
+
         if extended {
+            let arrow=match code&0x7f {0x48=>Some(0),0x50=>Some(1),0x4b=>Some(2),0x4d=>Some(3),_=>None};
+            if let Some(index)=arrow {ARROWS_DOWN[index]=pressed;}
             // Ignore extended key-release events. The embedded Shift codes
             // used by Print Screen are also ignored here; they are fake
             // modifiers and do not represent the physical Shift keys.
@@ -167,6 +184,12 @@ pub fn poll_key() -> Option<Key> {
                 0x50 => Some(Key::ArrowDown),
                 0x4B => Some(Key::ArrowLeft),
                 0x4D => Some(Key::ArrowRight),
+                0x47 => Some(Key::Special(0x104)), // Home
+                0x4f => Some(Key::Special(0x105)), // End
+                0x53 => Some(Key::Special(0x106)), // Delete
+                0x49 => Some(Key::Special(0x107)), // Page Up
+                0x51 => Some(Key::Special(0x108)), // Page Down
+                0x52 => Some(Key::Special(0x109)), // Insert
                 _ => None,
             };
         }
@@ -216,6 +239,7 @@ pub fn poll_key() -> Option<Key> {
         let caps = CAPS_LOCK_ON;
 
         let ch = match code {
+            0x01 => '\u{1b}', // Escape
             0x02 => if shift { '!' } else { '1' },
             0x03 => if shift { '@' } else { '2' },
             0x04 => if shift { '#' } else { '3' },
@@ -271,6 +295,7 @@ pub fn poll_key() -> Option<Key> {
             0x34 => if shift { '>' } else { '.' },
             0x35 => if shift { '?' } else { '/' },
 
+            0x3b..=0x44 => return Some(Key::Special(0x120 + (code - 0x3b) as u16)),
             _ => return None,
         };
 
@@ -282,16 +307,35 @@ pub fn poll_key() -> Option<Key> {
 pub fn poll_char() -> Option<char> {
     match poll_key()? {
         Key::Char(ch) => Some(ch),
-        Key::ArrowUp
-        | Key::ArrowDown
-        | Key::ArrowLeft
-        | Key::ArrowRight => None,
+        _ => None,
     }
+}
+
+/// One key press: code in bits 0..15, Shift/Ctrl/Alt/Caps in bits 16..19.
+/// Modifier/release/prefix bytes are consumed but do not produce events.
+pub fn poll_event() -> Option<u32> {
+    let code = match poll_key()? {
+        Key::Char(ch) => ch as u32,
+        Key::ArrowUp => 0x100,
+        Key::ArrowDown => 0x101,
+        Key::ArrowLeft => 0x102,
+        Key::ArrowRight => 0x103,
+        Key::Special(code) => code as u32,
+    };
+    let modifiers = unsafe {
+        ((LEFT_SHIFT_DOWN || RIGHT_SHIFT_DOWN) as u32) << 16
+        | ((CTRL_DOWN[0] || CTRL_DOWN[1]) as u32) << 17
+        | ((ALT_DOWN[0] || ALT_DOWN[1]) as u32) << 18
+        | (CAPS_LOCK_ON as u32) << 19
+    };
+    Some(code | modifiers)
 }
 
 pub fn left_shift_down() -> bool {
     unsafe { LEFT_SHIFT_DOWN }
 }
+pub fn arrows_down()->[bool;4] {unsafe {*core::ptr::addr_of!(ARROWS_DOWN)}}
+pub fn clear_arrows() {unsafe {*core::ptr::addr_of_mut!(ARROWS_DOWN)=[false;4];}}
 
 pub fn right_shift_down() -> bool {
     unsafe { RIGHT_SHIFT_DOWN }

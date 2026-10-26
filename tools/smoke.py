@@ -96,6 +96,9 @@ class Guest:
 
     def type(self, text):
         for character in text:
+            if character == "!":
+                self.key("shift-1")
+                continue
             key = {" ": "spc", "\n": "ret", "\t": "tab", ".": "dot", ":": "shift-semicolon", "-": "minus", "/": "slash", "\\": "backslash"}.get(character, character)
             if character.isascii() and character.isupper():
                 key = "shift-" + character.lower()

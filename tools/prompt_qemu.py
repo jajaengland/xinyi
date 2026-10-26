@@ -30,6 +30,7 @@ def main():
                 transcript.append(screen)
                 return screen
 
+            check("unmount", "xinyi:/>", "Unmounted.")
             check("pwd", "xinyi:/>", "\n/\n")
             check("mkdir docs", "xinyi:/>", "Created directory:")
             check("cd docs", "xinyi:/DOCS>")

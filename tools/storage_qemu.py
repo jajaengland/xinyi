@@ -107,7 +107,7 @@ def main():
                                 ("write note.txt survives a cold boot", "Wrote 20 bytes"),
                                 ("cat note.txt", "\nsurvives a cold boot\n"),
                                 ("ls", "NOTE.TXT     20 bytes"),
-                                ("install", "Unmount the filesystem before"),
+                                ("install", "To install, enter: install confirm"),
                                 ("unmount", "File commands now use RAM"),
                                 ("cat note.txt", "Storage: file not found"),
                                 ("mount", f"Mounted FAT16 at sector {start}"),

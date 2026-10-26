@@ -1,0 +1,5 @@
+# name|source relative to repository|description
+hello|programs/hello/main.rs|Rust greeting
+edit|programs/editor/main.rs|Text editor
+tetris|programs/tetris/main.rs|Falling-block game
+snake|programs/snake/main.rs|Snake with food beeps

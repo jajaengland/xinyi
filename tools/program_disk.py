@@ -15,8 +15,8 @@ def create_program_disk(path, files):
     for name, data in files.items():
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,8}\.[A-Za-z0-9_-]{1,3}", name):
             raise ValueError("Use ASCII 8.3 names such as HELLO.BIN")
-        if len(data) > 1024:
-            raise ValueError("Program exceeds Xinyi's current 1024-byte file limit")
+        if len(data) > 65536:
+            raise ValueError("Program exceeds Xinyi's 64 KiB program limit")
         name = name.upper()
         if name in normalized:
             raise ValueError("Duplicate program name")
