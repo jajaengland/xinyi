@@ -93,6 +93,8 @@ isr_common:
 ; Unlike CPU exceptions, these stubs return after handling the IRQ.
 
 EXTERN xinyi_irq_handler
+EXTERN xinyi_scheduled_irq
+EXTERN xinyi_scheduled_syscall
 
 %macro IRQ 1
 GLOBAL irq%1
@@ -137,6 +139,13 @@ irq_common:
     sub esp, 12
     push dword [ebx + 32]
     call xinyi_irq_handler
+    and esp,-16
+    sub esp,8
+    push esi
+    push ebx
+    call xinyi_scheduled_irq
+    test eax,eax
+    jnz user_mode_return
     mov esp, esi
     pop gs
     pop fs
@@ -180,6 +189,13 @@ isr128:
 
     ; EBX/ESI survive the C call. Only saved EAX receives the result.
     mov [ebx + 28], eax
+    and esp,-16
+    sub esp,8
+    push esi
+    push ebx
+    call xinyi_scheduled_syscall
+    test eax,eax
+    jnz user_mode_return
     call xinyi_user_should_return
     test eax, eax
     jnz user_mode_return

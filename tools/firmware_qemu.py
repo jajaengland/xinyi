@@ -59,7 +59,7 @@ def main():
                             return int.from_bytes(path.read_bytes(),"little")
                         def encoded(rgb):
                             return ((rgb>>19&31)<<11|(rgb>>10&63)<<5|(rgb>>3&31)) if bpp==16 else rgb
-                        for x,y,rgb in [(0,0,0x176c70),(235,360,0xe5a34f),(570,295,0x8fe186),(570,370,0x5865ac),(350,340,0x58ccd0)]:
+                        for x,y,rgb in [(0,0,0xc4c4c4),(235,360,0xe5a34f),(570,295,0x8fe186),(570,370,0x5865ac),(350,340,0x58ccd0)]:
                             assert pixel(x,y)==encoded(rgb),(x,y,hex(pixel(x,y)),hex(encoded(rgb)))
                     guest.call("screendump",{"filename":str(parent/f"vbe-{args.vga}.png"),"format":"png"})
                     guest.key("right")
@@ -80,7 +80,7 @@ def main():
         try:
             guest.command("cat usb.txt","saved from usb")
             guest.command("install","Install refused: choose an IDE destination")
-            guest.command("install 1","To install, enter: install confirm")
+            guest.type("install 1\n");guest.wait_for("To install, enter: install confirm",timeout=30)
             guest.type("install confirm\n");guest.wait_for("Installed drive ready",timeout=60)
             guest.command("apps","EDIT.BIN")
         finally:guest.close()

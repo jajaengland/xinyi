@@ -63,14 +63,18 @@ impl<'a> Canvas<'a> {
             }
         }}
     }
+    /// Draw one raw bitmap glyph, including CP437 console cells.
+    pub fn glyph(&mut self,x:i32,y:i32,color:u32,byte:u8,font:&[u8;4096]) {
+        for row in 0..16 {let bits=font[byte as usize*16+row];
+            for column in 0..8 {if bits&(0x80>>column)!=0 {self.pixel(x.saturating_add(column),y.saturating_add(row as i32),color);}}
+        }
+    }
     pub fn text(&mut self,mut x:i32,mut y:i32,color:u32,text:&[u8],font:&[u8;4096]) {
         let origin=x;
         for &byte in text {
             if byte==b'\n' {x=origin;y=y.saturating_add(16);continue;}
             let byte=if byte.is_ascii_graphic()||byte==b' ' {byte}else{b'?'};
-            for row in 0..16 {let bits=font[byte as usize*16+row];
-                for column in 0..8 {if bits&(0x80>>column)!=0 {self.pixel(x.saturating_add(column),y.saturating_add(row as i32),color);}}
-            }x=x.saturating_add(8);
+            self.glyph(x,y,color,byte,font);x=x.saturating_add(8);
         }
     }
 }

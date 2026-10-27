@@ -1,7 +1,7 @@
 // Ring-3 ABI and memory-protection probes, executing a copied user image.
 use crate::{
     gdt,
-    loader::{self, Frames, STACK_PAGES},
+    loader::{self, Frames},
     paging, println,
 };
 unsafe extern "C" {
@@ -18,7 +18,7 @@ unsafe extern "C" {
 }
 
 #[derive(Clone, Copy)]
-enum Outcome {
+pub(crate) enum Outcome {
     Exit(u32),
     Fault {
         vector: u32,
@@ -181,7 +181,7 @@ pub fn enter(argument: &str) {
         println!("Out of memory: user page tables");
         return;
     };
-    let Some(kernel_stack) = Frames::new(STACK_PAGES) else {
+    let Some(kernel_stack) = Frames::new(loader::KERNEL_STACK_PAGES) else {
         println!("Out of memory: syscall stack");
         return;
     };
@@ -215,6 +215,8 @@ pub fn execute(
         "User guard: {:08x}\n",
         paging::USER_STACK_GUARD
     ));
+    // Paint unused syscall-stack storage to check capacity after returning.
+    unsafe {core::slice::from_raw_parts_mut(kernel_stack.base() as *mut u32,((kernel_stack.top()-kernel_stack.base())/4) as usize).fill(0x58475354);}
     let old_stack = gdt::kernel_stack();
     let old_directory = paging::status().page_directory;
     let old_flags = kernel_flags();
@@ -245,6 +247,9 @@ pub fn execute(
             program.image.base(),
         );
     }
+    let unused=unsafe {core::slice::from_raw_parts(kernel_stack.base() as *const u32,((kernel_stack.top()-kernel_stack.base())/4) as usize)}.iter().take_while(|&&word|word==0x58475354).count()*4;
+    assert!(unused>=64,"foreground syscall stack overflow");
+    crate::debug::write_fmt(format_args!("User syscall stack: unused={} bytes\n",unused));
     let restored_flags = kernel_flags();
     assert!(restored_flags & 0x7600 == old_flags & 0x7600);
     gdt::set_kernel_stack(old_stack);
@@ -282,4 +287,16 @@ pub fn execute(
             vector, error, eip, address
         ),
     }
+}
+
+unsafe extern "C" {fn enter_scheduled_user(cpu:*const crate::cpu_context::Cpu,directory:u32);}
+pub(crate) fn quantum(program:&loader::LoadedProgram,space:&paging::AddressSpace,stack:&Frames,pid:u32,cpu:&crate::cpu_context::Cpu)->Option<Outcome> {
+    let old_stack=gdt::kernel_stack();let old_directory=paging::status().page_directory;let old_flags=kernel_flags();
+    gdt::set_kernel_stack(stack.top());
+    unsafe {
+        let run=&mut *core::ptr::addr_of_mut!(RUN);run.active=true;run.outcome=None;run.pid=pid;run.image_size=program.size;run.directory=space.directory();run.arguments=program.arguments;run.argument_length=program.argument_length;
+        enter_scheduled_user(cpu,space.directory());
+    }
+    gdt::set_kernel_stack(old_stack);assert!(paging::status().page_directory==old_directory);assert!(kernel_flags()&0x7600==old_flags&0x7600);
+    unsafe {let run=&mut *core::ptr::addr_of_mut!(RUN);run.active=false;run.outcome.take()}
 }

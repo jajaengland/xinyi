@@ -19,7 +19,7 @@ fn at(s:&mut State,x:i32,y:i32,buttons:u8)->(bool,Option<Event>) {s.update(mouse
 }
 #[test] fn chrome_drag_does_not_leak_client_clicks_and_clamps_on_release() {
     let mut s=State::new(0);at(&mut s,100,103,1);assert!(at(&mut s,799,599,0).1.is_none());
-    assert_eq!((s.window.rect.x,s.window.rect.y),(138,130));
+    assert_eq!((s.window.rect.x,s.window.rect.y),(768,568));
 }
 #[test] fn client_events_are_local_and_release_capture_survives_outside() {
     let mut s=State::new(0);let e=at(&mut s,90,160,1).1.unwrap();assert_eq!((e.kind,e.x,e.y,e.buttons),(POINTER,10,38,1));
@@ -35,4 +35,35 @@ fn at(s:&mut State,x:i32,y:i32,buttons:u8)->(bool,Option<Event>) {s.update(mouse
 #[test] fn mixed_input_sequence_orders_across_wrap() {
     assert!(input_order::before(u32::MAX-1,1));assert!(!input_order::before(1,u32::MAX-1));
     let a=input_order::next();let b=input_order::next();assert!(input_order::before(a,b));
+}
+
+#[test] fn sized_surfaces_validate_and_drag_with_their_own_bounds() {
+    assert!(window_protocol::valid_size(320,144));
+    for (w,h) in [(0,144),(648,144),(320,401),(321,144),(320,143)] {assert!(!window_protocol::valid_size(w,h));}
+    assert!(Draw::rect(319,143,1,1,0).valid_for(320,144));
+    assert!(!Draw::rect(320,143,1,1,0).valid_for(320,144));
+    assert!(!Draw::text(313,0,0,b"a").valid_for(320,144));
+    let mut state=State::sized(0,320,144,56,124);
+    assert_eq!((state.client().w,state.client().h),(320,144));
+    at(&mut state,100,139,1);at(&mut state,799,599,0);
+    assert_eq!((state.window.rect.x,state.window.rect.y),(755,568));
+}
+#[test] fn title_bar_stops_immediately_below_taskbar() {
+    let mut s=State::new(0);
+    at(&mut s,110,103,1);at(&mut s,110,0,0);
+    assert_eq!(s.window.rect.y,24);
+    assert_eq!(s.window.title().y,28);
+    assert!(at(&mut s,110,11,1).1.is_none());
+    assert_eq!(s.window.rect.y,24);
+}
+
+#[test]fn minimize_is_cancellable_and_restore_keeps_the_window(){
+ let mut s=State::new(0);s.minimizable=true;let r=s.window.minimize();
+ at(&mut s,r.x+8,r.y+8,1);at(&mut s,300,400,0);assert!(s.window.visible);
+ at(&mut s,r.x+8,r.y+8,1);assert!(at(&mut s,r.x+8,r.y+8,0).1.is_none());assert!(!s.window.visible);
+ s.window.rect.x=-500;s.window.rect.y=568;s.restore();assert!(s.window.visible);assert_eq!((s.window.rect.x,s.window.rect.y),(0,156));
+}
+#[test]fn drag_allows_partial_windows_on_left_right_and_bottom(){
+ let mut s=State::new(0);at(&mut s,500,103,1);at(&mut s,0,599,0);assert!(s.window.rect.x<0);assert_eq!(s.window.rect.y,568);
+ s.restore();let r=s.window.rect;at(&mut s,r.x+20,r.y+15,1);at(&mut s,799,0,0);assert_eq!((s.window.rect.x,s.window.rect.y),(768,24));
 }

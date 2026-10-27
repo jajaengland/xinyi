@@ -11,8 +11,8 @@ fn click(s:&mut State,x:i32,y:i32) {at(s,x,y,1);at(s,x,y,0);}
     let mut s=State::new(0);at(&mut s,140,155,1);assert_eq!(s.capture,Some(Target::Title(0)));
     at(&mut s,240,205,1);assert_eq!((s.windows[0].rect.x,s.windows[0].rect.y),(200,190));
     at(&mut s,260,225,0);assert_eq!((s.windows[0].rect.x,s.windows[0].rect.y),(220,210));assert_eq!(s.capture,None);
-    at(&mut s,260,225,1);at(&mut s,799,599,1);assert_eq!((s.windows[0].rect.x,s.windows[0].rect.y),(434,338));
-    at(&mut s,0,0,1);assert_eq!((s.windows[0].rect.x,s.windows[0].rect.y),(0,84));
+    at(&mut s,260,225,1);at(&mut s,799,599,1);assert_eq!((s.windows[0].rect.x,s.windows[0].rect.y),(434,364));
+    at(&mut s,0,0,1);assert_eq!((s.windows[0].rect.x,s.windows[0].rect.y),(0,24));
 }
 #[test] fn close_requires_matching_release_and_focuses_next_visible_window() {
     let mut s=State::new(0);at(&mut s,622,225,1);at(&mut s,700,500,0);assert!(s.windows[1].visible);
@@ -33,4 +33,18 @@ fn click(s:&mut State,x:i32,y:i32) {at(s,x,y,1);at(s,x,y,0);}
 #[test] fn body_capture_cannot_turn_into_a_control_click() {
     let mut s=State::new(0);click(&mut s,150,330);at(&mut s,140,200,1);at(&mut s,150,240,0);assert_eq!(s.clicks,[0,0]);
     at(&mut s,150,240,1);at(&mut s,700,500,0);assert_eq!(s.clicks,[0,0]);
+}
+
+#[test] fn apps_menu_captures_selection_and_blocks_windows_beneath() {
+    let mut s=State::new(0);s.app_count=5;click(&mut s,40,11);assert!(s.apps_open);
+    let r=s.apps_menu();at(&mut s,r.x+15,r.y+4+2*24+12,0);assert_eq!(s.hit(),Some(Target::App(2)));
+    let (x,y)=(s.x,s.y);click(&mut s,x,y);assert_eq!(s.launch,Some(2));assert!(!s.apps_open);
+    let mut s=State::new(0);s.app_count=5;click(&mut s,40,11);let focus=s.focus;
+    click(&mut s,150,330);assert!(!s.apps_open);assert_eq!(s.focus,focus);assert_eq!(s.clicks,[0,0]);
+}
+#[test] fn launcher_does_not_launch_on_drag_out_or_lost_release() {
+    let mut s=State::new(0);s.app_count=5;click(&mut s,40,11);let r=s.apps_menu();
+    at(&mut s,30,r.y+16,1);at(&mut s,400,100,0);assert!(s.launch.is_none());
+    click(&mut s,40,11);let r=s.apps_menu();at(&mut s,30,r.y+16,1);
+    s.update(Event{lost:true,buttons:1,..Event::default()});at(&mut s,30,r.y+16,0);assert!(s.launch.is_none());
 }

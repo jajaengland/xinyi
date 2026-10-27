@@ -62,7 +62,7 @@ def main():
                         entry = int(re.search(r"Program: (0x[0-9a-f]+)", screen)[1], 16)
                         user_top = int(re.search(r"User stack backing top: (0x[0-9a-f]+)", screen)[1], 16) + 4
                         kernel_top = int(re.search(r"Kernel stack top: (0x[0-9a-f]+)", screen)[1], 16)
-                        owned = [(entry, entry + 4096), (user_top - 16384, user_top), (kernel_top - 16384, kernel_top)]
+                        owned = [(entry, entry + 4096), (user_top - 16384, user_top), (kernel_top - 65536, kernel_top)]
                         for start, end in owned:
                             assert start % 4096 == 0 and start >= kernel_end(kernel) and end <= 8 * 1024**2
                             assert all(end <= old_start or start >= old_end for old_start, old_end in ranges), "Overlapping allocations"
@@ -72,7 +72,7 @@ def main():
                         assert b"Hello from a Xinyi program!\n" in image[:size]
                         assert image[size:] == bytes(4096 - size)
                         assert memory(user_top - 16384, 16384) == bytes(16384)
-                        assert memory(kernel_top - 16384, 16384) == bytes(16384)
+                        assert memory(kernel_top - 65536, 65536) == bytes(65536)
                         directory_address = int(re.search(r"Page directory: (0x[0-9a-f]+)", screen)[1], 16)
                         entries = struct.unpack("<1024I", memory(directory_address, 4096))
                         assert entries[256] & 0x87 == 7
@@ -87,7 +87,7 @@ def main():
                             assert all(address + 4096 <= old_start or address >= old_end for old_start, old_end in ranges)
                             ranges.append((address, address + 4096))
                     full = free_frames()
-                    assert baseline - full == 16 * 11
+                    assert baseline - full == 16 * 23
                     for _ in range(3):
                         command("spawn", "Failed to create task record")
                         assert free_frames() == full, "Full-table failure leaked frames"
@@ -105,7 +105,7 @@ def main():
                     stacks = re.search(r"User stacks: ([0-9a-f]+)/([0-9a-f]+) kernel ([0-9a-f]+)/([0-9a-f]+)", debug)
                     assert stacks, debug
                     ub, ut, kb, kt = (int(value, 16) for value in stacks.groups())
-                    assert ut - ub == kt - kb == 16384 and (ut <= kb or kt <= ub)
+                    assert ut - ub == 16384 and kt - kb == 65536 and (ut <= kb or kt <= ub)
                     assert min(ub, kb) >= kernel_end(kernel) and max(ut, kt) < 8 * 1024**2
                     transcript.append(debug)
                     print(f"PASS {kernel.parent.name} / 8 MiB: owned zeroed regions, full-table rollback, removal/reuse, allocated ring-3 and syscall stacks", flush=True)

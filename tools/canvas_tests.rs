@@ -37,3 +37,8 @@ use canvas::Canvas;
     assert_eq!(data[0],0xffffff);assert_eq!(data[1],0xffffff);assert_eq!(data[2],0);
     assert_eq!(data[16*16],0xffffff);assert_eq!(data[16*16+1],0xffffff);
 }
+#[test]fn raw_console_glyphs_keep_cp437_bits(){
+    let mut pixels=[0;128];let mut font=[0;4096];font[219*16..220*16].fill(255);
+    Canvas::new(&mut pixels,8,16,8).unwrap().glyph(0,0,7,219,&font);
+    assert!(pixels.iter().all(|&p|p==7));
+}

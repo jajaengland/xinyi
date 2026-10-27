@@ -45,6 +45,7 @@ impl Window {
             h: 26,
         }
     }
+    pub fn minimize(self) -> Rect {let mut r=self.close();r.x-=24;r}
     pub fn close(self) -> Rect {
         Rect {
             x: self.rect.x + self.rect.w - 26,
@@ -69,6 +70,8 @@ pub enum Target {
     Client(usize),
     Button(usize),
     Menu(usize),
+    AppsButton,
+    App(usize),
 }
 impl Target {
     fn window(self) -> Option<usize> {
@@ -90,6 +93,9 @@ pub struct State {
     pub capture: Option<Target>,
     pub menu: Option<(i32, i32)>,
     pub clicks: [u32; 2],
+    pub apps_open: bool,
+    pub app_count: usize,
+    pub launch: Option<usize>,
     drag_offset: (i32, i32),
 }
 impl State {
@@ -104,6 +110,9 @@ impl State {
             capture: None,
             menu: None,
             clicks: [0; 2],
+            apps_open: false,
+            app_count: 0,
+            launch: None,
             drag_offset: (0, 0),
         }
     }
@@ -129,7 +138,47 @@ impl State {
             },
         ]
     }
+    pub fn apps_button() -> Rect {
+        Rect {
+            x: 8,
+            y: 3,
+            w: 72,
+            h: 18,
+        }
+    }
+    pub fn apps_menu(&self) -> Rect {
+        let h = self.app_count.clamp(1, 16) as i32 * 24 + 8;
+        Rect {
+            x: 8,
+            y: 30,
+            w: 200,
+            h,
+        }
+    }
     pub fn hit(&self) -> Option<Target> {
+        if self.apps_open {
+            let menu = self.apps_menu();
+            if menu.contains(self.x, self.y) {
+                for i in 0..self.app_count.min(16) {
+                    if (Rect {
+                        x: menu.x + 4,
+                        y: menu.y + 4 + i as i32 * 24,
+                        w: menu.w - 8,
+                        h: 24,
+                    })
+                    .contains(self.x, self.y)
+                    {
+                        return Some(Target::App(i));
+                    }
+                }
+                return None;
+            }
+            return if Self::apps_button().contains(self.x, self.y) {
+                Some(Target::AppsButton)
+            } else {
+                None
+            };
+        }
         if let Some((x, y)) = self.menu {
             for i in 0..2 {
                 if (Rect {
@@ -144,6 +193,9 @@ impl State {
                 }
             }
             return None;
+        }
+        if Self::apps_button().contains(self.x, self.y) {
+            return Some(Target::AppsButton);
         }
         for &id in self.order.iter().rev() {
             let window = self.windows[id];
@@ -180,6 +232,8 @@ impl State {
             self.capture,
             self.menu,
             self.clicks,
+            self.apps_open,
+            self.launch,
         );
         let old_hit = self.hit();
         self.x = (self.x + event.dx as i32).clamp(0, 799);
@@ -193,13 +247,18 @@ impl State {
         let released = self.buttons & !event.buttons;
         self.buttons = event.buttons;
         if pressed & 2 != 0 {
-            self.menu = Some((self.x.min(800 - MENU_W - 6), self.y.min(600 - MENU_H - 6)));
+            self.apps_open = false;
+            self.menu = Some((self.x.min(800 - MENU_W - 6), self.y.clamp(30, 600 - MENU_H - 6)));
             self.capture = None;
         } else {
             if pressed & 1 != 0 {
                 let target = self.hit();
                 self.capture = target;
-                if self.menu.is_some() {
+                if self.apps_open {
+                    if target.is_none() {
+                        self.apps_open = false;
+                    }
+                } else if self.menu.is_some() {
                     if target.is_none() {
                         self.menu = None;
                     }
@@ -209,7 +268,7 @@ impl State {
                         let r = self.windows[id].rect;
                         self.drag_offset = (self.x - r.x, self.y - r.y);
                     }
-                } else {
+                } else if target != Some(Target::AppsButton) {
                     self.focus = None;
                 }
             }
@@ -217,13 +276,21 @@ impl State {
                 if let Some(Target::Title(id)) = self.capture {
                     let r = &mut self.windows[id].rect;
                     r.x = (self.x - self.drag_offset.0).clamp(0, 800 - r.w - 6);
-                    r.y = (self.y - self.drag_offset.1).clamp(84, 568 - r.h);
+                    r.y = (self.y - self.drag_offset.1).clamp(24, 594 - r.h);
                 }
             }
             if released & 1 != 0 {
                 if let Some(target) = self.capture {
                     if Some(target) == self.hit() {
                         match target {
+                            Target::AppsButton => {
+                                self.apps_open = !self.apps_open;
+                                self.menu = None;
+                            }
+                            Target::App(index) => {
+                                self.launch = Some(index);
+                                self.apps_open = false;
+                            }
                             Target::Close(id) => {
                                 self.windows[id].visible = false;
                                 self.focus = self
@@ -256,7 +323,9 @@ impl State {
                 self.capture,
                 self.menu,
                 self.clicks,
+                self.apps_open,
+                self.launch,
             )
-            || ((self.capture.is_some() || self.menu.is_some()) && old_hit != self.hit())
+            || ((self.capture.is_some() || self.menu.is_some() || self.apps_open) && old_hit != self.hit())
     }
 }

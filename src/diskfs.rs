@@ -1,4 +1,4 @@
-// Mounted volume and RAM fallback. Shell-only access; no filesystem calls in IRQs.
+// Mounted volume and RAM fallback. Serialized kernel access; no filesystem calls in IRQs.
 use crate::{
     ata::AtaDisk,
     blockdev::BlockDevice,
@@ -99,6 +99,9 @@ fn absolute(text: &str, buffer: &mut [u8; crate::fs_path::MAX_PATH]) -> Result<u
     let base = unsafe { *core::ptr::addr_of!(CWD) };
     Ok(crate::fs_path::Path::parse(text, &base)?.encode(buffer))
 }
+// Dispatcher-only snapshots; paths were already checked by cd/normalization.
+pub(crate) fn directory()->crate::fs_path::Path {unsafe {*core::ptr::addr_of!(CWD)}}
+pub(crate) fn set_directory(path:crate::fs_path::Path) {unsafe {*core::ptr::addr_of_mut!(CWD)=path;}}
 pub fn pwd(buffer: &mut [u8; crate::fs_path::MAX_PATH]) -> usize {
     unsafe { (*core::ptr::addr_of!(CWD)).encode(buffer) }
 }

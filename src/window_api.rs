@@ -13,6 +13,8 @@ struct App {
     title_len: usize,
     surface: Frames,
     dirty: u32,
+    width: u32,
+    height: u32,
 }
 static mut APP: Option<App> = None;
 static mut NEXT: u32 = 1;
@@ -28,7 +30,7 @@ pub fn finish() {
     }
     drop(app);
 }
-fn open(title: &[u8]) -> u32 {
+fn open(title: &[u8], width: u32, height: u32) -> u32 {
     if active() {
         return (-16i32) as u32;
     }
@@ -36,9 +38,7 @@ fn open(title: &[u8]) -> u32 {
     if id > i32::MAX as u32 {
         return (-24i32) as u32;
     }
-    let Some(surface) =
-        Frames::new((api::WIDTH as usize * api::HEIGHT as usize * 4).div_ceil(4096))
-    else {
+    let Some(surface) = Frames::new((width as usize * height as usize * 4).div_ceil(4096)) else {
         return (-12i32) as u32;
     };
     let _ = crate::mouse::init();
@@ -51,20 +51,19 @@ fn open(title: &[u8]) -> u32 {
         }) as u32;
     }
     unsafe {
-        core::slice::from_raw_parts_mut(
-            surface.base() as *mut u32,
-            (api::WIDTH * api::HEIGHT) as usize,
-        )
-        .fill(0xffffff);
+        core::slice::from_raw_parts_mut(surface.base() as *mut u32, (width * height) as usize)
+            .fill(0xffffff);
     }
     let mut app = App {
         id,
         owner: usermode::getpid(),
-        ui: State::new(crate::mouse::discard()),
+        ui: State::sized(crate::mouse::discard(), width as i32, height as i32, 72, 88),
         title: [0; 48],
         title_len: title.len(),
         surface,
         dirty: 0,
+        width,
+        height,
     };
     app.title[..title.len()].copy_from_slice(title);
     compose(&app);
@@ -75,8 +74,10 @@ fn open(title: &[u8]) -> u32 {
         *core::ptr::addr_of_mut!(APP) = Some(app);
     }
     crate::debug::write_fmt(format_args!(
-        "Window: opened handle={} client=640x400 surface={:08x}\n",
+        "Window: opened handle={} client={}x{} surface={:08x}\n",
         id,
+        width,
+        height,
         unsafe {
             (&*core::ptr::addr_of!(APP))
                 .as_ref()
@@ -91,7 +92,7 @@ fn compose(app: &App) {
     let surface = unsafe {
         core::slice::from_raw_parts(
             app.surface.base() as *const u32,
-            (api::WIDTH * api::HEIGHT) as usize,
+            (app.width * app.height) as usize,
         )
     };
     graphics::app_scene(&app.ui, &app.title[..app.title_len], surface);
@@ -176,8 +177,17 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
     let Some(image) = usermode::active_image(cs) else {
         return u32::MAX;
     };
-    if number == 60 {
-        if third != 0 || second == 0 || second > 48 {
+    if number == 60 || number == 65 {
+        let (width, height) = if number == 65 {
+            (third & 0xffff, third >> 16)
+        } else {
+            (640, 400)
+        };
+        if (number == 60 && third != 0)
+            || !api::valid_size(width, height)
+            || second == 0
+            || second > 48
+        {
             return (-22i32) as u32;
         }
         if !user_buffer::readable(first, second, image) {
@@ -196,7 +206,7 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
         unsafe {
             asm!("sti", options(nostack));
         }
-        let result = open(&title[..second as usize]);
+        let result = open(&title[..second as usize], width, height);
         unsafe {
             asm!("cli", options(nostack));
         }
@@ -252,7 +262,7 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
                 }
             }
             for (i, c) in commands[..third as usize].iter().enumerate() {
-                if !c.valid() {
+                if !c.valid_for(app.width, app.height) {
                     return (-22i32) as u32;
                 }
                 if c.kind == 1 {
@@ -282,10 +292,16 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
             let surface = unsafe {
                 core::slice::from_raw_parts_mut(
                     app.surface.base() as *mut u32,
-                    (api::WIDTH * api::HEIGHT) as usize,
+                    (app.width * app.height) as usize,
                 )
             };
-            let mut canvas = Canvas::new(surface, 640, 400, 640).unwrap();
+            let mut canvas = Canvas::new(
+                surface,
+                app.width as usize,
+                app.height as usize,
+                app.width as usize,
+            )
+            .unwrap();
             for (i, c) in commands[..third as usize].iter().enumerate() {
                 let (w, h) = if c.kind == 0 {
                     canvas.rect(
@@ -329,19 +345,19 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
                 let client = app.ui.client();
                 graphics::move_pointer((app.ui.x, app.ui.y), (app.ui.x, app.ui.y));
                 let mut row = 0;
-                while row < 25 {
+                while row < app.height as i32 / 16 {
                     if app.dirty & (1 << row) == 0 {
                         row += 1;
                         continue;
                     }
                     let first = row;
-                    while row < 25 && app.dirty & (1 << row) != 0 {
+                    while row < app.height as i32 / 16 && app.dirty & (1 << row) != 0 {
                         row += 1;
                     }
                     graphics::present_guarded(
                         client.x,
                         client.y + first * 16,
-                        640,
+                        app.width as i32,
                         (row - first) * 16,
                         (app.ui.x, app.ui.y),
                     );

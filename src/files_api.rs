@@ -1,7 +1,7 @@
 use crate::{diskfs,fat16::{Error,MAX_FILE_SIZE},user_buffer,usermode};
-fn error(error:Error)->u32 {
+pub(crate) fn error(error:Error)->u32 {
     (match error {Error::NotFound=>-2,Error::ReadOnly=>-13,Error::TooLarge=>-27,
-        Error::Full=>-28,Error::InvalidName|Error::PathTooDeep=>-22,_=>-5i32}) as u32
+        Error::Exists=>-17,Error::NotFile=>-21,Error::NotDirectory=>-20,Error::DirectoryNotEmpty=>-39,Error::DirectoryBusy=>-16,Error::Full=>-28,Error::InvalidName|Error::PathTooDeep=>-22,_=>-5i32}) as u32
 }
 pub fn syscall(cs:u32,number:u32,first:u32,second:u32,third:u32)->u32 {
     let Some(image_size)=usermode::active_image(cs) else{return u32::MAX;};

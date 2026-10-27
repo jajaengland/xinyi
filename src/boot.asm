@@ -30,6 +30,12 @@ _start:
     rep movsb
     mov eax, ebp
     mov ebx, edx
+    mov edi, stack_bottom
+    mov ecx, 16
+    mov eax, 0x58475354
+    rep stosd
+    mov eax, ebp
+    mov ebx, edx
     mov esp, stack_top
     and esp, 0xFFFFFFF0
 
@@ -118,6 +124,39 @@ enter_user_mode:
     push edx                ; EIP
     iret
 
+; Enter an arbitrary saved user context, preserving the existing host-return ABI.
+; void enter_scheduled_user(const Cpu *context, u32 directory)
+global enter_scheduled_user
+enter_scheduled_user:
+    push ebp
+    push ebx
+    push esi
+    push edi
+    pushfd
+    push ds
+    push es
+    push fs
+    push gs
+    cli
+    mov [user_return_esp],esp
+    mov eax,cr3
+    mov [user_return_cr3],eax
+    mov esi,[esp+40]
+    mov eax,[esp+44]
+    mov cr3,eax
+    sub esp,76
+    mov edi,esp
+    mov ecx,19
+    cld
+    rep movsd
+    pop gs
+    pop fs
+    pop es
+    pop ds
+    popa
+    add esp,8
+    iretd
+
 ; Called only after Rust exception/syscall handlers have returned normally.
 ; Discard the finished user interrupt stack, never unwinding Rust frames.
 global user_mode_return
@@ -145,7 +184,8 @@ user_mode_return:
 
 section .bss
 align 16
+global stack_bottom
 stack_bottom:
-    resb 16384                ; 16 KiB stack
+    resb 65536                ; 64 KiB supervisor/scheduler stack
 global stack_top
 stack_top:

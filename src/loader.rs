@@ -1,9 +1,10 @@
 // Owned physical backing for private user code/stack mappings.
-// Flat images run synchronously; ELF parsing and writable globals are pending.
+// Foreground and scheduled flat images; ELF parsing and writable globals are pending.
 use crate::phys;
 
 pub const FRAME_BYTES: usize = 4096;
 pub const STACK_PAGES: usize = 4;
+pub const KERNEL_STACK_PAGES:usize=16;
 pub const MAX_BINARY_BYTES: usize = 64 * 1024;
 pub const DEMO_BINARY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/demo.bin"));
 

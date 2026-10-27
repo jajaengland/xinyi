@@ -164,7 +164,7 @@ pub extern "C" fn xinyi_exception_handler(
     };
 
     println!();
-    if recover {crate::window_api::finish();}else{crate::graphics::restore();}
+    if recover {crate::window_api::finish();}else{crate::pty::set_current(None);crate::graphics::restore();}
     println!("Xinyi: CPU exception!");
     println!("Exception: {}", name);
     println!("Vector: {}", vector);
@@ -243,6 +243,7 @@ pub extern "C" fn xinyi_syscall_handler(frame: &crate::syscall_frame::SyscallFra
         syscall_num, arg1, arg2, arg3, frame.cs
     ));
 
+    if let Some(result)=crate::multitask::syscall(syscall_num,arg1,arg2,arg3) {return result;}
     if crate::window_api::active()&&matches!(syscall_num,4|50|53..=55) {return (-16i32) as u32;}
     match syscall_num {
         1 => {
@@ -258,7 +259,12 @@ pub extern "C" fn xinyi_syscall_handler(frame: &crate::syscall_frame::SyscallFra
             crate::usermode::getpid()
         }
         50..=56 => crate::terminal::syscall(frame.cs, syscall_num, arg1, arg2, arg3),
-        60..=64 => crate::window_api::syscall(frame.cs,syscall_num,arg1,arg2,arg3),
+        60..=65 => if crate::multitask::active() {crate::multi_window::syscall(frame.cs,syscall_num,arg1,arg2,arg3)}else{crate::window_api::syscall(frame.cs,syscall_num,arg1,arg2,arg3)},
+        67..=68=>crate::clipboard::syscall(frame.cs,syscall_num,arg1,arg2,arg3),
+        72..=77=>crate::pty::syscall(frame.cs,syscall_num,arg1,arg2,arg3),
+        78..=80=>crate::directory_api::syscall(frame.cs,syscall_num,arg1,arg2,arg3),
+        69..=71=>crate::terminal_service::syscall(frame.cs,syscall_num,arg1,arg2,arg3),
+        66=>if arg1|arg2|arg3==0 {0}else{(-22i32) as u32},
         57..=59 => crate::files_api::syscall(frame.cs,syscall_num,arg1,arg2,arg3),
         _ => {
             0xFFFFFFFF

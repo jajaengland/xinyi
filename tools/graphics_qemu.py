@@ -46,7 +46,7 @@ def main():
                         guest.call("screendump",{"filename":str(output/f"graphics-{kernel.parent.name}.png"),"format":"png"})
                         png=(output/f"graphics-{kernel.parent.name}.png").read_bytes()
                         assert int.from_bytes(png[16:20],"big")==800 and int.from_bytes(png[20:24],"big")==600
-                        assert memory(base,4)==bytes.fromhex("706c1700")
+                        assert memory(base,4)==bytes.fromhex("c4c4c400")
                         assert memory(base+((360*800+235)*4),4)==bytes.fromhex("4fa3e500"),"Filled triangle missing"
                         assert memory(base+((295*800+570)*4),4)==bytes.fromhex("86e18f00"),"Triangle outline missing"
                         assert memory(base+((370*800+570)*4),4)==bytes.fromhex("ac655800"),"Second triangle missing"

@@ -18,7 +18,7 @@ pub fn finish() {
         crate::println!();
     }
 }
-fn touched() { unsafe { USED = true; } }
+fn touched() {if crate::pty::current().is_none() { unsafe { USED = true; } }}
 
 // Syscall entry has IF=0. Enable only around HLT so IRQ0/IRQ1 can wake us;
 // return to Rust with IF=0. The outer IRET restores the caller's flags.

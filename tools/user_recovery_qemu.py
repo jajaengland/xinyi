@@ -76,7 +76,7 @@ def main():
                             recent = debug[len(previous_log):]
                             previous_log = debug
                             record = re.search(r"User recovery: cr3=([0-9a-f]+) tss=([0-9a-f]+) reclaimed=(\d+) ticks=(\d+) flags=([0-9a-f]+)", recent)
-                            assert record and int(record[1], 16) == original_cr3 and int(record[3]) == 11, recent
+                            assert record and int(record[1], 16) == original_cr3 and int(record[3]) == 23, recent
                             assert int(record[2], 16) == original_tss
                             flags = int(record[5], 16)
                             assert flags & 0x200 and not flags & 0x7400, recent

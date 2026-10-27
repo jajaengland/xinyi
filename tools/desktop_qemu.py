@@ -25,7 +25,7 @@ def main():
             def frames():return int(re.search(r"Free now: +(\d+)",guest.command("frames","Free now:"))[1])
             baseline=frames()
             for cycle in range(2):
-                offset=len(log());guest.type("desktop\n");until(lambda:"Desktop: frame ready" in log()[offset:],"Desktop failed to start")
+                offset=len(log());guest.type("windowtest\n");until(lambda:"Desktop: frame ready" in log()[offset:],"Desktop failed to start")
                 back=int(re.search(r"Desktop: backbuffer=([0-9a-f]+)",log()[offset:])[1],16)
                 if args.vga=="std":
                     dev=next(d for d in guest.call("query-pci")[0]["devices"] if d.get("id",{}).get("vendor")==0x1234)
@@ -36,7 +36,7 @@ def main():
                 def memory(address,length):
                     path=directory/"memory.bin";guest.call("human-monitor-command",{"command-line":f'pmemsave {address:#x} {length} "{path.as_posix()}"'});return path.read_bytes()
                 pos=[400,300]
-                def composite():
+                def snapshot_composite():
                     time.sleep(.05);guest.call("stop")
                     try:
                         scene=memory(back,800*600*4);screen=memory(base,pitch*600)
@@ -56,6 +56,15 @@ def main():
                             if actual!=wanted:
                                 i=next(i for i,(a,b) in enumerate(zip(actual,wanted)) if a!=b)
                                 raise AssertionError(f"Damaged composition at ({left+i//size},{y}): screen={actual[i]:02x} expected={wanted[i]:02x}")
+                def composite():
+                    deadline=time.monotonic()+8
+                    while True:
+                        try:snapshot_composite();return
+                        except AssertionError:
+                            if time.monotonic()>=deadline:raise
+                            # RAM composition and its VRAM transfer are separate
+                            # stages; allow an interrupted in-progress frame to finish.
+                            time.sleep(.03)
                 def move(x,y):
                     while pos!=[x,y]:
                         dx=max(-80,min(80,x-pos[0]));dy=max(-80,min(80,y-pos[1]))
@@ -83,13 +92,13 @@ def main():
                 click(702,275);state("windows=false/false","top=9");composite()
                 click(700,450,"right");state("menu=true");composite()
                 click(630,465);state("windows=true/true","pos=100,140;300,210","menu=false","clicks=1/1");composite()
-                move(140,155);button("left",True);move(0,0);button("left",False);state("pos=0,84;300,210");composite()
+                move(140,155);button("left",True);move(0,0);button("left",False);state("pos=0,24;300,210");composite()
                 click(799,599,"right");state("menu=true");composite()
                 click(630,530);state("pos=100,140;300,210","menu=false");composite()
                 guest.key("esc");guest.wait_for("Returned to text mode.");assert frames()==baseline,"Desktop leaked frames"
                 guest.command("echo desktop survived","\ndesktop survived\n")
                 if disk:guest.command("apps","EDIT.BIN");guest.command("run hello","User program exited with code 0.")
-            offset=len(log());guest.type("desktop\n");until(lambda:"Desktop: frame ready" in log()[offset:],"Desktop restart failed")
+            offset=len(log());guest.type("windowtest\n");until(lambda:"Desktop: frame ready" in log()[offset:],"Desktop restart failed")
             guest.call("inject-nmi");guest.wait_for("System halted.")
             print(f"PASS desktop ({args.vga}): focus/occlusion, both controls, drag capture/bounds, closing/restoring, full VRAM composition checks, repeated exit/frame balance and fatal recovery")
         finally:

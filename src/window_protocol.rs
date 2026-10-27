@@ -53,6 +53,9 @@ impl Draw {
         }
     }
     pub fn valid(&self) -> bool {
+        self.valid_for(WIDTH, HEIGHT)
+    }
+    pub fn valid_for(&self, width: u32, height: u32) -> bool {
         if self.color > 0xffffff {
             return false;
         }
@@ -61,8 +64,15 @@ impl Draw {
             1 if self.width == 0 && self.height == 0 && self.length <= 80 => (self.length * 8, 16),
             _ => return false,
         };
-        self.x.checked_add(w).is_some_and(|end| end <= WIDTH)
-            && self.y.checked_add(h).is_some_and(|end| end <= HEIGHT)
+        self.x.checked_add(w).is_some_and(|end| end <= width)
+            && self.y.checked_add(h).is_some_and(|end| end <= height)
     }
 }
 const _: () = assert!(core::mem::size_of::<Event>() == 20 && core::mem::size_of::<Draw>() == 32);
+
+pub fn valid_size(width: u32, height: u32) -> bool {
+    (160..=WIDTH).contains(&width)
+        && (80..=HEIGHT).contains(&height)
+        && width % 8 == 0
+        && height % 16 == 0
+}

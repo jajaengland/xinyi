@@ -9,6 +9,7 @@ def main():
     parser.add_argument("--disk",type=Path,required=True)
     parser.add_argument("--vga",default="cirrus")
     parser.add_argument("--output",type=Path,required=True)
+    parser.add_argument("--desktop",action="store_true",help="Measure Notepad dragging while a concurrent Counter is running")
     parser.add_argument("--check",action="store_true",help="Require a visible cursor throughout sampled drag bursts")
     args=parser.parse_args();qemu=shutil.which("qemu-system-i386") or r"C:\Program Files\qemu\qemu-system-i386.exe"
     parent=ROOT/"target/smoke";parent.mkdir(parents=True,exist_ok=True)
@@ -16,9 +17,30 @@ def main():
         directory=Path(temporary);image=directory/"disk.img";shutil.copyfile(args.disk,image)
         guest=Guest(qemu,None,directory,disk=image,extra_args=["-vga",args.vga])
         try:
-            guest.type("notepad drag.txt\n");deadline=time.monotonic()+20
-            while "nr=61" not in (directory/"debug.log").read_text():
-                assert time.monotonic()<deadline;time.sleep(.01)
+            cursor=[400,300]
+            def move_to(x,y):
+                while cursor!=[x,y]:
+                    dx=max(-80,min(80,x-cursor[0]));dy=max(-80,min(80,y-cursor[1]));guest.call("input-send-event",{"events":[{"type":"rel","data":{"axis":"x","value":dx}},{"type":"rel","data":{"axis":"y","value":dy}}]});cursor[0]+=dx;cursor[1]+=dy;time.sleep(.025)
+            def click_at(x,y):
+                move_to(x,y)
+                for down in [True,False]:guest.call("input-send-event",{"events":[{"type":"btn","data":{"button":"left","down":down}}]});time.sleep(.06)
+            if args.desktop:
+                guest.type("desktop\n");deadline=time.monotonic()+20
+                while "Desktop scheduler: ready" not in (directory/"debug.log").read_text():
+                    assert time.monotonic()<deadline;time.sleep(.01)
+                from folders_qemu import inspect_tree
+                names=sorted(k.split('/')[-1][:-4] for k in inspect_tree(image,2048)[0] if k.startswith('APPS/') and k.count('/')==1 and k.endswith('.BIN'))
+                for name in ["NOTEPAD","COUNTER"]:
+                    click_at(40,11);click_at(40,30+4+names.index(name)*24+12);deadline=time.monotonic()+20
+                    while (directory/"debug.log").read_text().count("Multiwindow: open")<(1 if name=="NOTEPAD" else 2):
+                        assert time.monotonic()<deadline;time.sleep(.01)
+                click_at(110,11)
+                start_x,start_y=56,124
+            else:
+                guest.type("notepad drag.txt\n");deadline=time.monotonic()+20
+                while "nr=61" not in (directory/"debug.log").read_text():
+                    assert time.monotonic()<deadline;time.sleep(.01)
+                start_x,start_y=72,88
             log=(directory/"debug.log").read_text()
             if args.vga=="std":
                 dev=next(d for d in guest.call("query-pci")[0]["devices"] if d.get("id",{}).get("vendor")==0x1234)
@@ -30,26 +52,28 @@ def main():
                 path=directory/"memory.bin";guest.call("human-monitor-command",{"command-line":f'pmemsave {address:#x} {length} "{path.as_posix()}"'});return path.read_bytes()
             def motion(dx,dy):guest.call("input-send-event",{"events":[{"type":"rel","data":{"axis":"x","value":dx}},{"type":"rel","data":{"axis":"y","value":dy}}]})
             def button(down):guest.call("input-send-event",{"events":[{"type":"btn","data":{"button":"left","down":down}}]})
-            for dx,dy in [(-80,-80),(-80,-80),(-80,-37),(-60,0)]:motion(dx,dy);time.sleep(.05)
+            pointer_x=start_x+28;pointer_y=start_y+15
+            move_to(pointer_x,pointer_y)
             button(True);time.sleep(.1)
             def rgb(data,x):return int.from_bytes(data[x*size:(x+1)*size],"little")
-            samples=[];absent=0;visible_samples=0;x=72;cursor=100
+            samples=[];absent=0;visible_samples=0;x=start_x;cursor=pointer_x
             for cycle in range(8):
                 delta=1 if cycle%2==0 else -1;x+=20*delta;cursor+=20*delta;started=time.monotonic()
                 for _ in range(20):motion(delta,0);time.sleep(.001)
                 deadline=time.monotonic()+10
                 while True:
-                    band=memory(base+103*pitch,pitch*3)
-                    pointer=any(rgb(band,c)==0 and rgb(band[2*pitch:],c+1)==0xffffff for c in range(80,150))
+                    band=memory(base+pointer_y*pitch,pitch*3)
+                    pointer=any(rgb(band,c)==0 and rgb(band[2*pitch:],c+1)==0xffffff for c in range(pointer_x-20,pointer_x+50))
                     absent+=not pointer;visible_samples+=1
-                    bottom=memory(base+531*pitch,800*size)
+                    bottom=memory(base+(start_y+443)*pitch,800*size)
                     columns=[c for c in range(800) if rgb(bottom,c)==0x40]
                     if columns==list(range(x+6,x+662)) and rgb(band,cursor)==0 and rgb(band[2*pitch:],cursor+1)==0xffffff:break
                     assert time.monotonic()<deadline,"Window/cursor failed to catch up";time.sleep(.002)
                 samples.append((time.monotonic()-started)*1000)
-            button(False);time.sleep(.1);guest.key("ctrl-q");guest.wait_for("User program exited with code 0.")
+            button(False);time.sleep(.1)
+            if not args.desktop:guest.key("ctrl-q");guest.wait_for("User program exited with code 0.")
         finally:guest.close()
-    report={"vga":args.vga,"drag_latency_ms":samples,"median_ms":statistics.median(samples),"cursor_absent_samples":absent,"samples":visible_samples}
+    report={"vga":args.vga,"desktop":args.desktop,"drag_latency_ms":samples,"median_ms":statistics.median(samples),"cursor_absent_samples":absent,"samples":visible_samples}
     args.output.write_text(json.dumps(report,indent=2));print(json.dumps(report))
     if args.check:assert absent==0,"Cursor disappeared during sampled window transfers"
 

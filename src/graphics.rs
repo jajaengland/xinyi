@@ -123,9 +123,9 @@ fn draw_scene() {
     let font=unsafe {&*(session.font.base() as *const [u8;4096])};
     let mut canvas=Canvas::new(data,WIDTH,HEIGHT,WIDTH).unwrap();
     canvas.rect(0,0,800,600,0x176c70);
-    canvas.rect(0,570,800,30,0xc4c4c4);canvas.rect(10,576,80,18,0xaaaaaa);
-    canvas.text(22,577,0,b"XINYI",font);
-    canvas.text(110,577,0x303030,b"Graphics foundation - keyboard demo",font);
+    canvas.rect(0,0,800,30,0xc4c4c4);canvas.rect(10,6,80,18,0xaaaaaa);
+    canvas.text(22,7,0,b"XINYI",font);
+    canvas.text(110,7,0x303030,b"Graphics foundation - keyboard demo",font);
     canvas.rect(108,88,600,450,0x10383a);canvas.rect(100,80,600,450,0xc4c4c4);
     canvas.rect(104,84,592,25,0x153e8e);canvas.text(115,89,0xffffff,b"Xinyi graphics test",font);
     canvas.rect(674,88,18,17,0xc4c4c4);canvas.text(679,89,0,b"X",font);
@@ -323,17 +323,19 @@ pub fn mouse_demo() {
     crate::debug::write_str("Mouse: text mode restored\n");crate::println!("Returned to text mode.");
 }
 
-fn desktop_scene(state:&crate::desktop_ui::State) {
+fn desktop_scene(state:&crate::desktop_ui::State,catalog:&crate::app_catalog::Catalog,message:&[u8]) {
     use crate::desktop_ui::{Target,MENU_W,MENU_H};
     let session=unsafe {(&*core::ptr::addr_of!(SESSION)).as_ref().unwrap()};
     let data=unsafe {core::slice::from_raw_parts_mut(session.back.base() as *mut u32,WIDTH*HEIGHT)};
     let font=&crate::ui_font::FONT;
     let mut canvas=Canvas::new(data,WIDTH,HEIGHT,WIDTH).unwrap();
     canvas.rect(0,0,800,600,0x000080);
-    canvas.text(24,24,0xffffff,b"Xinyi desktop test",font);
-    canvas.text(24,52,0xffffff,b"Drag title bars. Click to focus. Right-click to restore windows.",font);
-    canvas.rect(0,576,800,24,0xc4c4c4);canvas.rect(0,576,800,2,0xffffff);
-    canvas.text(12,581,0,b"Desktop test | ESC returns to the shell",font);
+    canvas.text(24,40,0xffffff,b"Xinyi desktop test",font);
+    canvas.text(24,64,0xffffff,b"Drag title bars. Click to focus. Right-click to restore windows.",font);
+    canvas.rect(0,0,800,24,0xc4c4c4);canvas.rect(0,22,800,2,0xffffff);
+    let apps=crate::desktop_ui::State::apps_button();
+    bevel(&mut canvas,apps.x,apps.y,apps.w,apps.h,state.apps_open||(state.capture==Some(Target::AppsButton)&&state.hit()==Some(Target::AppsButton)));
+    canvas.text(apps.x+16,apps.y+2,0,b"Apps",font);canvas.text(96,5,0,message,font);
     for &id in &state.order {
         let window=state.windows[id];if !window.visible {continue;}let r=window.rect;
         canvas.rect(r.x+6,r.y+6,r.w,r.h,0x000040);bevel(&mut canvas,r.x,r.y,r.w,r.h,false);
@@ -359,6 +361,15 @@ fn desktop_scene(state:&crate::desktop_ui::State) {
             for (i,line) in [b"A small start for Xinyi's desktop." as &[u8],b"",b"Drag this title bar to move me.",b"Click a window to bring it forward.",b"Use X to close a window.",b"Right-click to restore both windows."].iter().enumerate() {
                 canvas.text(r.x+16,r.y+48+i as i32*24,0,line,font);
             }
+        }
+    }
+    if state.apps_open {
+        let r=state.apps_menu();canvas.rect(r.x+6,r.y+6,r.w,r.h,0x000040);bevel(&mut canvas,r.x,r.y,r.w,r.h,false);
+        if catalog.len==0 {canvas.text(r.x+12,r.y+8,0x707070,b"No applications",font);}
+        for (i,entry) in catalog.entries[..catalog.len].iter().enumerate() {
+            let y=r.y+4+i as i32*24;let hover=state.hit()==Some(Target::App(i));
+            if hover {canvas.rect(r.x+4,y,r.w-8,24,0x153e8e);}
+            canvas.text(r.x+12,y+4,if hover {0xffffff}else{0},&entry.label[..entry.label_len],font);
         }
     }
     if let Some((x,y))=state.menu {
@@ -393,52 +404,119 @@ fn desktop_damage(old:&crate::desktop_ui::State,new:&crate::desktop_ui::State) {
             }
         }}
     }
+    if old.apps_open!=new.apps_open||old.capture!=new.capture {present(crate::desktop_ui::State::apps_button());}
+    // Repair an old popup even when it was dismissed, then present the new one
+    // last so a control/title repair cannot draw through it.
+    for state in [old,new] {if state.apps_open {let r=state.apps_menu();present(Rect{w:r.w+6,h:r.h+6,..r});}}
     // Menus are composited last. Re-present even an unchanged menu after a
     // window/control repair so nothing can paint over this topmost overlay.
     for (x,y) in [old.menu,new.menu].into_iter().flatten() {present(Rect{x,y,w:MENU_W+6,h:MENU_H+6});}
 }
 pub fn desktop_demo() {
     if !crate::mouse::init() {crate::println!("PS/2 mouse unavailable (or initialization timed out).");return;}
-    if let Err(message)=start() {crate::println!("{}",message);return;}
-    let mut state=crate::desktop_ui::State::new(crate::mouse::discard());
-    desktop_scene(&state);present_rect(0,0,800,600);pointer(state.x,state.y);
-    crate::debug::write_fmt(format_args!("Desktop: backbuffer={:08x}\n",unsafe {(&*core::ptr::addr_of!(SESSION)).as_ref().unwrap().back.base()}));
-    crate::debug::write_str("Desktop: frame ready\n");
+    let mut state=crate::desktop_ui::State::new(crate::mouse::discard());let mut message=[b' ';72];
+    let initial=b"Apps launches programs. ESC returns to the shell.";message[..initial.len()].copy_from_slice(initial);
     loop {
+        let mut catalog=crate::app_catalog::Catalog::new();
+        let result=crate::diskfs::list("/APPS",|name,_,directory|catalog.add(name,directory));catalog.sort();state.app_count=catalog.len;
+        if result.is_err() {message.fill(b' ');let text=b"Apps unavailable. ESC returns to shell for disks/use.";message[..text.len()].copy_from_slice(text);}
+        else if catalog.truncated {message.fill(b' ');let text=b"Showing first 16 .BIN files in /APPS.";message[..text.len()].copy_from_slice(text);}
+        let Some(index)=desktop_session(&mut state,&catalog,&message) else{return;};
+        let Some(entry)=catalog.entries.get(index).filter(|_|index<catalog.len) else{return;};
+        let name=core::str::from_utf8(&entry.path[..entry.path_len]).unwrap();
+        crate::debug::write_fmt(format_args!("Desktop: launch {}\n",name));
+        let ok=crate::launch_program(name,"");message.fill(b' ');
+        let prefix=if ok {b"Returned from " as &[u8]}else{b"Cannot launch "};message[..prefix.len()].copy_from_slice(prefix);
+        let end=prefix.len()+entry.label_len;message[prefix.len()..end].copy_from_slice(&entry.label[..entry.label_len]);
+        let suffix=if ok {b". Apps to run another." as &[u8]}else{b"; ESC shows details."};message[end..end+suffix.len()].copy_from_slice(suffix);
+    }
+}
+fn desktop_session(state:&mut crate::desktop_ui::State,catalog:&crate::app_catalog::Catalog,message:&[u8])->Option<usize> {
+    if let Err(reason)=start() {crate::println!("{}",reason);return None;}
+    state.buttons=crate::mouse::discard();state.capture=None;state.launch=None;state.menu=None;state.apps_open=false;
+    desktop_scene(state,catalog,message);present_rect(0,0,800,600);pointer(state.x,state.y);
+    crate::debug::write_fmt(format_args!("Desktop: backbuffer={:08x}\n",unsafe {(&*core::ptr::addr_of!(SESSION)).as_ref().unwrap().back.base()}));
+    crate::debug::write_fmt(format_args!("Desktop: session apps={} pos={},{};{},{} clicks={}/{}\n",catalog.len,state.windows[0].rect.x,state.windows[0].rect.y,state.windows[1].rect.x,state.windows[1].rect.y,state.clicks[0],state.clicks[1]));
+    crate::debug::write_str("Desktop: frame ready\n");
+    'desktop: loop {
         let mut quit=false;
         for _ in 0..128 {if crate::keyboard::queued_scancodes()==0 {break;}
             if crate::keyboard::poll_key()==Some(crate::keyboard::Key::Char('\u{1b}')) {quit=true;break;}
         }
         if quit {break;}
         for _ in 0..128 {
-            let Some(event)=crate::mouse::poll() else{break;};let old=state;
+            let Some(event)=crate::mouse::poll() else{break;};let old=*state;
             let mut changed=state.update(event);
             if !event.lost&&event.buttons==old.buttons {for _ in 0..63 {
                 if !crate::mouse::motion_before(event.buttons,crate::keyboard::next_order()) {break;}
                 changed|=state.update(crate::mouse::poll().unwrap());
             }}
-            if changed {desktop_scene(&state);}
+            if state.launch.is_some() {break 'desktop;}
+            if changed {desktop_scene(state,catalog,message);}
             move_pointer((old.x,old.y),(state.x,state.y));
             if changed {
-                desktop_damage(&old,&state);
-                crate::debug::write_fmt(format_args!("Desktop: windows={}/{} top={} clicks={}/{} pos={},{};{},{} menu={}\n",state.windows[0].visible,state.windows[1].visible,state.focus.map_or(9,|i|i),state.clicks[0],state.clicks[1],state.windows[0].rect.x,state.windows[0].rect.y,state.windows[1].rect.x,state.windows[1].rect.y,state.menu.is_some()));
+                desktop_damage(&old,state);
+                crate::debug::write_fmt(format_args!("Desktop: windows={}/{} top={} clicks={}/{} pos={},{};{},{} menu={} apps={}\n",state.windows[0].visible,state.windows[1].visible,state.focus.map_or(9,|i|i),state.clicks[0],state.clicks[1],state.windows[0].rect.x,state.windows[0].rect.y,state.windows[1].rect.x,state.windows[1].rect.y,state.menu.is_some(),state.apps_open));
             }
         }
         crate::idle::wait_for_pointer();
     }
-    crate::mouse::discard();restore();crate::debug::write_str("Desktop: text mode restored\n");crate::println!("Returned to text mode.");
+    let launch=state.launch.take();crate::mouse::discard();restore();crate::debug::write_str("Desktop: text mode restored\n");
+    if launch.is_none() {crate::println!("Returned to text mode.");}launch
 }
 
 pub(crate) fn app_scene(state:&crate::app_window_ui::State,title:&[u8],surface:&[u32]) {
     let session=unsafe {(&*core::ptr::addr_of!(SESSION)).as_ref().unwrap()};
     let data=unsafe {core::slice::from_raw_parts_mut(session.back.base() as *mut u32,WIDTH*HEIGHT)};
     let font=&crate::ui_font::FONT;let mut canvas=Canvas::new(data,WIDTH,HEIGHT,WIDTH).unwrap();
-    canvas.rect(0,0,800,600,0x000080);canvas.rect(0,576,800,24,0xc4c4c4);canvas.rect(0,576,800,2,0xffffff);
-    canvas.text(12,581,0,b"Xinyi | Foreground application",font);
+    canvas.rect(0,0,800,600,0x000080);canvas.rect(0,0,800,24,0xc4c4c4);canvas.rect(0,22,800,2,0xffffff);
+    canvas.text(12,5,0,b"Xinyi | Foreground application",font);
     let r=state.window.rect;canvas.rect(r.x+6,r.y+6,r.w,r.h,0x000040);bevel(&mut canvas,r.x,r.y,r.w,r.h,false);
     let bar=state.window.title();canvas.rect(bar.x,bar.y,bar.w,bar.h,if state.focused {0x153e8e}else{0x707070});canvas.text(r.x+12,r.y+9,0xffffff,title,font);
     let close=state.window.close();bevel(&mut canvas,close.x,close.y,close.w,close.h,state.close_pressed());let d=if state.close_pressed() {1}else{0};
     canvas.line((close.x+5+d,close.y+5+d),(close.x+12+d,close.y+12+d),0);canvas.line((close.x+12+d,close.y+5+d),(close.x+5+d,close.y+12+d),0);
     drop(canvas);let client=state.client();
-    for y in 0..400 {let at=(client.y as usize+y)*WIDTH+client.x as usize;data[at..at+640].copy_from_slice(&surface[y*640..(y+1)*640]);}
+    copy_client(data,client,surface);
+}
+
+#[derive(Clone,Copy)]
+pub(crate) struct WindowView<'a> {pub ui:crate::app_window_ui::State,pub title:&'a[u8],pub pixels:&'a[u32]}
+pub(crate) fn multi_scene(views:&[Option<WindowView<'_>>;4],order:&[usize;4],shell:Option<&crate::desktop_shell::Shell>) {
+    let session=unsafe {(&*core::ptr::addr_of!(SESSION)).as_ref().unwrap()};
+    let data=unsafe {core::slice::from_raw_parts_mut(session.back.base() as *mut u32,WIDTH*HEIGHT)};let font=&crate::ui_font::FONT;
+    {let mut c=Canvas::new(data,WIDTH,HEIGHT,WIDTH).unwrap();c.rect(0,0,800,600,0x000080);c.text(24,40,0xffffff,if shell.is_some() {b"Xinyi desktop"}else{b"Xinyi multitasking"},font);c.text(24,64,0xffffff,shell.map_or(b"Drag windows. ESC exits demo. Ctrl+Alt+K stops focused app." as &[u8],|s|&s.message[..s.length]),font);c.rect(0,0,800,24,0xc4c4c4);c.rect(0,22,800,2,0xffffff);c.text(12,5,0,b"Independent programs | Keyboard goes to the focused window",font);}
+    for &index in order {let Some(view)=views[index] else{continue;};if !view.ui.window.visible {continue;}let r=view.ui.window.rect;
+        {let mut c=Canvas::new(data,WIDTH,HEIGHT,WIDTH).unwrap();c.rect(r.x+6,r.y+6,r.w,r.h,0x000040);bevel(&mut c,r.x,r.y,r.w,r.h,false);let bar=view.ui.window.title();c.rect(bar.x,bar.y,bar.w,bar.h,if view.ui.focused {0x153e8e}else{0x707070});c.text(r.x+12,r.y+9,0xffffff,view.title,font);
+        if view.ui.minimizable {let m=view.ui.window.minimize();bevel(&mut c,m.x,m.y,m.w,m.h,view.ui.minimize_pressed());c.rect(m.x+4,m.y+12,10,2,0);}
+        let close=view.ui.window.close();bevel(&mut c,close.x,close.y,close.w,close.h,view.ui.close_pressed());c.line((close.x+5,close.y+5),(close.x+12,close.y+12),0);c.line((close.x+12,close.y+5),(close.x+5,close.y+12),0);}
+        let client=view.ui.client();copy_client(data,client,view.pixels);
+    }
+    if let Some(shell)=shell {
+        use crate::desktop_shell::{Shell,Hit};
+        let mut c=Canvas::new(data,WIDTH,HEIGHT,WIDTH).unwrap();
+        c.rect(0,0,800,24,0xc4c4c4);c.rect(0,22,800,2,0xffffff);
+        let r=Shell::apps();bevel(&mut c,r.x,r.y,r.w,r.h,shell.open||shell.capture==Some(Hit::Apps));c.text(r.x+16,r.y+2,0,b"Apps",font);
+        for (i,task) in shell.tasks.iter().enumerate() {if let Some(task)=task {let r=Shell::task(i);bevel(&mut c,r.x,r.y,r.w,r.h,shell.focused==Some(task.pid));c.text(r.x+6,r.y+2,0,&task.name[..task.length],font);}}
+        let r=Shell::exit();bevel(&mut c,r.x,r.y,r.w,r.h,shell.capture==Some(Hit::Exit));c.text(r.x+8,r.y+2,0,b"Exit",font);
+        if shell.open {let r=shell.menu();c.rect(r.x+6,r.y+6,r.w,r.h,0x000040);bevel(&mut c,r.x,r.y,r.w,r.h,false);
+            if shell.catalog.len==0 {c.text(r.x+12,r.y+8,0,b"No apps found",font);}
+            for(i,entry) in shell.catalog.entries[..shell.catalog.len].iter().enumerate() {let y=r.y+4+i as i32*24;let hover=shell.hit()==Some(Hit::App(i));if hover {c.rect(r.x+4,y,r.w-8,24,0x153e8e);}c.text(r.x+12,y+4,if hover {0xffffff}else{0},&entry.label[..entry.label_len],font);}
+        }
+    }
+
+}
+
+pub(crate) fn terminal_cells(pixels:&mut[u32],cells:&[crate::pty_model::Cell;2000],rows:u32,cursor:Option<(usize,usize)>) {
+ let colors=[0x000000,0x0000aa,0x00aa00,0x00aaaa,0xaa0000,0xaa00aa,0xaa5500,0xaaaaaa,0x555555,0x5555ff,0x55ff55,0x55ffff,0xff5555,0xff55ff,0xffff55,0xffffff];
+ let session=unsafe {(&*core::ptr::addr_of!(SESSION)).as_ref().unwrap()};let font=unsafe {&*(session.font.base() as *const [u8;4096])};let mut canvas=Canvas::new(pixels,640,400,640).unwrap();
+ for y in 0..25 {if rows&(1<<y)==0 {continue;}for x in 0..80 {let cell=cells[y*80+x];canvas.rect(x as i32*8,y as i32*16,8,16,colors[(cell.color>>4) as usize]);canvas.glyph(x as i32*8,y as i32*16,colors[(cell.color&15) as usize],cell.ch,font);}}
+ if let Some((x,y))=cursor {if rows&(1<<y)!=0 {canvas.rect(x as i32*8,y as i32*16+14,8,2,colors[(cells[y*80+x].color&15) as usize]);}}
+}
+
+pub(crate) fn font_address()->u32 {unsafe {(&*core::ptr::addr_of!(SESSION)).as_ref().map_or(0,|s|s.font.base())}}
+
+fn copy_client(data:&mut[u32],r:crate::desktop_ui::Rect,pixels:&[u32]) {
+ let left=r.x.max(0);let right=(r.x+r.w).min(800);let top=r.y.max(24);let bottom=(r.y+r.h).min(600);
+ if left>=right||top>=bottom{return;}let n=(right-left) as usize;
+ for y in top..bottom {let dst=y as usize*800+left as usize;let src=((y-r.y)*r.w+left-r.x) as usize;data[dst..dst+n].copy_from_slice(&pixels[src..src+n]);}
 }

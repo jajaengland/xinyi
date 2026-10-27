@@ -195,8 +195,9 @@ impl Write for Writer {
 static mut WRITER: Writer = Writer::new();
 static mut CURSOR_VISIBLE: bool = true;
 
-pub fn cursor_visible() -> bool { unsafe { CURSOR_VISIBLE } }
+pub fn cursor_visible() -> bool {if let Some(c)=crate::pty::console() {return c.visible;} unsafe { CURSOR_VISIBLE } }
 pub fn set_cursor_visible(visible: bool) {
+    if let Some(c)=crate::pty::console() {c.visible=visible;c.touch();return;}
     unsafe {
         core::arch::asm!("out dx, al", in("dx") VGA_CONTROL, in("al") 0x0au8, options(nomem, nostack, preserves_flags));
         let mut value: u8;
@@ -208,6 +209,7 @@ pub fn set_cursor_visible(visible: bool) {
 }
 
 pub fn clear_screen() {
+    if let Some(c)=crate::pty::console() {c.clear();return;}
     unsafe {
         let writer = core::ptr::addr_of_mut!(WRITER);
         (*writer).clear_screen();
@@ -215,6 +217,7 @@ pub fn clear_screen() {
 }
 
 pub fn set_color(color: u8) {
+    if let Some(c)=crate::pty::console() {c.color=color;return;}
     unsafe {
         let writer = core::ptr::addr_of_mut!(WRITER);
         (*writer).set_color(color);
@@ -222,6 +225,7 @@ pub fn set_color(color: u8) {
 }
 
 pub fn color() -> u8 {
+    if let Some(c)=crate::pty::console() {return c.color;}
     unsafe { (*core::ptr::addr_of!(WRITER)).color }
 }
 
@@ -229,6 +233,7 @@ pub fn color() -> u8 {
 /// The caller validates the entire span before the first cell is changed.
 pub fn draw_text(column: usize, row: usize, color: u8, bytes: &[u8]) {
     assert!(column < WIDTH && row < HEIGHT && bytes.len() <= WIDTH - column);
+    if let Some(c)=crate::pty::console() {c.draw(column,row,color,bytes);return;}
     for (index, &byte) in bytes.iter().enumerate() {
         let offset = (row * WIDTH + column + index) * 2;
         let character = if byte < 32 || byte == 127 { b' ' } else { byte };
@@ -240,6 +245,7 @@ pub fn draw_text(column: usize, row: usize, color: u8, bytes: &[u8]) {
 }
 
 pub fn backspace() {
+    if let Some(c)=crate::pty::console() {c.write(&[8]);return;}
     unsafe {
         let writer = core::ptr::addr_of_mut!(WRITER);
         (*writer).backspace();
@@ -248,6 +254,7 @@ pub fn backspace() {
 
 // Move the hardware cursor without erasing or rewriting text.
 pub fn move_cursor(column: usize, row: usize) {
+    if let Some(c)=crate::pty::console() {c.position(column,row);return;}
     unsafe {
         let writer = core::ptr::addr_of_mut!(WRITER);
         (*writer).move_cursor(column, row);
@@ -255,6 +262,7 @@ pub fn move_cursor(column: usize, row: usize) {
 }
 
 pub fn cursor_position() -> (usize, usize) {
+    if let Some(c)=crate::pty::console() {return (c.x,c.y);}
     unsafe {
         let writer = core::ptr::addr_of!(WRITER);
         ((*writer).column, (*writer).row)
@@ -262,12 +270,14 @@ pub fn cursor_position() -> (usize, usize) {
 }
 
 pub fn _print(arguments: fmt::Arguments) {
+    if crate::pty::current().is_some() {crate::pty::print(arguments);return;}
     unsafe {
         let writer = core::ptr::addr_of_mut!(WRITER);
         let _ = (*writer).write_fmt(arguments);
     }
 }
 pub fn write_bytes(bytes: &[u8]) {
+    if crate::pty::current().is_some() {crate::pty::write(bytes);return;}
     let writer = core::ptr::addr_of_mut!(WRITER);
     for &byte in bytes {
         unsafe { (*writer).write_byte(byte); }
@@ -275,6 +285,7 @@ pub fn write_bytes(bytes: &[u8]) {
 }
 /// Number of times the VGA text buffer has scrolled since startup or clear.
 pub fn scroll_count() -> usize {
+    if let Some(c)=crate::pty::console() {return c.scrolls;}
     unsafe {
         let writer = core::ptr::addr_of!(WRITER);
         (*writer).scroll_count

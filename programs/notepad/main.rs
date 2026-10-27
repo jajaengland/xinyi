@@ -36,6 +36,9 @@ struct Editor {
     cache: [[u8; 80]; 22],
     caret: Option<usize>,
     modal: bool,
+    anchor: Option<usize>,
+    selecting: bool,
+    marks: [(u8, u8); 22],
 }
 impl Editor {
     fn new() -> Self {
@@ -55,13 +58,67 @@ impl Editor {
             cache: [[0; 80]; 22],
             caret: None,
             modal: false,
+            anchor: None,
+            selecting: false,
+            marks: [(0, 0); 22],
         }
+    }
+    fn range(&self) -> Option<(usize, usize)> {
+        self.anchor
+            .filter(|&a| a != self.doc.cursor)
+            .map(|a| (a.min(self.doc.cursor), a.max(self.doc.cursor)))
+    }
+    fn replace(&mut self, text: &[u8]) {
+        let (a, b) = self.range().unwrap_or((self.doc.cursor, self.doc.cursor));
+        if self.doc.replace(a, b, text) {
+            self.anchor = None;
+            self.selecting = false;
+            self.message = b"Edited";
+        } else {
+            self.message = b"File full: maximum 1024 bytes; document retained";
+        }
+    }
+    fn copy(&mut self, cut: bool) {
+        let Some((a, b)) = self.range() else {
+            self.message = b"Select text first (drag, Shift+arrows, or Ctrl+A)";
+            return;
+        };
+        if xinyi::clipboard_set(&self.doc.data[a..b]) < 0 {
+            self.message = b"Clipboard copy failed";
+            return;
+        }
+        if cut {
+            self.replace(b"");
+            self.message = b"Cut to clipboard";
+        } else {
+            self.message = b"Copied to clipboard";
+        }
+    }
+    fn paste(&mut self) {
+        let mut raw = [0; 1024];
+        let n = xinyi::clipboard_get(&mut raw);
+        if n < 0 {
+            self.message = b"Clipboard read failed";
+            return;
+        }
+        if n == 0 {
+            self.message = b"Clipboard is empty";
+            return;
+        }
+        let mut text = [0; 1024];
+        let Some(n) = model::normalize(&raw[..n as usize], &mut text) else {
+            self.message = b"Clipboard text cannot fit in this document";
+            return;
+        };
+        self.replace(&text[..n]);
     }
     fn action(&mut self, action: Action) -> bool {
         match action {
             Action::Quit => return true,
             Action::New => {
                 self.doc = Document::new();
+                self.anchor = None;
+                self.selecting = false;
                 self.name_len = 0;
                 self.top = 0;
                 self.message = b"New file";
@@ -137,6 +194,8 @@ impl Editor {
         self.name = name;
         self.name_len = length;
         self.top = 0;
+        self.anchor = None;
+        self.selecting = false;
         self.mode = Mode::Edit;
         if result >= 0 {
             self.message = b"Opened (CRLF normalized, tabs expanded)";
@@ -201,10 +260,24 @@ impl Editor {
                 _ => (),
             },
             Mode::Edit => {
-                if event & key::CTRL != 0 {
+                let ctrl = event & key::CTRL != 0;
+                let shift = event & key::SHIFT != 0;
+                if event & key::ALT != 0 {
+                    return false;
+                }
+                if ctrl {
                     match code {
-                        115 | 83 => {
-                            if event & key::SHIFT != 0 {
+                        65 | 97 => {
+                            self.anchor = Some(0);
+                            self.doc.cursor = self.doc.length;
+                            return false;
+                        }
+                        67 | 99 => {
+                            self.copy(false);
+                            return false;
+                        }
+                        83 | 115 => {
+                            if shift {
                                 self.mode = Mode::Name(true);
                                 self.prompt_len = 0;
                                 self.after_save = None;
@@ -212,49 +285,97 @@ impl Editor {
                             } else {
                                 return self.save(self.name, self.name_len);
                             }
+                            return false;
                         }
-                        113 | 81 => return self.request(Action::Quit),
-                        111 | 79 => return self.request(Action::Open),
-                        110 | 78 => return self.request(Action::New),
-                        122 | 90 | 121 | 89 => self.doc.undo(),
-                        key::HOME => self.doc.cursor = 0,
-                        key::END => self.doc.cursor = self.doc.length,
-                        _ => (),
+                        88 | 120 => {
+                            self.copy(true);
+                            return false;
+                        }
+                        86 | 118 => {
+                            self.paste();
+                            return false;
+                        }
+                        81 | 113 => return self.request(Action::Quit),
+                        79 | 111 => return self.request(Action::Open),
+                        78 | 110 => return self.request(Action::New),
+                        90 | 122 | 89 | 121 => {
+                            self.doc.undo();
+                            self.anchor = None;
+                            self.selecting = false;
+                            return false;
+                        }
+                        key::HOME | key::END => (),
+                        _ => return false,
                     }
-                } else if event & key::ALT == 0 {
+                }
+                let navigation = matches!(
+                    code,
+                    key::LEFT
+                        | key::RIGHT
+                        | key::UP
+                        | key::DOWN
+                        | key::HOME
+                        | key::END
+                        | key::PAGE_UP
+                        | key::PAGE_DOWN
+                );
+                if navigation {
+                    let range = self.range();
+                    let old = self.doc.cursor;
+                    if shift {
+                        if self.anchor.is_none() {
+                            self.anchor = Some(old);
+                        }
+                    } else {
+                        self.anchor = None;
+                    }
                     match code {
-                        27 => return self.request(Action::Quit),
-                        key::LEFT => self.doc.cursor = self.doc.cursor.saturating_sub(1),
-                        key::RIGHT => self.doc.cursor = (self.doc.cursor + 1).min(self.doc.length),
+                        key::LEFT => {
+                            self.doc.cursor = if !shift {
+                                range.map_or(old.saturating_sub(1), |r| r.0)
+                            } else {
+                                old.saturating_sub(1)
+                            }
+                        }
+                        key::RIGHT => {
+                            self.doc.cursor = if !shift {
+                                range.map_or((old + 1).min(self.doc.length), |r| r.1)
+                            } else {
+                                (old + 1).min(self.doc.length)
+                            }
+                        }
                         key::UP => self.doc.vertical(-1),
                         key::DOWN => self.doc.vertical(1),
                         key::PAGE_UP => self.doc.vertical(-22),
                         key::PAGE_DOWN => self.doc.vertical(22),
                         key::HOME => {
-                            let (row, _) = self.doc.position(self.doc.cursor);
-                            self.doc.cursor = self.doc.offset(row, 0);
+                            let (row, _) = self.doc.position(old);
+                            self.doc.cursor = if ctrl { 0 } else { self.doc.offset(row, 0) };
                         }
                         key::END => {
-                            let (row, _) = self.doc.position(self.doc.cursor);
-                            self.doc.cursor = self.doc.offset(row, 80);
+                            let (row, _) = self.doc.position(old);
+                            self.doc.cursor = if ctrl {
+                                self.doc.length
+                            } else {
+                                self.doc.offset(row, 80)
+                            };
                         }
-                        8 => self.doc.delete(true),
-                        key::DELETE => self.doc.delete(false),
-                        9 => {
-                            if !self.doc.insert(b"    ") {
-                                self.message = b"File full: maximum 1024 bytes";
+                        _ => (),
+                    }
+                } else {
+                    match code {
+                        27 => return self.request(Action::Quit),
+                        8 | key::DELETE => {
+                            if self.range().is_some() {
+                                self.replace(b"");
+                            } else {
+                                self.doc.delete(code == 8);
+                                self.anchor = None;
                             }
                         }
-                        10 => {
-                            if !self.doc.insert(b"\n") {
-                                self.message = b"File full: maximum 1024 bytes";
-                            }
-                        }
-                        32..=126 => {
-                            if !self.doc.insert(&[code as u8]) {
-                                self.message = b"File full: maximum 1024 bytes";
-                            }
-                        }
+                        9 => self.replace(b"    "),
+                        10 => self.replace(b"\n"),
+                        32..=126 => self.replace(&[code as u8]),
                         _ => (),
                     }
                 }
@@ -281,15 +402,31 @@ impl Editor {
         let mut redraw = false;
         if event.buttons & 1 != 0 && old & 1 == 0 {
             self.capture = hit;
+            self.selecting = false;
             redraw = true;
             if hit.is_none() && event.x >= 0 && event.x < 640 && event.y >= 32 && event.y < 384 {
                 self.doc.cursor = self.doc.offset(
                     self.top + (event.y as usize - 32) / 16,
                     event.x as usize / 8,
                 );
+                self.anchor = Some(self.doc.cursor);
+                self.selecting = true;
             }
         }
+        if self.selecting && (old & 1 != 0 || event.buttons & 1 != 0) {
+            if event.y < 32 {
+                self.top = self.top.saturating_sub(1);
+            } else if event.y >= 384 {
+                self.top = (self.top + 1).min(self.doc.position(self.doc.length).0);
+            }
+            self.doc.cursor = self.doc.offset(
+                self.top + ((event.y.clamp(32, 383) - 32) / 16) as usize,
+                (event.x.clamp(0, 639) / 8) as usize,
+            );
+            redraw = true;
+        }
         if old & 1 != 0 && event.buttons & 1 == 0 {
+            self.selecting = false;
             redraw = true;
             if let Some(button) = self.capture.take() {
                 if Some(button) == hit {
@@ -367,14 +504,17 @@ impl Editor {
         if window::draw(handle, &[Draw::text(424, 8, 0, &name)]) < 0 {
             return false;
         }
-        let caret = if matches!(self.mode, Mode::Edit) {
+        let range = self.range();
+        let caret = if matches!(self.mode, Mode::Edit) && range.is_none() {
             Some(row - self.top)
         } else {
             None
         };
         for y in 0..22 {
             let line = self.doc.screen_row(self.top + y);
+            let mark = range.map_or((0, 0), |(a, b)| self.doc.selection_span(self.top + y, a, b));
             if self.cache[y] != line
+                || self.marks[y] != mark
                 || self.caret == Some(y)
                 || caret == Some(y)
                 || (self.modal && y == 21)
@@ -382,7 +522,21 @@ impl Editor {
                 if window::row(handle, 0, 32 + y as u32 * 16, 0xffffff, 0, &line) < 0 {
                     return false;
                 }
+                if mark.1 > mark.0 {
+                    if window::row(
+                        handle,
+                        mark.0 as u32 * 8,
+                        32 + y as u32 * 16,
+                        0x153e8e,
+                        0xffffff,
+                        &line[mark.0 as usize..mark.1 as usize],
+                    ) < 0
+                    {
+                        return false;
+                    }
+                }
                 self.cache[y] = line;
+                self.marks[y] = mark;
             }
         }
         self.caret = caret;
@@ -403,7 +557,7 @@ impl Editor {
                 handle,
                 &[Draw::rect(shown as u32 * 8, 368, 1, 16, 0xffffff)],
             );
-        } else if matches!(self.mode, Mode::Edit) {
+        } else if matches!(self.mode, Mode::Edit) && range.is_none() {
             window::draw(
                 handle,
                 &[Draw::rect(
@@ -437,7 +591,13 @@ fn main() -> u32 {
     }
     let handle = window::open(b"Notepad");
     if handle < 0 {
-        if handle==-12 {xinyi::print("Cannot open graphical window: not enough memory.\n");}else{xinyi::print("Cannot open graphical window. Boot the BIOS image or use QEMU std VGA.\n");}
+        if handle == -12 {
+            xinyi::print("Cannot open graphical window: not enough memory.\n");
+        } else {
+            xinyi::print(
+                "Cannot open graphical window. Boot the BIOS image or use QEMU std VGA.\n",
+            );
+        }
         return 1;
     }
     if !editor.draw(handle as u32) {
@@ -454,6 +614,7 @@ fn main() -> u32 {
             window::CLOSE => (editor.request(Action::Quit), true),
             window::RESET => {
                 editor.capture = None;
+                editor.selecting = false;
                 editor.mouse_buttons = event.buttons;
                 (false, true)
             }

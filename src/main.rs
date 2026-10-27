@@ -16,6 +16,13 @@ mod user_buffer;
 mod terminal;
 mod speaker;
 mod files_api;
+mod clipboard;
+mod terminal_service;
+mod directory_api;
+mod directory_protocol;
+mod shell;
+mod pty;
+mod pty_model;
 mod bios;
 mod bios_disk;
 mod vbe;
@@ -27,8 +34,15 @@ mod mouse;
 mod mouse_packet;
 mod mouse_ui;
 mod desktop_ui;
+mod desktop_shell;
+mod app_catalog;
+mod cpu_context;
+mod scheduler_model;
+mod multitask;
+mod multi_window;
 mod ui_font;
 mod window_protocol;
+mod window_queue;
 mod app_window_ui;
 mod window_api;
 mod input_order;
@@ -66,7 +80,11 @@ fn print_prompt() {
 // Entries are (command name, usage text, description).
 const COMMANDS: &[(&str, &str, &str)] = &[
     ("help", "help", "Show available commands"),
-    ("desktop", "desktop", "Test draggable, overlapping windows; Escape exits"),
+    ("multitask", "multitask [hog|fault|check|wait]", "Run two isolated counter programs concurrently"),
+    ("files", "files", "Open the file manager"),
+    ("terminal", "terminal", "Open a graphical terminal window"),
+    ("desktop", "desktop", "Open the multitasking desktop and Apps menu"),
+    ("windowtest", "windowtest", "Run the legacy window/launcher diagnostic"),
     ("mouse", "mouse", "Test PS/2 mouse, buttons and right-click menu; Escape exits"),
     ("graphics", "graphics", "Test framebuffer graphics; Escape returns to text"),
     ("bios", "bios", "Show boot-firmware disk and VESA diagnostics"),
@@ -139,9 +157,11 @@ macro_rules! println {
     }};
 }
 
-fn launch_program(name:&str,arguments:&str) {
-    if arguments.len()>128 {println!("Program arguments exceed 128 bytes.");return;}
-    let Some(staging)=loader::Frames::new(loader::MAX_BINARY_BYTES/4096) else {println!("Out of memory");return;};
+fn launch_program(name:&str,arguments:&str)->bool {
+    if pty::current().is_some() {return pty::launch(name,arguments);}
+    if name.eq_ignore_ascii_case("terminal")||name.eq_ignore_ascii_case("terminal.bin") {multitask::terminal_desktop();return true;}
+    if arguments.len()>128 {println!("Program arguments exceed 128 bytes.");return false;}
+    let Some(staging)=loader::Frames::new(loader::MAX_BINARY_BYTES/4096) else {println!("Out of memory");return false;};
     let data=unsafe {core::slice::from_raw_parts_mut(staging.base() as *mut u8,loader::MAX_BINARY_BYTES)};
     let explicit=name.contains('/')||name.contains('\\');
     let mut path=[0u8;32];
@@ -150,7 +170,7 @@ fn launch_program(name:&str,arguments:&str) {
             Err(fat16::Error::NotFound)=>{
                 let extension=if name.contains('.') {""}else{".bin"};
                 let length=6+name.len()+extension.len();
-                if length>path.len() {println!("Invalid program name.");return;}
+                if length>path.len() {println!("Invalid program name.");return false;}
                 path[..6].copy_from_slice(b"/APPS/");path[6..6+name.len()].copy_from_slice(name.as_bytes());
                 path[6+name.len()..length].copy_from_slice(extension.as_bytes());
                 diskfs::read_program(core::str::from_utf8(&path[..length]).unwrap(),data)
@@ -158,13 +178,13 @@ fn launch_program(name:&str,arguments:&str) {
             result=>result,
         }
     };
-    let size=match result {Ok(0)=>{println!("Program is empty.");return;},Ok(size)=>size,
-        Err(error)=>{println!("Program: {}",error.message());return;}};
-    let Some(mut program)=loader::load_binary(&data[..size]) else {println!("Out of memory");return;};
+    let size=match result {Ok(0)=>{println!("Program is empty.");return false;},Ok(size)=>size,
+        Err(error)=>{println!("Program: {}",error.message());return false;}};
+    let Some(mut program)=loader::load_binary(&data[..size]) else {println!("Out of memory");return false;};
     drop(staging);
     program.arguments[..arguments.len()].copy_from_slice(arguments.as_bytes());program.argument_length=arguments.len();
-    if let Some(pid)=task::create_task(program) {println!("Running process {}...",pid);task::execute(pid);}
-    else {println!("Failed to create task record");}
+    if let Some(pid)=task::create_task(program) {println!("Running process {}...",pid);task::execute(pid);true}
+    else {println!("Failed to create task record");false}
 }
 
 // Position the cursor at a character index within the input line.
@@ -267,7 +287,9 @@ fn run_command(input: &str) {
     if command != "install" || argument != "confirm" {
         installer::cancel();
     }
+    if pty::current().is_some()&&matches!(command,"usermode"|"spawn"|"multitask") {println!("Run this kernel diagnostic from the physical console.");return;}
     match command {
+        "exit"=>{if let Some(id)=pty::current() {pty::exit_shell(id);}else{println!("The physical console has no parent shell.");}},
         "help" => {
             println!("Xinyi commands:");
 
@@ -446,7 +468,9 @@ fn run_command(input: &str) {
             if let Some(drive)=multiboot::bios_drive() {println!("Boot drive: {:02x}; sectors: {}; last disk status: {:02x}",drive,bios_disk::BOOT.block_count(),bios_disk::BOOT.status());}
             match vbe::find_mode() {Ok(mode)=>println!("VBE mode {:04x}: 800x600x{} at {:08x}, pitch {}",mode.number,mode.bpp,mode.base,mode.pitch),Err(message)=>println!("{}",message)}
         },
-        "desktop"=>graphics::desktop_demo(),
+        "multitask"=>multitask::demo(argument),
+        "desktop"=>multitask::desktop(),
+        "windowtest"=>graphics::desktop_demo(),
         "mouse"=>graphics::mouse_demo(),
         "graphics"=>graphics::demo(),
         "apps" => {
@@ -457,8 +481,10 @@ fn run_command(input: &str) {
                 }
             }) { println!("Applications: {}. Use disks and use NUMBER to choose a drive.",error.message()); }
         }
-        "edit" => launch_program("edit", argument),
-        "notepad" => launch_program("notepad", argument),
+        "edit" => {launch_program("edit", argument);},
+        "notepad" => {launch_program("notepad", argument);},
+        "files" => {launch_program("files", argument);},
+        "terminal" => {launch_program("terminal", argument);},
         "disks" => diskfs::list_drives(),
         "use" => match argument.parse::<usize>() {
             Ok(number) => if let Err(error)=diskfs::use_drive(number,true) {println!("Drive: {}",error.message());},
@@ -811,276 +837,12 @@ pub extern "C" fn rust_main(magic: u32, info_addr: u32) -> ! {
     diskfs::startup_mount();
     println!();
 
-    let mut input = [0u8; INPUT_LIMIT];
-    let mut length = 0usize;
-    let mut cursor_position = 0usize;
-
-    let mut history = [[0u8; INPUT_LIMIT]; HISTORY_LIMIT];
-    let mut history_lengths = [0usize; HISTORY_LIMIT];
-    let mut history_count = 0usize;
-    let mut history_position = 0usize;
-
-    print_prompt();
-    // The current VGA cursor is immediately after the prompt, which is
-    // where command input should begin.
-    let (prompt_end_column, mut prompt_row) = vga::cursor_position();
-    let mut prompt_column = prompt_end_column;
-    let mut last_scroll_count = vga::scroll_count();
-
-    loop {
-        if let Some(key) = keyboard::poll_key() {
-            match key {
-                keyboard::Key::Special(_) => {},
-                keyboard::Key::ArrowLeft => {
-                    if cursor_position > 0 {
-                        cursor_position -= 1;
-                        sync_prompt_row(&mut prompt_row, &mut last_scroll_count);
-
-                        place_input_cursor(
-                            prompt_column,
-                            prompt_row,
-                            cursor_position,
-                        );
-                    }
-                }
-
-                keyboard::Key::ArrowRight => {
-                    if cursor_position < length {
-                        cursor_position += 1;
-                        sync_prompt_row(&mut prompt_row, &mut last_scroll_count);
-
-                        place_input_cursor(
-                            prompt_column,
-                            prompt_row,
-                            cursor_position,
-                        );
-                    }
-                }
-
-                keyboard::Key::ArrowUp => {
-                    if history_position > 0 {
-                        let old_length = length;
-                        history_position -= 1;
-
-                        input.fill(0);
-                        length = history_lengths[history_position];
-
-                        input[..length].copy_from_slice(
-                            &history[history_position][..length],
-                        );
-
-                        cursor_position = length;
-
-                        redraw_input(
-                            &input,
-                            length,
-                            cursor_position,
-                            old_length,
-                            prompt_column,
-                            &mut prompt_row,
-                            &mut last_scroll_count,
-                        );
-                    }
-                }
-
-                keyboard::Key::ArrowDown => {
-                    if history_position < history_count {
-                        let old_length = length;
-                        history_position += 1;
-
-                        input.fill(0);
-                        length = 0;
-
-                        // Select the next command, or a blank line.
-                        if history_position < history_count {
-                            length = history_lengths[history_position];
-
-                            input[..length].copy_from_slice(
-                                &history[history_position][..length],
-                            );
-                        }
-
-                        cursor_position = length;
-
-                        redraw_input(
-                            &input,
-                            length,
-                            cursor_position,
-                            old_length,
-                            prompt_column,
-                            &mut prompt_row,
-                            &mut last_scroll_count,
-                        );
-                    }
-                }
-
-                keyboard::Key::Char(character) => {
-                    match character {
-                        '\n' => {
-                            sync_prompt_row(&mut prompt_row, &mut last_scroll_count);
-                            // Move to the next line before running a command.
-                            vga::move_cursor(
-                                (prompt_column + length) % 80,
-                                prompt_row + (prompt_column + length) / 80,
-                            );
-                            println!();
-
-                            let command =
-                                core::str::from_utf8(&input[..length])
-                                    .unwrap_or("");
-
-                            // Save non-empty commands, avoiding consecutive
-                            // duplicates.
-                            if length > 0 {
-                                let duplicate = history_count > 0
-                                    && history_lengths[history_count - 1]
-                                        == length
-                                    && history[history_count - 1][..length]
-                                        == input[..length];
-
-                                if !duplicate {
-                                    if history_count == HISTORY_LIMIT {
-                                        // Discard the oldest command.
-                                        for index in 1..HISTORY_LIMIT {
-                                            history[index - 1] = history[index];
-                                            history_lengths[index - 1] =
-                                                history_lengths[index];
-                                        }
-
-                                        history_count -= 1;
-                                    }
-
-                                    history[history_count][..length]
-                                        .copy_from_slice(&input[..length]);
-
-                                    history_lengths[history_count] = length;
-                                    history_count += 1;
-                                }
-                            }
-
-                            run_command(command);
-
-                            length = 0;
-                            cursor_position = 0;
-                            input.fill(0);
-                            history_position = history_count;
-
-                            println!();
-
-                            // Print the next prompt, then remember the
-                            // cursor position immediately after it. Input
-                            // must begin here, not at the start of the prompt.
-                            print_prompt();
-                            let (prompt_end_column, new_prompt_row) = vga::cursor_position();
-                            prompt_column = prompt_end_column;
-                            prompt_row = new_prompt_row;
-                            last_scroll_count = vga::scroll_count();
-                        }
-
-                        '\u{8}' => {
-                            // Delete the character immediately before the
-                            // cursor, shifting the remaining text left.
-                            if cursor_position > 0 {
-                                let old_length = length;
-
-                                for index in cursor_position..length {
-                                    input[index - 1] = input[index];
-                                }
-
-                                length -= 1;
-                                cursor_position -= 1;
-                                input[length] = 0;
-
-                                redraw_input(
-                                    &input,
-                                    length,
-                                    cursor_position,
-                                    old_length,
-                                    prompt_column,
-                                    &mut prompt_row,
-                                    &mut last_scroll_count,
-                                );
-                            }
-                        }
-
-                        '\t' => {
-                            // Complete commands only when the cursor is at
-                            // the end of the command line.
-                            if cursor_position == length {
-                                let current =
-                                    core::str::from_utf8(&input[..length])
-                                        .unwrap_or("");
-
-                                let mut matches = COMMANDS
-                                    .iter()
-                                    .map(|(name, _, _)| *name)
-                                    .filter(|command| {
-                                        command.starts_with(current)
-                                    });
-
-                                // Complete only if exactly one command matches.
-                                if let Some(command) = matches.next() {
-                                    if matches.next().is_none() {
-                                        let remaining = &command[length..];
-
-                                        for byte in remaining.bytes() {
-                                            if length < INPUT_LIMIT {
-                                                input[length] = byte;
-                                                length += 1;
-                                                cursor_position += 1;
-                                            }
-                                        }
-
-                                        redraw_input(
-                                            &input,
-                                            length,
-                                            cursor_position,
-                                            length,
-                                            prompt_column,
-                                            &mut prompt_row,
-                                            &mut last_scroll_count,
-                                        );
-                                    }
-                                }
-                            }
-                        }
-
-                        ch if ch.is_ascii() && !ch.is_control() => {
-                            if length < INPUT_LIMIT {
-                                // Shift the text right to make room for the
-                                // new character at the cursor.
-                                for index in (cursor_position..length).rev() {
-                                    input[index + 1] = input[index];
-                                }
-
-                                input[cursor_position] = ch as u8;
-                                length += 1;
-                                cursor_position += 1;
-
-                                redraw_input(
-                                    &input,
-                                    length,
-                                    cursor_position,
-                                    length - 1,
-                                    prompt_column,
-                                    &mut prompt_row,
-                                    &mut last_scroll_count,
-                                );
-                            }
-                        }
-
-                        _ => {}
-                    }
-                }
-            }
-        } else {
-            idle::wait_for_input();
-        }
-    }
+    shell::Shell::physical()
 }
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
+    pty::set_current(None);
     graphics::restore();
     println!();
     println!("Xinyi: kernel panic!");

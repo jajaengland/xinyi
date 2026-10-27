@@ -55,7 +55,7 @@ class Guest:
             self.reader = self.connection.makefile("rb")
             self.reader.readline()  # QMP greeting
             self.call("qmp_capabilities")
-            self.wait_for(boot_message, timeout=15)
+            self.wait_for(boot_message, timeout=45)  # USB EDD loads one sector per BIOS call.
             if boot_message=="Welcome to Xinyi.":
                 self.wait_for("xinyi:/",timeout=30)
         except BaseException:
@@ -110,7 +110,7 @@ class Guest:
         self.type("clear\n")
         self.wait_for("xinyi:/")
         self.type(text + "\n")
-        return self.wait_for(expected)
+        return self.wait_for(expected, timeout=30)  # BIOS metadata writes can take several seconds.
 
     @staticmethod
     def prompt_ready(screen):

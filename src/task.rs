@@ -54,7 +54,7 @@ pub fn create_task(program: crate::loader::LoadedProgram) -> Option<u32> {
     let next_id = task_id.checked_add(1)?;
 
     // Allocate kernel stack from physical memory
-    let kernel_frames = crate::loader::Frames::new(crate::loader::STACK_PAGES)?;
+    let kernel_frames = crate::loader::Frames::new(crate::loader::KERNEL_STACK_PAGES)?;
     let kernel_stack = kernel_frames.top();
     let address_space = crate::paging::AddressSpace::new(&program)?;
     let entry_point = crate::paging::USER_BASE;
@@ -213,3 +213,5 @@ pub fn schedule() {
         }
     }
 }
+
+pub(crate) fn reserve_id()->Option<u32> {unsafe {let id=NEXT_TASK_ID;NEXT_TASK_ID=id.checked_add(1)?;Some(id)}}

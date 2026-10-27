@@ -90,7 +90,7 @@ def main():
                     command("mount", "Mounted FAT16 at sector 63")
                     command("spawn", "Created task record 2")
                     held = free_frames()
-                    assert baseline - held == 11
+                    assert baseline - held == 23
                     command("run pid.bin", "User program exited with code 3.")
                     command("ps", "Total tasks: 1")
                     screen = command("run hello.bin", "User program exited with code 0.")

@@ -82,7 +82,7 @@ def main():
             assert inspect_tree(image,2048)[0]["NOTE.TXT"]==b"hello!? from notepad\nsecond line"
             surface=opened("notepad");guest.type("save as works");guest.key("ctrl-s");status(surface,"Save as")
             guest.type("copy.txt\n");contents("COPY.TXT",b"save as works");guest.key("ctrl-q");guest.wait_for("User program exited with code 0.")
-            guest.command("touch guard.txt","Created:");guest.command("write guard.txt protected","Wrote")
+            guest.command("touch guard.txt","Created:");guest.type("write guard.txt protected\n");guest.wait_for("Wrote",timeout=30)
         finally:
             guest.call("screendump",{"filename":str(output/f"window-last-{args.vga}.png"),"format":"png"})
             guest.close();shutil.copyfile(directory/"debug.log",output/f"window-{args.vga}-debug.log")

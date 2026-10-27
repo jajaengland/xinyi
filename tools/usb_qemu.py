@@ -51,7 +51,7 @@ def main():
                     assert time.monotonic()<deadline;time.sleep(.02)
                 guest.key("esc");guest.wait_for("Returned to text mode.")
                 transcript.append(guest.command("apps","EDIT.BIN"))
-                offset=len((directory/"debug.log").read_text());guest.type("desktop\n");deadline=time.monotonic()+20
+                offset=len((directory/"debug.log").read_text());guest.type("windowtest\n");deadline=time.monotonic()+20
                 while "Desktop: frame ready" not in (directory/"debug.log").read_text()[offset:]:
                     assert time.monotonic()<deadline,guest.screen();time.sleep(.02)
                 guest.call("input-send-event",{"events":[{"type":"rel","data":{"axis":"x","value":-250}},{"type":"rel","data":{"axis":"y","value":30}}]})
@@ -62,6 +62,10 @@ def main():
                 while "top=0 clicks=0/0" not in (directory/"debug.log").read_text()[offset:]:
                     assert time.monotonic()<deadline;time.sleep(.02)
                 guest.key("esc");guest.wait_for("Returned to text mode.")
+                offset=len((directory/"debug.log").read_text());guest.type("desktop\n");deadline=time.monotonic()+20
+                while "Desktop scheduler: ready" not in (directory/"debug.log").read_text()[offset:]:
+                    assert time.monotonic()<deadline;time.sleep(.02)
+                guest.key("esc");guest.wait_for("Desktop finished.")
                 transcript.append(guest.command("echo usable","\nusable\n"))
             finally:guest.close()
         assert hashlib.sha256(image.read_bytes()).digest()==original,"USB boot modified image contents"

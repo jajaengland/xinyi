@@ -43,12 +43,29 @@ def main():
                    cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/window_drag_qemu.py"),"--disk",str(image),"--output",str(directory/"drag-check.json"),"--check"],
                    cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/launcher_qemu.py"),"--kernel",str(kernel),"--package",str(directory),"--disk",str(image),"--vga","cirrus","--usb"],
+                   cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/multitask_qemu.py"),"--kernel",str(kernel),"--package",str(directory),"--disk",str(image),"--vga","cirrus","--usb"],
+                   cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/desktop_apps_qemu.py"),"--disk",str(image),"--vga","cirrus","--usb"],
+                   cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/window_drag_qemu.py"),"--disk",str(image),"--output",str(directory/"desktop-drag-check.json"),"--desktop","--check"],
+                   cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/terminal_clipboard_qemu.py"),"--disk",str(image),"--vga","cirrus","--usb"],
+                   cwd=ROOT,env=environment,check=True)
+    for suite in ("pty_qemu.py", "files_qemu.py", "window_lifecycle_qemu.py"):
+        subprocess.run([sys.executable,str(ROOT/"tools"/suite),"--disk",str(image),"--vga","cirrus","--usb"],
+                       cwd=ROOT,env=environment,check=True)
     shutil.copyfile(kernel,directory/"rust-os")
     shutil.copyfile(ROOT/"programs/apps.txt",directory/"applications.txt")
     (directory/"README.txt").write_text(
         "Xinyi BIOS-bootable release\n\nPrograms are ordinary files in /APPS, not embedded in the kernel.\n"
         "The installed system drive mounts automatically. Type apps, run snake, run tetris, edit note.txt or notepad note.txt.\n"
         "Editor: Ctrl+S save, Ctrl+Shift+S Save As, Ctrl+O open, Ctrl+N new, Ctrl+Z/Y undo/redo, Ctrl+Q quit.\n"
+        "Notepad: drag or Shift+arrows to select, Ctrl+A select all, Ctrl+C/X/V shared clipboard.\n"
+        "Type terminal (or use Apps) for a graphical command window: help, pwd/cd, ls, cat, file operations and run APP.\n"
+        "Terminal uses the normal shell; text programs run inside its window. Ctrl+C interrupts; Ctrl+Shift+C copies; Ctrl+V pastes.\n"
+        "Each desktop app has its own working directory; terminal-launched children inherit that terminal's directory.\n"
         "Text files currently support ASCII and up to 1024 bytes. Save errors retain the document.\n"
         "Use disks to list numbered drives, use NUMBER to switch, and install NUMBER to preview installation.\n"
         "Installation copies /APPS from the currently mounted source to the destination after confirmation.\n"
@@ -56,8 +73,14 @@ def main():
         "QEMU speaker sound is enabled by Launch-Xinyi.cmd. Games: P pauses, R restarts, Escape quits.\n"
         "Graphics: QEMU std VGA, or BIOS VESA 800x600 RGB565/24/32-bit on supported cards. Type bios for diagnostics.\n"
         "Type mouse for the blue-screen PS/2 pointer/buttons/menu test; Escape exits.\n"
-        "Type desktop for draggable overlapping windows; X closes, right-click restores, Escape exits.\n"
-        "The mouse/desktop tests and application windows use a simple built-in ASCII bitmap font.\n"
+        "Type desktop for concurrent graphical applications from /APPS and running-app buttons in the top taskbar.\n"
+        "Apps opens text programs in Terminal automatically. The _ button minimizes; taskbar buttons restore.\n"
+        "Windows can move partly off-screen; the top taskbar remains accessible.\n"
+        "Type multitask for two concurrent protected counter windows; Q quits the focused app, C crashes it, Escape exits the demo.\n"
+        "Ctrl+Alt+K stops the focused app; multitask hog verifies timer preemption of a CPU-bound app.\n"
+        "Up to four apps run together. Close apps before Exit; Escape cancels menus or goes to the focused app.\n"
+        "Choose FILES in Apps to browse folders, open files, create folders and confirm deletions.\n"
+        "The mouse/windowtest tests and application windows use a simple built-in ASCII bitmap font.\n"
         "Notepad is /APPS/NOTEPAD.BIN: mouse toolbar, keyboard editing, Ctrl+S save, Ctrl+Q quit.\n"
         "USB access uses BIOS EDD for the boot drive only; no hotplug/native USB or UEFI support.\n"
         "Firmware writes are read back, but provide no portable cache-flush durability guarantee.\n"
