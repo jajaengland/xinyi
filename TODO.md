@@ -28,7 +28,23 @@ Items are grouped by their current status. A planned feature should only be mark
 - [x] Add a breakpoint command for testing exception handling.
 - [x] Add a reboot command.
 
-## Near-Term Priorities
+## Current desktop milestone — 27 October 2026
+
+Implemented and tested: a top-taskbar desktop with four root windows and up to four attached text children, timer-preempted protected programs, automatic Apps-to-Terminal handoff, shared-shell PTYs, Files, Notepad selection/clipboard, clipped off-screen movement and minimize/restore. Minimized applications retain their state and keep running. The legacy `windowtest` remains a separate synchronous diagnostic.
+
+Verification includes pure model tests, disposable QEMU IDE/USB/VESA runs, cold-boot file persistence, invalid ABI ranges, isolated faults, allocation cleanup and cursor/drag regression checks. New desktop lifecycle behavior was tested in QEMU; earlier hardware observations do not verify these newer features.
+
+## Next priorities (proposed)
+
+1. **Files usability:** rename, copy/move, richer file selection and right-click menus.
+2. **Shared GUI controls:** reusable buttons, text fields, scrollbars and dialogs; improve the basic bitmap font.
+3. **Application memory/loading:** ELF executables, writable data/BSS and a user-space heap before substantially larger applications.
+4. **Desktop polish:** window resizing, keyboard shortcuts and saved preferences.
+5. **Later hardware work:** shared driver interfaces, native AHCI/SATA, USB input/storage and audio backends.
+
+Keep FAT16 and the current text-file limit until applications need more capacity. Pipes, richer scripting and asynchronous I/O also remain future work. The ordering above is a proposal, not authorization to start the next feature.
+
+## Completed milestones and remaining work
 
 ### Filesystem Applications, Editor and Drive Use
 
@@ -42,7 +58,7 @@ Items are grouped by their current status. A planned feature should only be mark
 
 ### Text Editor Direction
 
-The DOS-style editor foundation is implemented within the current 1 KiB ASCII file limit; graphics now begins with a separate QEMU display diagnostic.
+The DOS-style editor and graphical Notepad are implemented within the current 1 KiB ASCII file limit. The desktop runs graphical applications and terminal-hosted text applications concurrently.
 
 - [x] Expose foreground keyboard press events with navigation keys and Shift/Ctrl/Alt/Caps modifiers.
 - [x] Provide clear/colour/cursor/query calls and validated positioned row drawing without scrolling.
@@ -52,16 +68,16 @@ The DOS-style editor foundation is implemented within the current 1 KiB ASCII fi
 - [x] Load FAT16 programs up to 64 KiB through a bounded validated chain and owned staging frames; delete larger program files safely. General file reads/writes and RAM files remain limited to 1 KiB.
 - [x] Build a protected text-mode Tetris demo with seven-piece bags, rotation/kicks, ghost/next piece, scoring, line clears, increasing speed, pause, restart and clean exit. Six host game tests and debug/release QEMU gameplay/loading checks cover its foundations.
 - [x] Add program filesystem calls and a way to pass a filename to the editor.
-- [ ] Support writable program data/edit buffers and lift the 1024-byte program/file limit when needed.
+- [ ] Support writable program data/edit buffers and lift the 1024-byte ordinary text-file limit when needed.
 - [x] Build the editor: insert/delete, line navigation, scrolling, status bar, save and quit with unsaved-change handling.
 
-### Initial Verified Baseline â€” 25 October 2026 (Before Storage Work)
+### Initial Verified Baseline — 25 October 2026 (Before Storage Work)
 
 - `cargo +nightly build -Z build-std=core` succeeds on the installed Windows nightly toolchain with NASM on `PATH`; it reports 43 warnings.
 - `python tools/smoke.py` boots the debug kernel in QEMU with 128 MiB RAM and a disposable IDE fixture. It verifies memory-map reporting, paging, frame alloc/free balance, keyboard diagnostics, shell editing/history/completion, basic file creation/reading, task-record creation, disk sector-0 reads, increasing uptime, breakpoint/panic diagnostics, and ring 3 `getpid` followed by a GPF with CS `0x001b`.
 - These checks establish a baseline, not completeness of the prototypes below. No persistent filesystem, executable launch, context switching, or bootable installation has been verified. Existing untracked bootloader/disk artifacts were left untouched.
 
-### Storage Milestone â€” 25 October 2026
+### Storage Milestone — 25 October 2026
 
 - FAT16 root-file creation, listing, reading, replacement, and clearing are connected to `mount`, `unmount`, `touch`, `ls`, `cat`, and `write FILE [TEXT]`. Names are case-insensitive ASCII 8.3 names; files are limited to 1024 bytes. RAM remains a separate fallback backend.
 - ATA now validates LBA28 capacity, bounds polling, checks errors, waits for write completion, and supports cache flushes. The RAM block device now actually writes.
@@ -71,7 +87,7 @@ The DOS-style editor foundation is implemented within the current 1 KiB ASCII fi
 - Added `format` / `format confirm` for a destructive primary-IDE whole-disk quick format: one FAT16 LBA partition, mounted-disk refusal, immediate one-use confirmation, metadata readback/flushes, and an explicit warning that existing partitions and bootability are removed. Large disks use at most just under 2 GiB with the rest unallocated.
 - Thirteen host storage tests pass, including formatter geometry and injected failures. `tools/format_qemu.py` verifies mounted refusal, confirmation/cancellation without writes, formatting blank and existing disks, independent host readback, and persistence after a fresh boot. All destructive tests use private disposable images.
 
-### Bootable Installation Milestone â€” 25 October 2026
+### Bootable Installation Milestone — 25 October 2026
 
 - `install` / `install confirm` now build a BIOS-bootable primary IDE system with MBR/stage-2 loaders, a pristine initialized kernel image, and a separate FAT16 data partition. Compatible partitioned FAT16 data is preserved; incompatible/blank disks get a destructive fresh layout only after the preview is confirmed.
 - `tools/install_qemu.py` boots only from the installed IDE disk (no `-kernel`, CD, or floppy), verifies E820 memory, allocator/paging/shell operation and persistence at 32/128 MiB RAM, and reinstalls from the running installed system while preserving data. It independently compares installed bytes against ELF load segments, including after deliberate runtime mutations.
@@ -97,12 +113,14 @@ Current work to prioritize:
 - [x] Add synchronous user exit/fault recovery to the shell. Restore kernel CR3/ESP, registers, segments, flags and TSS stack before reclaiming the image, stacks and page tables. Debug/release recovery tests repeat exits/faults, null-segment timer IRQs and set-DF exits with balanced frames; subsequent kernel faults stay fatal. `usermode exit` returns code 42. Builds report 17 warnings.
 - [x] Connect `run [demo|FILE]` to real protected task execution and cleanup. Built-in assembly and host-compiled Rust programs print text, obtain their process ID, exit or fault back to the shell. `spawn demo` retains diagnostic paused records. Both kernel profiles pass file-program/PID/console tests on private FAT16 images; running a program leaves disk bytes unchanged.
 - [x] Replace numeric write with `write(fd, buffer, length)` for console descriptors 1/2, bounded to 1024 bytes with overflow/range/current-address-space checks and a kernel copy before output. Add a minimal Rust SDK, flat-image builder, examples and data-image packager. Host boundary checks and real ring-3 invalid-buffer tests pass.
-- [ ] Implement scheduling/preemption and a richer executable layout (ELF, writable data/BSS). Execution is synchronous and legacy non-PAE user stacks remain executable.
+- [x] Implement a first timer-preempted group with independent counter windows, sleep/input waits and per-job fault cleanup.
+- [x] Generalize desktop app launching and serialized file access under the scheduler.
+- [ ] Add process listing/general process APIs and a richer executable layout (ELF, writable data/BSS). Legacy non-PAE user stacks remain executable.
 - [ ] Audit mutable-static references and remaining compiler warnings; the earlier reliability review predates the task/storage prototypes.
 - [x] Implement actual VFS listing, reject duplicate names, and connect file content operations.
 - [x] Add ATA polling timeouts/error handling and verify writes/readback and reboot persistence on disposable images.
 - [x] Replace the raw `install` kernel copy with a defined bootloader/image layout and verify BIOS disk-only boot with a separate data partition.
-- [ ] Add UEFI boot support and validate real removable-media/hardware boot; current installed-boot evidence is from legacy BIOS QEMU.
+- [ ] Add UEFI boot support and broaden hardware validation. BIOS USB applications/graphics/persistence have user-reported HP laptop coverage; automated installation and the newer desktop lifecycle use QEMU.
 - [ ] Add interruption recovery/redundant boot updates. Installation publishes bootability last but a failed update may require recovery or reinstallation.
 - [ ] Add the existing `panic` command to the shared help/completion table.
 
@@ -175,7 +193,7 @@ These tasks prepare the kernel for running programs beyond its built-in shell.
 - [x] Research process and thread management.
   - Basic task structure implemented with kernel stacks, states (Running/Ready/Sleeping/Zombie).
   - Can create tasks and view with `ps` command.
-- [ ] Plan how applications will interact with kernel services.
+- [x] Define and implement the checked application services documented in `sdk/README.md`.
 
 ## User-Mode Applications
 
@@ -196,10 +214,13 @@ A longer-term goal is to run applications with less privilege than the kernel.
 - [ ] Define and integrate a safe executable format and loading strategy.
   - Flat images linked at `0x40000000` now execute in protected mappings. The host builder extracts code/read-only data from a compiled ELF and rejects writable globals. ELF parsing in the kernel and a writable-data layout remain unfinished; FAT16 programs may now be up to 64 KiB; ordinary file reads/writes and RAM files remain limited to 1024 bytes.
 - [x] Implement basic synchronous process creation and termination.
-  - `run` creates and consumes a task record, executing its owned image and reclaiming it after exit/fault. `getpid` returns that process's ID. `spawn`/`kill` manage paused diagnostic records; concurrent processes are not yet scheduled.
+  - `run` creates and consumes a task record, executing its owned image and reclaiming it after exit/fault. `getpid` returns that process's ID. `spawn`/`kill` manage paused diagnostic records; the separate `multitask` command now schedules two real counter jobs.
   - `ps` reports the current ID and total records, not a full process list.
-- [ ] Implement and verify scheduling and multitasking.
-  - The context structure and round-robin state-selection prototype exist. `schedule()` does not switch CPU state and is never called by the timer IRQ.
+- [x] Implement and verify the first timer-driven user scheduler.
+  - `multitask` saves real user CPU/FPU contexts and runs independent counters with private mappings/stacks. Sleep/wait, CPU-hog preemption, focus/close, faults and memory reclamation are tested. The old `task::schedule()` record selector remains unused.
+- [x] Integrate desktop launch/termination, taskbar focus and serialized file calls with the scheduler.
+- [x] Add concurrent text windows with independent PTYs and automatic Apps-menu handoff.
+- [ ] Add general process APIs and full running-process listing.
 - [x] Launch simple flat applications from the shell.
   - `run demo` prints hello world; `run FILE` reads an image from the active RAM/FAT16 backend and waits for exit/fault. `programs/hello/main.rs` and the SDK guide show the host build workflow. Bounded filename arguments and file read/save calls are implemented; richer file APIs remain future work.
 
@@ -235,13 +256,14 @@ The long-term goal includes a graphical interface inspired by classic desktop sy
 - [x] Add a checked-stride RAM canvas with clipped pixels, rectangles and lines, plus filled/outlined triangles.
 - [x] Render bitmap text using the saved BIOS 8x16 font.
 - [x] Add an interactive graphics diagnostic with arrow-key movement, Escape recovery and owned-buffer reclamation; debug/release QEMU also verify fatal diagnostics and refusal paths.
-- [ ] Add hardware VBE/native graphics support; the current backend refuses the dc7800 and other unimplemented adapters.
-- [ ] Add protected user-program graphics surfaces and input APIs.
+- [x] Add validated BIOS VESA framebuffer modes alongside the QEMU graphics backend.
+- [ ] Add native graphics drivers/acceleration and broaden hardware validation.
+- [x] Add protected user-program graphics surfaces and input APIs.
 - [x] Cache static graphics, update only dirty box regions, and use press/release tracking with timer-paced held-arrow movement; QEMU verifies release stopping and triangle restoration.
 - [x] Add PS/2 mouse input and pointer rendering, clickable buttons and a right-click menu (`mouse`).
-- [ ] Develop a simple window or panel system.
-- [ ] Design a basic desktop and application-launching interface.
-- [ ] Preserve a text-mode or diagnostic path for debugging.
+- [x] Develop a simple window/panel system with focus, dragging, close and minimize/restore.
+- [x] Add a top-taskbar desktop and dynamic filesystem Apps launcher.
+- [x] Preserve the physical text console and separate graphical diagnostics for debugging.
 
 ## Networking
 
@@ -339,10 +361,40 @@ The roadmap is a guide, not a rigid sequence. Priorities can change as the kerne
 - [x] Add checked create/event/draw/present/close services, retained client surfaces and automatic exit/fault cleanup.
 - [x] Ship graphical Notepad in /APPS with mouse toolbar/caret, keyboard editing/navigation, safe open/save/save-as, unsaved close prompts and read-only failure retention.
 - [x] Preserve mixed keyboard/mouse capture ordering and update cached text/dirty rows for responsive editing.
-- [ ] Add a desktop application launcher and scheduling before supporting several independently running program windows. The current API is one cooperative foreground program.
+- [x] Add a filesystem-backed desktop Apps launcher for one foreground program at a time.
+- [x] Add timer scheduling and independent counter windows as a separate multitasking milestone.
 
 ### Drag responsiveness — 27 October 2026
 
 - [x] Replace per-channel framebuffer transfers with word span copies and packed-format conversion in RAM.
 - [x] Keep the cursor visible during window copies and coalesce queued motion without merging button/key/reset boundaries.
 - [x] Verify exact framebuffer repair, window/API interactions and a burst-drag visibility benchmark (Cirrus/VESA: about 122 ms to 50 ms catch-up on this host, missing-cursor samples 90/98 to 0/16).
+
+### Desktop Apps launcher — 27 October 2026
+
+- [x] List sorted /APPS .BIN files from a taskbar menu, with bounded catalogs and safe selection/dismissal.
+- [x] Launch real filesystem programs using explicit paths and refresh the menu when they return.
+- [x] Preserve desktop positions/counters across graphical/text programs, failed loads and recoverable faults; retain working-directory file semantics.
+- [x] Verify two independent counter windows under timer preemption (`multitask`).
+- [x] Connect the scheduler to filesystem-launched desktop apps with top taskbar switching, four root windows plus their text children, independent Notepads and serialized file calls.
+- [x] Preserve graphical job/window state while text/games run in Terminal; refresh catalogs and recover from bad loads/isolated faults.
+- [x] Add concurrent text windows.
+- [ ] Add richer process APIs, asynchronous I/O and writable program data.
+
+### Deferred device-driver direction
+
+- [ ] Develop shared graphics/audio driver interfaces with device-specific backends; keep the current framebuffer/VESA path while desktop work continues. Native GPU acceleration and audio drivers are deferred.
+
+### Terminal, clipboard and Notepad selection — 27 October 2026
+
+- [x] Add session-wide bounded text clipboard calls with atomic validation and cross-app sharing.
+- [x] Add Notepad mouse/Shift-key selection, select-all/copy/cut/paste, selection replacement/deletion and single-step undo.
+- [x] Ship a filesystem Terminal app with shared-shell terminal output, edited input/history, scrollback and clipboard selection/paste.
+- [x] Keep per-job working directories and copy parent directory/arguments when launching apps from Terminal.
+- [x] Verify ring-3 buffer errors, cross-app clipboard/selection, terminal commands, directory isolation/inheritance, cold-boot persistence/reset and allocation cleanup.
+- [x] Run existing text programs inside independent terminal windows, sharing the normal shell and basic ANSI cursor/colour support.
+- [x] Allow windows immediately below the top taskbar and remove PID suffixes from task buttons.
+- [x] Add Files with folder browsing, create/open/save workflows, confirmed deletion and executable launches through Terminal.
+- [ ] Add pipes and richer shell scripting when needed.
+- [x] Open Apps-menu text programs in automatic terminals without restarting them.
+- [x] Support clipped off-screen window movement and minimize/restore through the taskbar.

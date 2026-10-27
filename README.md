@@ -4,9 +4,23 @@ WARNING: Below is not human written
 
 Xinyi is an experimental 32-bit x86 kernel written primarily in Rust, with a small amount of x86 assembly for bootstrapping and interrupt handling.
 
-The project is being developed as a learning project, with the long-term goal of building a small operating system with a shell, applications, and eventually a graphical interface.
+The project is being developed as a learning project, with a shell, filesystem applications and a small graphical desktop.
 
 Automated development tests use QEMU with disposable image files. The user handles real-hardware testing when needed. The dc7800 resumed working after its RAM was reconfigured, and Xinyi boots there again.
+
+## Desktop quick start
+
+Build an optimized release with `python tools/build_release.py`, then run its `Launch-Xinyi.cmd`. `python tools/build_usb.py` packages and verifies a raw BIOS USB image from the latest verified release. Generated images, checksums and launchers live under `target/`; they are not source files.
+
+At the shell, type `desktop`. Apps lists the actual `/APPS/*.BIN` files: Files, Notepad, Terminal, Counter, EDIT, Hello, Snake and Tetris. Graphical apps open their own windows; text apps automatically get a Terminal without restarting the process. Four root application windows and their text children can run together. Close running apps before choosing Exit.
+
+- Drag title bars, including partly beyond the left/right/bottom edges. Windows stay below the top taskbar.
+- Use the **_** title-bar button to minimize. The program keeps running and retains unsaved work. Click its taskbar button to restore it fully into view.
+- Terminal uses the physical console's shell. Ctrl+C interrupts; Ctrl+Shift+C copies selected output; Ctrl+V pastes. `run snake`, `run tetris` and `edit note.txt` stay inside its window.
+- Files browses folders, opens text files in Notepad and programs through Terminal, creates folders, and confirms deletion. F5 refreshes its listing.
+- Notepad supports drag/Shift selection and Ctrl+A/C/X/V with a shared clipboard. Ctrl+S saves; Ctrl+Q checks unsaved changes before closing.
+
+Current limits include FAT16 volumes below 2 GiB, ASCII 8.3 paths, 1024-byte text files/clipboard, 64 KiB flat programs and fixed-size application windows. Native AHCI/USB drivers, writable program globals, a user heap and ELF loading are still future work. See `TODO.md` for the proposed next milestones and `sdk/README.md` for the application ABI.
 
 ## Current Features
 
@@ -342,6 +356,8 @@ The keyboard IRQ drains all pending PS/2 bytes on each interrupt. If the kernel'
 
 QEMU's emulated PS/2 controller queue is small (16 bytes) and can discard bytes before the kernel sees them during large synthetic input bursts. No kernel-side recovery can restore events that never arrive; normal typing is unaffected.
 
+Use optimized release builds for interactive graphics testing. Unoptimized debug builds can make framebuffer conversion and window composition substantially slower, so they are unsuitable for judging mouse/drag responsiveness.
+
 When making changes, build and test the kernel before committing. Preserve working functionality and update the architecture and roadmap documents when behavior changes.
 
 To package the latest verified release for flashing, run `python tools/build_usb.py`. It creates a new raw image and instructions under `target/usb/`, checks USB-only boot and VESA graphics in QEMU, and records the image/checksum in `target/latest-usb.json`. Flash the image in raw/DD mode; this replaces the chosen USB contents.
@@ -360,9 +376,9 @@ This uses a standard three-byte PS/2 mouse on IRQ12; keyboard/mouse bytes are ro
 
 ## Window system test
 
-Type `desktop` to open two overlapping windows. Drag a title bar to move a window, click any exposed part to bring it forward, and click X to close it. Covered controls cannot receive clicks. The Buttons window retains its two counters when you close/reopen it. Right-click and choose Restore windows to reopen/reposition both windows; outside clicks dismiss the menu without activating controls underneath. Windows stay within the desktop area, and Escape returns to the shell. The existing `mouse` and `graphics` diagnostics remain available.
+Type `windowtest` to open the original two-window diagnostic. Drag a title bar to move a window, click any exposed part to bring it forward, and click X to close it. Covered controls cannot receive clicks. The Buttons window retains its two counters when you close/reopen it. Right-click and choose Restore windows to reopen/reposition both windows; outside clicks dismiss the menu without activating controls underneath. Windows stay within the desktop area, and Escape returns to the shell. The existing `mouse` and `graphics` diagnostics remain available.
 
-This is an initial kernel window manager test; windows do not yet host independent programs or multitask. It uses the existing PS/2 and QEMU/VESA display backends. The renderer recomposes the scene in RAM when window state changes and presents only damaged regions, including old/new window bounds and shadows. Ordinary pointer motion still updates only its old/new footprints.
+The two demonstration windows exercise window behavior, and the Apps menu launches separate foreground programs. It uses the existing PS/2 and QEMU/VESA display backends. The renderer recomposes the scene in RAM when window state changes and presents only damaged regions, including old/new window bounds and shadows. Ordinary pointer motion still updates only its old/new footprints.
 
 `rustc --edition=2021 --test tools/desktop_tests.rs -o target/desktop-tests.exe` checks hit testing, focus, drag offsets/bounds, release capture, closing, menus and lost input. `python tools/desktop_qemu.py` verifies actual mouse interaction and compares the entire framebuffer against the composited RAM scene outside the pointer footprint after moving, raising, closing and restoring windows. `--disk PATH --vga cirrus` tests BIOS/VESA. Release packaging includes this check.
 
@@ -374,7 +390,7 @@ The mouse and desktop tests use Xinyi Simple, a built-in ASCII bitmap font in `s
 
 `notepad [FILE]` (or `run notepad [FILE]`) loads `/APPS/NOTEPAD.BIN`, a protected ring-3 program. It creates a draggable 640x400 client window using the new window calls. The toolbar provides Save, Open, New, Save as and Quit. Click in the text area to place the caret; keyboard editing, navigation, scrolling, undo/redo and Ctrl+S/O/N/Q work as in the text editor. Save as checks before replacing another file. Closing via X uses the same unsaved-change prompt: S saves, D discards, C cancels. Save errors retain the document. ASCII text files still have the existing 1024-byte limit.
 
-The kernel owns window chrome, input and a private client surface; the program receives client-relative mouse events and validated drawing calls, without direct framebuffer access. Application-owned text rows are cached, and presentation updates dirty 16-pixel strips. Keyboard and mouse queues share capture sequence numbers so a click is delivered before keys typed after it. This first API supports one synchronous foreground window; applications must poll/wait for window events to keep its chrome responsive. It does not yet run several programs concurrently or launch them from the desktop test.
+The kernel owns window chrome, input and a private client surface; the program receives client-relative mouse events and validated drawing calls, without direct framebuffer access. Application-owned text rows are cached, and presentation updates dirty 16-pixel strips. Keyboard and mouse queues share capture sequence numbers so a click is delivered before keys typed after it. The shell `run` path retains its single foreground window. The desktop uses the same checked calls with separate surfaces/event queues for each scheduled app, and manages chrome between user quanta.
 
 The SDK in `sdk/xinyi.rs` exposes `window::open`, `event`, `draw`, `row`, `present` and `close`. Commands use RGB24 colours, fixed 8x16 text cells and a maximum batch of 16 draws. Entire batches (including ASCII text pointers) are checked before any drawing; event outputs must be writable user stack memory. Handles expire on close, and program exit/fault automatically restores text and frees surfaces. Text-console input/output calls return busy while a window is active; ticks, sleep, sound, arguments and file calls remain available.
 
@@ -385,3 +401,47 @@ The SDK in `sdk/xinyi.rs` exposes `window::open`, `event`, `draw`, `row`, `prese
 Window movement now transfers framebuffer spans in machine words, converting packed 16/24-bit VESA pixels in a RAM row buffer first. The cursor is placed before window transfers, and its footprint is protected while the rest of the scene is copied. Queued mouse motion with unchanged buttons is processed together before repainting; button transitions, input resets and keyboard ordering remain boundaries. Each movement still updates clamping/capture state, so input is not replaced with an unchecked summed displacement.
 
 `python tools/window_drag_qemu.py --disk IMAGE --output target/drag.json --check` uses a disposable copy to measure burst-drag catch-up and sample cursor visibility. On this host's Cirrus/VESA QEMU test, median catch-up improved from about 122 ms to 50 ms, and missing-cursor samples fell from 90/98 to 0/16. These include input injection/QMP overhead and are not display frame-rate guarantees. Release builds include the cursor visibility regression check.
+
+## Multitasking desktop
+
+Type `desktop` to open the desktop. The **Apps** menu in the top taskbar lists regular `.BIN` files from `/APPS`, sorted by name. Select Counter or Notepad to launch it while other graphical apps keep running. Up to four application windows can run together, including multiple independent Notepads. Click a running-app button (program name) or an exposed window to focus it. Drag title bars to move windows partly off-screen; the top taskbar remains protected. The _ button minimizes without closing or pausing the app. Click its taskbar button to restore it; partly off-screen windows are brought back into view. Use X or the app's normal quit command to close. Ctrl+Alt+K force-stops the focused graphical task, including a stuck app with no window.
+
+Notepad can open/save files while other apps run. File calls execute one at a time and retain the current ASCII/1024-byte limit. Each desktop app now owns its working directory; Apps starts it in the physical shell's directory, while terminal-launched children inherit their parent terminal's directory. Two editors of the same path do not merge changes: the last successful save wins. Escape dismisses an open Apps menu or reaches the focused app, so it can cancel a Notepad close prompt. **Exit** returns to the shell once running apps have been closed; it refuses to discard open documents.
+
+Run EDIT, Snake and Tetris from **Terminal** to keep them inside its window while other graphical apps continue running. Text programs launched directly from Apps automatically get a Terminal window too. The running process is attached at its first console request without restarting it. Windows can be dragged up to the bottom edge of the top taskbar; desktop headings are ordinary wallpaper.
+
+Programs remain ordinary filesystem files. Launching uses explicit `/APPS/...` paths, and the catalog refreshes when opened and after a program finishes. It shows up to 16 entries, excluding folders and other file types. Load errors, full task slots and recoverable faults leave the desktop usable. `windowtest` retains the earlier fixed-window/synchronous-launch diagnostic.
+
+`tools/desktop_shell_tests.rs` checks captured menu/task selection and safe dismissal. `python tools/desktop_apps_qemu.py --disk IMAGE` tests concurrent counters, two independent Notepads and saved files across cold boots, taskbar switching, the four-app limit, menu refresh, bad loads, windowless hog/fault recovery, unsaved-close cancellation, text/game return and frame reclamation. Release packaging repeats this on BIOS USB/Cirrus VESA. `window_drag_qemu.py --desktop --disk IMAGE --output REPORT --check` measures dragging with Notepad and Counter running; this host measured about 53 ms catch-up with no missing-cursor samples.
+
+## First multitasking milestone
+
+Type `multitask` for two independently running **Counter** windows. Drag either title bar, click to focus, and use X or Q to close that app. C deliberately crashes the focused app; its neighbour keeps running. Escape ends the demonstration, and Ctrl+Alt+K force-stops the focused app.
+
+`multitask hog` makes Counter A run forever without making system calls: the PIT timer still gives Counter B and the window manager CPU time. `multitask wait` exercises blocking input, `multitask fault` demonstrates fault recovery, and `multitask check` checks registers, direction flag and separate x87 state across timer switches. `/APPS/COUNTER.BIN` is an ordinary release application; `run counter` also works as a single foreground window.
+
+This milestone schedules two instances of Counter with private page tables, user/kernel stacks, saved CPU contexts and x87 state. Kernel services run to completion; preemption occurs when the timer interrupts user code. The new group currently rejects text-console, file and speaker calls as busy. This isolated counter demonstration retains those restrictions; the `desktop` command adds the application launcher and file services described above.
+
+`python tools/multitask_qemu.py` verifies timer preemption without voluntary yields, context isolation, independent updating surfaces, drag/close/focus, sleeping and event wakeups, CPU-hog termination, isolated faults and full frame reclamation. Release packaging repeats this through BIOS USB and Cirrus VESA. `tools/scheduler_tests.rs` checks deadline wrap and wake rules.
+
+## Terminal, clipboard and text selection
+
+`terminal` (or **TERMINAL** in Apps) opens an 80×25 terminal emulator. It runs the **same shell** as the physical console: command dispatch, tab completion, eight-command history, file operations and diagnostics share one implementation. Output, colours, cursor movement and positioned drawing go to a private console session. `run hello`, `run snake`, `run tetris` and `edit note.txt` run inside the terminal while other desktop windows continue updating. Graphical programs such as `notepad note.txt` open separate windows and return the terminal prompt.
+
+Use arrows, Home/End and Backspace/Delete to edit the 128-byte command line. Shift+PageUp/PageDown browses 64 rows of scrollback. **Ctrl+C interrupts the foreground program** or cancels the command line. Drag text and use **Ctrl+Shift+C** to copy; Ctrl+V or Ctrl+Shift+V pastes. At the shell, pasted line breaks become spaces and Enter executes. Ctrl+Q, Ctrl+D at an empty prompt, or `exit` closes an idle terminal. X requests confirmation before terminating a running text program. Basic ANSI cursor/erase/16-colour sequences and existing console drawing calls share the same screen.
+
+Notepad supports mouse-drag selection (including across lines and scrolling), Shift with arrows/Home/End/PageUp/PageDown, Ctrl+Shift+Home/End, and Ctrl+A. Ctrl+C copies, Ctrl+X cuts, and Ctrl+V replaces the selection or inserts at the caret. Typing, Backspace and Delete replace/remove selected text; undo restores a cut or replacement as one edit. Selected newlines and wrapped text copy as document content. Existing save and unsaved-close behaviour is retained.
+
+The shared clipboard holds up to 1024 bytes of ASCII text, remains available after the source app closes, and clears at reboot. Invalid/oversized updates leave its previous contents intact. Notepad normalizes CRLF and tabs when pasting; a paste that would exceed its file limit preserves the document. Clipboard sharing works across Notepad and Terminal instances and foreground GUI launches.
+
+`tools/terminal_clipboard_qemu.py --disk IMAGE` checks actual mouse/keyboard selection, cross-app copy/cut/paste/undo, terminal commands/history, independent directories and inheritance, launches, saved files across cold boots, clipboard reset and frame balance. It also runs a ring-3 invalid-pointer/capacity probe. Release packaging repeats this through BIOS USB/Cirrus VESA. Pure document, PTY-model, clipboard and event-queue tests cover normalization, capacity/undo, scrollback/history and motion coalescing without losing presses/releases or key ordering.
+
+## Files
+
+Choose **FILES** in Apps to browse the mounted filesystem. Open folders with Enter or a double-click; Backspace or **Up** returns to the parent. Text files open in Notepad, and `.BIN` programs open through Terminal. **New** asks for a filename, **Folder** creates a directory, and **Delete** requires Y confirmation (N/Escape cancels). Nonempty folders are retained. **Refresh** or F5 reloads the listing; PageUp/PageDown or < / > browses large folders. Each Files window has its own current directory; editors and terminals it opens inherit that location. Names still use FAT 8.3 rules, and text files retain the 1024-byte limit.
+
+## Next development priorities
+
+The proposed next milestone is Files rename, copy/move, richer selection and context menus. After that: shared GUI controls and a clearer font; ELF loading, writable program data and a user heap; then window resizing, keyboard shortcuts and saved preferences. Native AHCI/SATA, USB and audio drivers remain deferred. These are planned features, not part of the current release.
+
+`tools/window_lifecycle_qemu.py --disk IMAGE --vga cirrus --usb` checks automatic text-app terminals, clipped movement, recovery from the taskbar, minimizing an unsaved document, continued background execution and memory reclamation. It uses a disposable disk copy. Recent host drag checks remain around 50 ms catch-up with no missing-cursor samples; this is a QEMU measurement, not a hardware frame-rate guarantee.
