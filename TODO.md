@@ -55,13 +55,13 @@ The DOS-style editor foundation is implemented within the current 1 KiB ASCII fi
 - [ ] Support writable program data/edit buffers and lift the 1024-byte program/file limit when needed.
 - [x] Build the editor: insert/delete, line navigation, scrolling, status bar, save and quit with unsaved-change handling.
 
-### Initial Verified Baseline — 25 October 2026 (Before Storage Work)
+### Initial Verified Baseline â€” 25 October 2026 (Before Storage Work)
 
 - `cargo +nightly build -Z build-std=core` succeeds on the installed Windows nightly toolchain with NASM on `PATH`; it reports 43 warnings.
 - `python tools/smoke.py` boots the debug kernel in QEMU with 128 MiB RAM and a disposable IDE fixture. It verifies memory-map reporting, paging, frame alloc/free balance, keyboard diagnostics, shell editing/history/completion, basic file creation/reading, task-record creation, disk sector-0 reads, increasing uptime, breakpoint/panic diagnostics, and ring 3 `getpid` followed by a GPF with CS `0x001b`.
 - These checks establish a baseline, not completeness of the prototypes below. No persistent filesystem, executable launch, context switching, or bootable installation has been verified. Existing untracked bootloader/disk artifacts were left untouched.
 
-### Storage Milestone — 25 October 2026
+### Storage Milestone â€” 25 October 2026
 
 - FAT16 root-file creation, listing, reading, replacement, and clearing are connected to `mount`, `unmount`, `touch`, `ls`, `cat`, and `write FILE [TEXT]`. Names are case-insensitive ASCII 8.3 names; files are limited to 1024 bytes. RAM remains a separate fallback backend.
 - ATA now validates LBA28 capacity, bounds polling, checks errors, waits for write completion, and supports cache flushes. The RAM block device now actually writes.
@@ -71,7 +71,7 @@ The DOS-style editor foundation is implemented within the current 1 KiB ASCII fi
 - Added `format` / `format confirm` for a destructive primary-IDE whole-disk quick format: one FAT16 LBA partition, mounted-disk refusal, immediate one-use confirmation, metadata readback/flushes, and an explicit warning that existing partitions and bootability are removed. Large disks use at most just under 2 GiB with the rest unallocated.
 - Thirteen host storage tests pass, including formatter geometry and injected failures. `tools/format_qemu.py` verifies mounted refusal, confirmation/cancellation without writes, formatting blank and existing disks, independent host readback, and persistence after a fresh boot. All destructive tests use private disposable images.
 
-### Bootable Installation Milestone — 25 October 2026
+### Bootable Installation Milestone â€” 25 October 2026
 
 - `install` / `install confirm` now build a BIOS-bootable primary IDE system with MBR/stage-2 loaders, a pristine initialized kernel image, and a separate FAT16 data partition. Compatible partitioned FAT16 data is preserved; incompatible/blank disks get a destructive fresh layout only after the preview is confirmed.
 - `tools/install_qemu.py` boots only from the installed IDE disk (no `-kernel`, CD, or floppy), verifies E820 memory, allocator/paging/shell operation and persistence at 32/128 MiB RAM, and reinstalls from the running installed system while preserving data. It independently compares installed bytes against ELF load segments, including after deliberate runtime mutations.
@@ -238,7 +238,7 @@ The long-term goal includes a graphical interface inspired by classic desktop sy
 - [ ] Add hardware VBE/native graphics support; the current backend refuses the dc7800 and other unimplemented adapters.
 - [ ] Add protected user-program graphics surfaces and input APIs.
 - [x] Cache static graphics, update only dirty box regions, and use press/release tracking with timer-paced held-arrow movement; QEMU verifies release stopping and triangle restoration.
-- [ ] Add mouse input and pointer rendering.
+- [x] Add PS/2 mouse input and pointer rendering, clickable buttons and a right-click menu (`mouse`).
 - [ ] Develop a simple window or panel system.
 - [ ] Design a basic desktop and application-launching interface.
 - [ ] Preserve a text-mode or diagnostic path for debugging.
@@ -304,3 +304,45 @@ When continuing development with an AI assistant:
 15. When investigating hardware behavior, prefer temporary diagnostics and observed data over speculative rewrites.
 
 The roadmap is a guide, not a rigid sequence. Priorities can change as the kernel develops and new technical challenges are discovered.
+
+### BIOS USB and generic VESA support — 26 October 2026
+
+- [x] Preserve the BIOS boot device, bridge protected mode to firmware, and mount the boot USB filesystem automatically as drive 0.
+- [x] Load real application files and save editor documents on boot USB through BIOS EDD, with sector readback and cold-boot persistence tests.
+- [x] Copy filesystem applications from USB onto a bootable native IDE installation using `install NUMBER`.
+- [x] Add validated 800x600 VESA linear RGB565/24/32-bit modes and BIOS font/text restoration, preserving the QEMU fast backend.
+- [ ] Verify these new firmware paths on the dc7800. Automated tests use disposable QEMU USB/Cirrus images; native USB hotplug, UEFI and AHCI drivers are separate future work.
+
+### PS/2 mouse test — 26 October 2026
+
+- [x] Route shared PS/2 keyboard/AUX bytes correctly, initialize the mouse with bounded ACK/resend handling, and decode signed movement/buttons through IRQ12.
+- [x] Add blue graphical mouse test with a traditional arrow, two button counters, press/release capture, right-click menu, edge clipping and Escape recovery.
+- [x] Verify model/routing tests and actual QEMU input/pixels, repeated mode switching, VESA and background restoration.
+- [ ] Test a physical mouse (or BIOS-emulated USB mouse) on hardware. Native USB input support remains deferred.
+- The user confirmed BIOS-backed USB applications, VESA graphics and saved files across reboot on an HP laptop before this mouse work.
+
+### Initial window manager — 26 October 2026
+
+- [x] Add `desktop`: two draggable overlapping windows, click-to-front focus, active/inactive title bars and captured close buttons.
+- [x] Preserve background/occluded windows while dragging and closing; clamp windows to the desktop area and restore closed windows from the context menu.
+- [x] Keep the button counters inside a window, block covered controls, and retain counters through window restoration.
+- [x] Verify pure state tests plus QEMU interactions/full framebuffer composition, repeated exit/frame reclamation and fatal text recovery on standard VGA and VESA.
+- [x] Add protected foreground window drawing/input calls for filesystem applications, with graphical Notepad as the first application.
+
+### Simple GUI font — 26 October 2026
+
+- [x] Add an original built-in bitmap font covering printable ASCII and use it in the graphical mouse/desktop tests while retaining 8x16 cell metrics.
+- Font-file loading, proportional text and Unicode remain deferred.
+
+### Foreground window API and Notepad — 27 October 2026
+
+- [x] Add checked create/event/draw/present/close services, retained client surfaces and automatic exit/fault cleanup.
+- [x] Ship graphical Notepad in /APPS with mouse toolbar/caret, keyboard editing/navigation, safe open/save/save-as, unsaved close prompts and read-only failure retention.
+- [x] Preserve mixed keyboard/mouse capture ordering and update cached text/dirty rows for responsive editing.
+- [ ] Add a desktop application launcher and scheduling before supporting several independently running program windows. The current API is one cooperative foreground program.
+
+### Drag responsiveness — 27 October 2026
+
+- [x] Replace per-channel framebuffer transfers with word span copies and packed-format conversion in RAM.
+- [x] Keep the cursor visible during window copies and coalesce queued motion without merging button/key/reset boundaries.
+- [x] Verify exact framebuffer repair, window/API interactions and a burst-drag visibility benchmark (Cirrus/VESA: about 122 ms to 50 ms catch-up on this host, missing-cursor samples 90/98 to 0/16).

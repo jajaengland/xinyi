@@ -257,6 +257,7 @@ pub fn execute(
             .take()
             .expect("user return without an outcome")
     };
+    crate::window_api::finish();
     drop(kernel_stack);
     drop(space);
     drop(program);

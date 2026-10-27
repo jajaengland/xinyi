@@ -24,7 +24,8 @@ Automated development tests use QEMU with disposable image files. The user handl
 - Programmable Interrupt Controller (PIC) remapping
 - Programmable Interval Timer (PIT) at 100 Hz
 - Timer-based uptime tracking
-- Interrupt-driven PS/2 keyboard input using a ring buffer
+- Interrupt-driven PS/2 keyboard and mouse input with separate event queues
+- A graphical desktop test with draggable overlapping windows, focus, close buttons and restoration
 - Bootloader memory-summary and memory-map reporting
 - Supervisor kernel mappings with private 4 KiB user code/stack pages
 - Ring 3 user-mode entry with a TSS-backed kernel stack
@@ -38,9 +39,9 @@ Automated development tests use QEMU with disposable image files. The user handl
 - Automatic system-drive mounting plus numbered `disks` / `use NUMBER` / `install NUMBER` commands
 - File listing, creation, reading, and replacement in RAM or a mounted FAT16 volume
 - FAT16 nested folders and file persistence with ASCII 8.3 names and files up to 1024 bytes
-- Primary IDE PIO disk access and a BIOS bootable installer with a separate FAT16 data partition
+- Native IDE PIO plus BIOS boot-drive access (including USB), and a BIOS bootable installer with a separate FAT16 data partition
 - Reboot command
-- An 800x600, 32-bit QEMU graphics test with clipped lines, filled/outlined triangles, bitmap text, arrow-key movement and restoration of the text console
+- An 800x600 graphics test using QEMU standard VGA or BIOS VESA 16/24/32-bit RGB with clipped lines, filled/outlined triangles, bitmap text, arrow-key movement and restoration of the text console
 
 ## Requirements
 
@@ -77,7 +78,7 @@ To build a distributable bootable image and verify its applications in QEMU:
 python tools/build_release.py
 ```
 
-This creates a fresh directory under `target/releases/` containing `xinyi.img`, the release kernel, a Windows QEMU launcher with speaker audio, usage notes, the application manifest and SHA-256 checksums. It tests filesystem app loading, persistent editor saves, native BIOS boot and copying apps onto another drive before producing the image. `target/latest-release.json` records the result. Existing output directories/images are refused. This creates local release artifacts; it does not publish a GitHub release.
+This creates a fresh directory under `target/releases/` containing `xinyi.img`, the release kernel, a Windows QEMU launcher with speaker audio, usage notes, the application manifest and SHA-256 checksums. It tests filesystem app loading, persistent editor saves, native BIOS and USB boot, generic VESA graphics, and copying apps onto another drive before producing the image. `target/latest-release.json` records the result. Existing output directories/images are refused. This creates local release artifacts; it does not publish a GitHub release.
 
 ## Run in QEMU
 
@@ -87,9 +88,13 @@ After a successful build, run:
 
 ## Debugging
 
-Type `graphics` to try the framebuffer test on QEMU's standard VGA device (`-vga std`). Arrow keys move the box and Escape returns to the shell. This is an initial kernel/display diagnostic, not a desktop or a graphics API for applications. The current backend deliberately refuses other display devices; dc7800/other hardware needs a separate VBE or native graphics path. The editor and games remain ordinary files in `/APPS`.
+Type `graphics` to try the framebuffer test. Arrow keys move the box and Escape returns to the shell. QEMU standard VGA retains its direct backend. When booting the disk/USB image through legacy BIOS, other video cards can use VESA 2/3 linear framebuffer modes at 800x600 with RGB565 or 24/32-bit RGB. `bios` reports firmware and video diagnostics. This is a kernel/display diagnostic, not a desktop or a graphics API for applications. The editor and games remain ordinary files in `/APPS`.
 
-The renderer caches the static scene in an owned RAM back buffer. Box movement updates only its old/new footprints instead of redrawing and copying the whole screen. Held arrows use a 50 Hz timer-paced movement path, with immediate taps and release tracking, while idle time still uses HLT. Normal exit restores the VGA text registers, palette, font and memory, then frees the buffers; fatal diagnostics also attempt text restoration. Low-memory and unsupported-display paths leave the shell usable. `python tools/graphics_qemu.py` checks both kernel profiles and saves graphics screenshots under `target/smoke/`.
+Booting the packaged image from USB now mounts that USB filesystem automatically through BIOS EDD calls. Applications and editor saves work on the boot USB without a native USB controller driver. `disks` lists this as **drive 0**; `use 0` returns to it. Native IDE disks keep numbers 1 and above. Use `install NUMBER` to install onto a native IDE destination, copying `/APPS` from the mounted source. Drive 0 is refused as a format/install destination; it may alias an IDE disk that also appears under its native number. Boot filesystem errors are reported without automatically selecting another disk.
+
+This firmware path requires our legacy BIOS loader. Direct QEMU `-kernel` boot has no firmware handoff and retains native IDE/QEMU graphics behavior. USB hotplug, non-boot USB drives, UEFI and native USB/AHCI drivers are still outside this support. BIOS writes are synchronous and read back, but firmware provides no portable cache-flush durability guarantee; use `unmount` before removal. USB application loading, VESA graphics and saved-file persistence across reboot have also been confirmed by the user on an HP laptop; dc7800 verification of these new paths remains separate.
+
+The renderer caches the static scene in an owned RAM back buffer. Box movement updates only its old/new footprints instead of redrawing and copying the whole screen. Held arrows use a 50 Hz timer-paced movement path, with immediate taps and release tracking, while idle time still uses HLT. Normal exit restores the VGA console (saved registers/font/VRAM on QEMU, BIOS text mode plus saved text/cursor on VESA), then frees the buffers; fatal diagnostics also attempt text restoration. Low-memory and unsupported-display paths leave the shell usable. `python tools/graphics_qemu.py` checks both kernel profiles and saves graphics screenshots under `target/smoke/`.
 
 Fault and panic details are mirrored to QEMU's debug console at I/O port `0xE9`. To capture them without opening a display:
 
@@ -236,9 +241,9 @@ mount
 
 Selection issues IDENTIFY without writing disk sectors, displays the model/capacity, and retains the prior target if identification fails. It is refused while mounted. Mounting, formatting, and installation share the selected device; destructive previews include its path and model. Any selection command cancels pending destructive confirmations. A disk can identify successfully while mount still rejects a non-FAT16 filesystem.
 
-Installation saves the PCI controller identity/channel/drive in a checksummed header record. The BIOS loader passes it to the kernel, and installed boots restore the same target. If the saved controller is unavailable or changed, access fails rather than selecting another controller. Images moved to another computer may need a new explicit selection. `disk select legacy secondary master` is also supported; PCI paths are preferred when known.
+Installation saves the PCI controller identity/channel/drive in a checksummed header record. The BIOS loader also passes its actual boot-drive number. BIOS disk/USB boots mount that boot filesystem as drive 0, so moved images do not depend on the original PCI target. Native destinations remain explicit and use PCI identity rather than inferring ATA targets from BIOS numbering. `disk select legacy secondary master` is also supported; PCI paths are preferred when known.
 
-The WDC's earlier 131071 MiB report was the LBA28 accessible-range limit. The driver now uses LBA48 PIO and extended cache flushes when IDENTIFY supplies valid LBA48 capacity; legacy-only devices retain LBA28 commands. `disk` reports the addressing mode. The block interface still limits the accessible sector count to `u32::MAX` (just under 2 TiB with 512-byte sectors), retaining the full capacity separately. Whole-disk formatting and fresh installation are refused if full capacity is unknown or exceeds that range. Compatible existing FAT16 partitions entirely within the accessible range can still be mounted and preserved during installation. FAT16 volumes remain capped just below 2 GiB. AHCI/RAID and USB mass-storage access remain unsupported. QEMU verifies explicit selection and saved-target restoration; physical LBA48 behavior has not yet been verified.
+The WDC's earlier 131071 MiB report was the LBA28 accessible-range limit. The driver now uses LBA48 PIO and extended cache flushes when IDENTIFY supplies valid LBA48 capacity; legacy-only devices retain LBA28 commands. `disk` reports the addressing mode. The block interface still limits the accessible sector count to `u32::MAX` (just under 2 TiB with 512-byte sectors), retaining the full capacity separately. Whole-disk formatting and fresh installation are refused if full capacity is unknown or exceeds that range. Compatible existing FAT16 partitions entirely within the accessible range can still be mounted and preserved during installation. FAT16 volumes remain capped just below 2 GiB. Native AHCI/RAID and USB controller drivers remain unsupported; the BIOS boot drive is accessible through the firmware bridge, including USB boot. QEMU verifies explicit selection and saved-target restoration; physical LBA48 behavior has not yet been verified.
 
 ## Using Persistent Storage
 
@@ -312,7 +317,7 @@ install confirm
 
 Read the preview: a valid MBR/FAT16 layout whose partitions all start at or beyond sector 2048 can retain its data and partition table. The bootloader is replaced. Whole-volume FAT images, earlier/overlapping partitions, GPT, blank disks, and unsupported layouts instead get a **destructive new FAT16 layout** after confirmation, with up to just under 2 GiB used and the remainder unallocated. `install` alone is read-only; any other command cancels confirmation. Installation checks the target again, reads back writes, flushes, and publishes the bootable MBR last. An interrupted/failed installation may leave the disk unbootable and require recovery or a new installation; it is not an atomic update.
 
-The installed system boots in **legacy BIOS mode** on x86 with BIOS EDD disk reads, E820 memory reporting, and an A20-capable PC platform. UEFI/Secure Boot, NVMe/AHCI storage, and real hardware have not been validated. The bootloader loads the kernel independently of FAT16; after boot, run `mount` to access its data partition. No automatic mount is performed.
+The installed system boots in **legacy BIOS mode** on x86 with BIOS EDD disk reads, E820 memory reporting, and an A20-capable PC platform. UEFI/Secure Boot and native NVMe/AHCI storage are unsupported. The user has booted Xinyi on real hardware; the new BIOS filesystem/VESA paths require a fresh hardware test. The bootloader loads the kernel independently of FAT16; after boot the boot drive is mounted automatically through BIOS. Use `apps` or `edit FILE` immediately.
 
 To test a saved installed image, close the initial QEMU session and launch **without `-kernel`**:
 
@@ -338,3 +343,45 @@ The keyboard IRQ drains all pending PS/2 bytes on each interrupt. If the kernel'
 QEMU's emulated PS/2 controller queue is small (16 bytes) and can discard bytes before the kernel sees them during large synthetic input bursts. No kernel-side recovery can restore events that never arrive; normal typing is unaffected.
 
 When making changes, build and test the kernel before committing. Preserve working functionality and update the architecture and roadmap documents when behavior changes.
+
+To package the latest verified release for flashing, run `python tools/build_usb.py`. It creates a new raw image and instructions under `target/usb/`, checks USB-only boot and VESA graphics in QEMU, and records the image/checksum in `target/latest-usb.json`. Flash the image in raw/DD mode; this replaces the chosen USB contents.
+
+## BIOS USB and VESA regression tests
+
+`python tools/firmware_qemu.py` creates private images and verifies USB-only filesystem access, editor saves, independent FAT readback, cold boots, generic Cirrus VESA graphics with exact pixel checks, repeated text restoration/frame reclamation, and USB-to-IDE application installation. `--kernel PATH --package DIRECTORY` tests a release build. `rustc --edition=2021 --test tools/vbe_tests.rs -o target/vbe-tests.exe` builds pure mode-validation tests. No physical disks are attached by these tests.
+
+## Mouse test
+
+Type `mouse` for an 800x600 blue background with a traditional white arrow and black outline. Left-click either button to increment its counter; releasing outside cancels a pressed button. Right-click opens an on-screen menu with Reset clicks and Close menu. Outside clicks dismiss it without activating controls underneath. Escape restores the text console. The cursor restores only its previous footprint, with clipped drawing at screen edges.
+
+This uses a standard three-byte PS/2 mouse on IRQ12; keyboard/mouse bytes are routed by the shared controller's AUX status. Initialization is bounded, command acknowledgements are consumed before streaming, and input queues recover conservatively after loss. Idle waits halt until input/timer interrupts. No native USB keyboard/mouse driver has been added; firmware legacy emulation may supply compatible input. Mouse support is verified in QEMU, with physical mouse testing still needed.
+
+`rustc --edition=2021 --test tools/mouse_tests.rs -o target/mouse-tests.exe` and `tools/ps2_tests.rs` cover packet decoding, shared FIFO routing and UI state. `python tools/mouse_qemu.py` checks actual PS/2 movement/clicks, cursor pixels, capture, menu actions/edge bounds, keyboard recovery, frame balance and fatal text restoration. Use `--disk PATH --vga cirrus` to exercise the VESA backend with a private copy of a bootable image. Release builds now run that check too.
+
+## Window system test
+
+Type `desktop` to open two overlapping windows. Drag a title bar to move a window, click any exposed part to bring it forward, and click X to close it. Covered controls cannot receive clicks. The Buttons window retains its two counters when you close/reopen it. Right-click and choose Restore windows to reopen/reposition both windows; outside clicks dismiss the menu without activating controls underneath. Windows stay within the desktop area, and Escape returns to the shell. The existing `mouse` and `graphics` diagnostics remain available.
+
+This is an initial kernel window manager test; windows do not yet host independent programs or multitask. It uses the existing PS/2 and QEMU/VESA display backends. The renderer recomposes the scene in RAM when window state changes and presents only damaged regions, including old/new window bounds and shadows. Ordinary pointer motion still updates only its old/new footprints.
+
+`rustc --edition=2021 --test tools/desktop_tests.rs -o target/desktop-tests.exe` checks hit testing, focus, drag offsets/bounds, release capture, closing, menus and lost input. `python tools/desktop_qemu.py` verifies actual mouse interaction and compares the entire framebuffer against the composited RAM scene outside the pointer footprint after moving, raising, closing and restoring windows. `--disk PATH --vga cirrus` tests BIOS/VESA. Release packaging includes this check.
+
+## Simple graphical font
+
+The mouse and desktop tests use Xinyi Simple, a built-in ASCII bitmap font in `src/ui_font.rs`. Its hand-defined five-column glyphs expand to a 7x11 pixel shape inside the existing 8x16 character cells, so labels keep their current spacing and control layouts. It covers all 95 printable ASCII characters, including lowercase, digits and punctuation. Text is drawn directly into the graphical scene; the shell/editor VGA font and graphics diagnostic keep their existing font path. Loading font files, proportional spacing, Unicode and outline fonts remain future work.
+
+## Foreground application windows and Notepad
+
+`notepad [FILE]` (or `run notepad [FILE]`) loads `/APPS/NOTEPAD.BIN`, a protected ring-3 program. It creates a draggable 640x400 client window using the new window calls. The toolbar provides Save, Open, New, Save as and Quit. Click in the text area to place the caret; keyboard editing, navigation, scrolling, undo/redo and Ctrl+S/O/N/Q work as in the text editor. Save as checks before replacing another file. Closing via X uses the same unsaved-change prompt: S saves, D discards, C cancels. Save errors retain the document. ASCII text files still have the existing 1024-byte limit.
+
+The kernel owns window chrome, input and a private client surface; the program receives client-relative mouse events and validated drawing calls, without direct framebuffer access. Application-owned text rows are cached, and presentation updates dirty 16-pixel strips. Keyboard and mouse queues share capture sequence numbers so a click is delivered before keys typed after it. This first API supports one synchronous foreground window; applications must poll/wait for window events to keep its chrome responsive. It does not yet run several programs concurrently or launch them from the desktop test.
+
+The SDK in `sdk/xinyi.rs` exposes `window::open`, `event`, `draw`, `row`, `present` and `close`. Commands use RGB24 colours, fixed 8x16 text cells and a maximum batch of 16 draws. Entire batches (including ASCII text pointers) are checked before any drawing; event outputs must be writable user stack memory. Handles expire on close, and program exit/fault automatically restores text and frees surfaces. Text-console input/output calls return busy while a window is active; ticks, sleep, sound, arguments and file calls remain available.
+
+`tools/window_tests.rs` covers geometry, capture, close requests and sequence wrap. `python tools/window_qemu.py` checks actual ring-3 pointer validation, invalid-batch rejection, stale handles, fault/low-memory cleanup, Notepad toolbar/caret/dragging, unsaved-close handling, read-only errors and cold-boot persistence. `--disk IMAGE --vga cirrus --usb` uses a private copy for BIOS USB/VESA verification. Release packaging runs this test; applications remain ordinary files copied by installation.
+
+## Drag rendering
+
+Window movement now transfers framebuffer spans in machine words, converting packed 16/24-bit VESA pixels in a RAM row buffer first. The cursor is placed before window transfers, and its footprint is protected while the rest of the scene is copied. Queued mouse motion with unchanged buttons is processed together before repainting; button transitions, input resets and keyboard ordering remain boundaries. Each movement still updates clamping/capture state, so input is not replaced with an unchecked summed displacement.
+
+`python tools/window_drag_qemu.py --disk IMAGE --output target/drag.json --check` uses a disposable copy to measure burst-drag catch-up and sample cursor visibility. On this host's Cirrus/VESA QEMU test, median catch-up improved from about 122 ms to 50 ms, and missing-cursor samples fell from 90/98 to 0/16. These include input injection/QMP overhead and are not display frame-rate guarantees. Release builds include the cursor visibility regression check.

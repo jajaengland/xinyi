@@ -45,6 +45,7 @@ pub fn cancel() {
 }
 pub fn prepare_friendly(destination:Option<usize>)->Result<InstallPlan> {
     cancel();
+    if destination.is_none()&&diskfs::boot_selected() {return Err(Error::FirmwareDestination);}
     let mut copies:[Option<AppCopy>;16]=[const {None};16];
     if diskfs::is_mounted() {
         let mut names=[([0;11],0usize);16];let mut count=0;let mut overflow=false;

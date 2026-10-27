@@ -102,10 +102,10 @@ def main():
                         guest.command("write note.txt installed disk works", "Wrote 20 bytes")
                     transcript.append(guest.command("cat note.txt", "\ninstalled disk works\n"))
                     if boot == 1:
-                        guest.command("install", "To install, enter: install confirm")
+                        guest.command("install 1", "To install, enter: install confirm")
                         guest.command("unmount", "File commands now use RAM")
-                        preview = guest.command("install", "To install, enter: install confirm")
-                        assert "will be preserved" in preview
+                        preview = guest.command("install 1", "To install, enter: install confirm")
+                        assert "FAT16 files are preserved" in preview
                         transcript.append(preview)
                         guest.type("install confirm\n")
                         transcript.append(guest.wait_for("Installation complete:", timeout=30))

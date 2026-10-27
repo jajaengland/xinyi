@@ -105,6 +105,9 @@ start:
     mov cx, 20
     cld
     rep movsb
+    mov dword [INFO+148],0x31494258 ; XBI1: firmware boot-drive handoff.
+    movzx eax,byte [drive]
+    mov [INFO+152],eax
     mov eax, [HEADER+20]
     test eax, eax
     jz header_error

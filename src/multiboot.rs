@@ -91,6 +91,12 @@ pub fn disk_target() -> Option<crate::disk_target::Target> {
     }
     crate::disk_target::Target::decode(&record)
 }
+pub fn bios_drive()->Option<u8> {
+    if INFO_ADDR.load(Ordering::Relaxed)!=0x4000 {return None;}
+    let magic=unsafe {read_u32(0x4000,148)};
+    let drive=unsafe {read_u32(0x4000,152)};
+    if magic==0x31494258&&(0x80..=0x8f).contains(&drive) {Some(drive as u8)}else{None}
+}
 
 /// Return the physical address and byte length of the multiboot memory map.
 pub fn mmap_range() -> Option<(u32, u32)> {

@@ -29,7 +29,7 @@ fn main() {
         .arg("--output-dir").arg(&out_dir)
         .status().expect("Standard applications require Python 3 on PATH (or PYTHON)");
     assert!(status.success(), "Application build failed");
-    for path in ["programs", "sdk", "tools/build_apps.py", "tools/build_program.py", "i686-unknown-none.json"] {
+    for path in ["programs", "sdk", "src/window_protocol.rs", "tools/build_apps.py", "tools/build_program.py", "i686-unknown-none.json"] {
         println!("cargo:rerun-if-changed={path}");
     }
 
@@ -43,7 +43,7 @@ fn main() {
 
     assemble(&boot_asm, &boot_obj);
     assemble(&interrupts_asm, &interrupts_obj);
-    for name in ["disk_mbr", "disk_stage2", "demo"] {
+    for name in ["disk_mbr", "disk_stage2", "demo", "bios_thunk"] {
         let source = manifest_dir.join(if name == "demo" { "programs" } else { "src" }).join(format!("{}.asm", name));
         let output = out_dir.join(format!("{}.bin", name));
         let status = Command::new("nasm").args(["-f", "bin"])

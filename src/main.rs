@@ -16,8 +16,22 @@ mod user_buffer;
 mod terminal;
 mod speaker;
 mod files_api;
+mod bios;
+mod bios_disk;
+mod vbe;
+mod vbe_mode;
 mod canvas;
 mod graphics;
+mod ps2;
+mod mouse;
+mod mouse_packet;
+mod mouse_ui;
+mod desktop_ui;
+mod ui_font;
+mod window_protocol;
+mod app_window_ui;
+mod window_api;
+mod input_order;
 mod vfs;
 mod loader;
 mod blockdev;
@@ -35,6 +49,7 @@ mod bootdisk;
 mod vga;
 
 use core::panic::PanicInfo;
+use blockdev::BlockDevice;
 
 const INPUT_LIMIT: usize = 128;
 const HISTORY_LIMIT: usize = 8;
@@ -51,7 +66,10 @@ fn print_prompt() {
 // Entries are (command name, usage text, description).
 const COMMANDS: &[(&str, &str, &str)] = &[
     ("help", "help", "Show available commands"),
+    ("desktop", "desktop", "Test draggable, overlapping windows; Escape exits"),
+    ("mouse", "mouse", "Test PS/2 mouse, buttons and right-click menu; Escape exits"),
     ("graphics", "graphics", "Test framebuffer graphics; Escape returns to text"),
+    ("bios", "bios", "Show boot-firmware disk and VESA diagnostics"),
     ("about", "about", "About Xinyi"),
     ("clear", "clear", "Clear the screen"),
     ("echo", "echo TEXT", "Print text"),
@@ -70,6 +88,7 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("usermode", "usermode [probe]", "Test protected ring 3 execution"),
     ("ps", "ps", "Show running processes"),
     ("apps", "apps", "List programs installed in /APPS"),
+    ("notepad", "notepad [FILE]", "Open a file in graphical Notepad"),
     ("edit", "edit [FILE]", "Open a text file in the editor"),
     ("disks", "disks", "List available numbered drives"),
     ("use", "use NUMBER", "Select a numbered drive and mount its filesystem"),
@@ -422,6 +441,13 @@ fn run_command(input: &str) {
             println!("Total tasks: {}", task::task_count());
         }
 
+        "bios"=>{
+            println!("BIOS bridge: {}",if bios::available() {"available"}else{"unavailable (boot the disk/USB image)"});
+            if let Some(drive)=multiboot::bios_drive() {println!("Boot drive: {:02x}; sectors: {}; last disk status: {:02x}",drive,bios_disk::BOOT.block_count(),bios_disk::BOOT.status());}
+            match vbe::find_mode() {Ok(mode)=>println!("VBE mode {:04x}: 800x600x{} at {:08x}, pitch {}",mode.number,mode.bpp,mode.base,mode.pitch),Err(message)=>println!("{}",message)}
+        },
+        "desktop"=>graphics::desktop_demo(),
+        "mouse"=>graphics::mouse_demo(),
         "graphics"=>graphics::demo(),
         "apps" => {
             if let Err(error) = diskfs::list("/APPS", |name,size,directory| {
@@ -432,6 +458,7 @@ fn run_command(input: &str) {
             }) { println!("Applications: {}. Use disks and use NUMBER to choose a drive.",error.message()); }
         }
         "edit" => launch_program("edit", argument),
+        "notepad" => launch_program("notepad", argument),
         "disks" => diskfs::list_drives(),
         "use" => match argument.parse::<usize>() {
             Ok(number) => if let Err(error)=diskfs::use_drive(number,true) {println!("Drive: {}",error.message());},
@@ -757,6 +784,7 @@ pub extern "C" fn rust_main(magic: u32, info_addr: u32) -> ! {
     interrupts::init();
 
     // Remap the PIC and configure the PIT while interrupts remain disabled.
+    bios::init();
     interrupts::remap_pic();
     interrupts::init_pit();
 

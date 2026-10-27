@@ -164,7 +164,7 @@ pub extern "C" fn xinyi_exception_handler(
     };
 
     println!();
-    if !recover {crate::graphics::restore();}
+    if recover {crate::window_api::finish();}else{crate::graphics::restore();}
     println!("Xinyi: CPU exception!");
     println!("Exception: {}", name);
     println!("Vector: {}", vector);
@@ -209,7 +209,7 @@ pub extern "C" fn xinyi_exception_handler(
 pub extern "C" fn xinyi_irq_handler(vector: u32) {
     if vector == 32 {
         TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
-    } else if vector == 33 {
+    } else if vector == 33 || vector == 44 {
         crate::keyboard::handle_irq();
     }
 
@@ -243,6 +243,7 @@ pub extern "C" fn xinyi_syscall_handler(frame: &crate::syscall_frame::SyscallFra
         syscall_num, arg1, arg2, arg3, frame.cs
     ));
 
+    if crate::window_api::active()&&matches!(syscall_num,4|50|53..=55) {return (-16i32) as u32;}
     match syscall_num {
         1 => {
             // sys_exit
@@ -257,6 +258,7 @@ pub extern "C" fn xinyi_syscall_handler(frame: &crate::syscall_frame::SyscallFra
             crate::usermode::getpid()
         }
         50..=56 => crate::terminal::syscall(frame.cs, syscall_num, arg1, arg2, arg3),
+        60..=64 => crate::window_api::syscall(frame.cs,syscall_num,arg1,arg2,arg3),
         57..=59 => crate::files_api::syscall(frame.cs,syscall_num,arg1,arg2,arg3),
         _ => {
             0xFFFFFFFF

@@ -7,6 +7,8 @@ use crate::{
 };
 pub(crate) static DISK: AtaDisk = AtaDisk::new(0);
 static mut SELECTED: Option<crate::disk_target::Target> = None;
+static mut BOOT_SELECTED:bool=false;
+pub fn boot_selected()->bool {unsafe {*core::ptr::addr_of!(BOOT_SELECTED)}}
 static mut MOUNTED: Option<Fat16<'static>> = None;
 static mut FORMAT_PENDING: Option<FormatPlan> = None;
 static mut CWD: crate::fs_path::Path = crate::fs_path::Path::ROOT;
@@ -40,13 +42,23 @@ fn discover() {
 pub fn list_drives() {
     discover();let drives=unsafe {*core::ptr::addr_of!(DRIVES)};
     println!("Available drives (use NUMBER to open):");
+    if crate::bios_disk::BOOT.init() {
+        println!("  0: BIOS boot drive - {} MiB{}",crate::bios_disk::BOOT.block_count()/2048,if boot_selected() {" [selected]"}else{""});
+    }
     for (index,drive) in drives.iter().enumerate() {if let Some(drive)=drive {
         println!("  {}: {} - {} MiB {}{}",index+1,core::str::from_utf8(&drive.model).unwrap_or("ATA disk").trim(),drive.sectors/2048,
-            if drive.fat {"FAT16"}else{"unformatted/unsupported"},if target().ok()==Some(drive.target) {" [selected]"}else{""});
+            if drive.fat {"FAT16"}else{"unformatted/unsupported"},if !boot_selected()&&target().ok()==Some(drive.target) {" [selected]"}else{""});
     }}
     if drives[0].is_none() {println!("No supported IDE drives found.");}
 }
 pub fn use_drive(number:usize,mount_it:bool)->Result<()> {
+    if number==0 {
+        if !mount_it {return Err(Error::FirmwareDestination);}
+        if !crate::bios_disk::BOOT.init() {return Err(Error::Io);}
+        Fat16::new(&crate::bios_disk::BOOT)?;unmount()?;
+        unsafe {BOOT_SELECTED=true;}
+        mount()?;println!("Drive 0 ready: BIOS boot filesystem (persistent).");return Ok(());
+    }
     discover();
     let drive=number.checked_sub(1).and_then(|i|unsafe {(*core::ptr::addr_of!(DRIVES)).get(i).copied().flatten()}).ok_or(Error::NotFound)?;
     // Verify the new disk/filesystem before detaching the current one.
@@ -54,13 +66,18 @@ pub fn use_drive(number:usize,mount_it:bool)->Result<()> {
     if !candidate.init() {return Err(Error::Io);}
     if mount_it {Fat16::new(&candidate)?;}
     unmount()?;
-    unsafe {SELECTED=Some(drive.target);}
+    unsafe {SELECTED=Some(drive.target);BOOT_SELECTED=false;}
     DISK.adopt(&candidate);
     if mount_it {mount()?;println!("Drive {} ready. Files are persistent.",number);}
     else {println!("Selected drive {}.",number);}
     Ok(())
 }
 pub fn startup_mount() {
+    if crate::bios::available() {
+        unsafe {BOOT_SELECTED=true;}
+        if let Err(error)=use_drive(0,true) {println!("Boot filesystem unavailable: {}. Use disks and use NUMBER to choose another drive.",error.message());}
+        return;
+    }
     if crate::multiboot::disk_target().is_some() {
         match mount() {Ok(_)=>{println!("System drive ready. Type apps or edit FILE.");return;},Err(_)=>{}}
         // Never silently substitute another drive for a remembered installed target.
@@ -133,6 +150,7 @@ pub fn init_disk() -> Result<()> {
     }
 }
 pub fn report_target() {
+    if boot_selected() {println!("Selected: BIOS boot drive 0 (status {:02x})",crate::bios_disk::BOOT.status());return;}
     if let Ok(t) = target() {
         if t.bdf == u32::MAX {
             println!(
@@ -217,6 +235,7 @@ pub fn select_command(arguments: &str) {
     }
     unsafe {
         *core::ptr::addr_of_mut!(SELECTED) = Some(t);
+        BOOT_SELECTED=false;
     }
     DISK.adopt(&candidate);
     println!("Disk target selected (no disk sectors written).");
@@ -229,6 +248,7 @@ pub fn cancel_format() {
 }
 pub fn prepare_format() -> Result<FormatPlan> {
     cancel_format();
+    if boot_selected() {return Err(Error::FirmwareDestination);}
     if is_mounted() {
         return Err(Error::Mounted);
     }
@@ -241,6 +261,7 @@ pub fn prepare_format() -> Result<FormatPlan> {
     Ok(plan)
 }
 pub fn confirm_format() -> Result<()> {
+    if boot_selected() {return Err(Error::FirmwareDestination);}
     let plan = unsafe { *core::ptr::addr_of!(FORMAT_PENDING) };
     cancel_format(); // Every attempt consumes the confirmation, including errors.
     let plan = plan.ok_or(Error::ConfirmationRequired)?;
@@ -257,11 +278,13 @@ pub fn mount() -> Result<u32> {
     if let Some(fs) = unsafe { &*core::ptr::addr_of!(MOUNTED) } {
         return Ok(fs.start_sector());
     }
-    init_disk()?;
-    let fs = Fat16::new(&DISK)?;
+    let fs=if boot_selected() {
+        if !crate::bios_disk::BOOT.init() {return Err(Error::Io);}
+        Fat16::new(&crate::bios_disk::BOOT)?
+    }else{init_disk()?;Fat16::new(&DISK)?};
     let start = fs.start_sector();
     let has_apps=fs.is_directory("/APPS").is_ok();
-    let selected=target().ok();
+    let selected=if boot_selected() {None}else{target().ok()};
     unsafe {
         *core::ptr::addr_of_mut!(MOUNTED) = Some(fs);
         for drive in (&mut *core::ptr::addr_of_mut!(DRIVES)).iter_mut().flatten() {
@@ -272,7 +295,7 @@ pub fn mount() -> Result<u32> {
     Ok(start)
 }
 pub fn unmount() -> Result<()> {
-    let ok = !is_mounted() || DISK.flush();
+    let ok = !is_mounted() || if boot_selected() {crate::bios_disk::BOOT.flush()}else{DISK.flush()};
     unsafe {
         *core::ptr::addr_of_mut!(MOUNTED) = None;
     }
@@ -382,6 +405,12 @@ pub fn list(path: &str, visit: impl FnMut(&[u8; 11], usize, bool)) -> Result<()>
     finish(result)
 }
 pub fn test() {
+    if boot_selected() {
+        report_target();let mut sector=[0;512];
+        if crate::bios_disk::BOOT.read_block(0,&mut sector)&&sector[510..512]==[0x55,0xaa] {println!("Valid boot signature; BIOS boot filesystem is accessible.");}
+        else {println!("BIOS boot-drive read failed: status {:02x}",crate::bios_disk::BOOT.status());}
+        return;
+    }
     // Do not re-identify a device beneath an active mounted filesystem.
     if !is_mounted() && init_disk().is_err() {
         println!("No ATA disk found (or device timed out).");

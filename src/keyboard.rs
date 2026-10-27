@@ -1,25 +1,20 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-const DATA_PORT: u16 = 0x60;
-const STATUS_PORT: u16 = 0x64;
 const SCANCODE_BUFFER_SIZE: usize = 128;
-
-// Upper bound on bytes drained in one interrupt. A PS/2 controller only
-// buffers a few bytes, so this is far above any normal burst while still
-// guaranteeing that the handler terminates if the status port misbehaves.
-const MAX_BYTES_PER_IRQ: usize = 32;
 
 const EXTENDED_PREFIX: u8 = 0xE0;
 const LEFT_SHIFT: u8 = 0x2A;
 const RIGHT_SHIFT: u8 = 0x36;
 const CAPS_LOCK: u8 = 0x3A;
 
-// Single-producer (IRQ1), single-consumer (shell) ring buffer.
+// Serialized IRQ1/IRQ12 FIFO routing, single-consumer (shell) ring buffer.
 static SCANCODE_HEAD: AtomicUsize = AtomicUsize::new(0);
 static SCANCODE_TAIL: AtomicUsize = AtomicUsize::new(0);
 static DROPPED_SCANCODES: AtomicUsize = AtomicUsize::new(0);
 static mut SCANCODE_BUFFER: [u8; SCANCODE_BUFFER_SIZE] =
     [0; SCANCODE_BUFFER_SIZE];
+
+static mut SCANCODE_ORDER:[u32;SCANCODE_BUFFER_SIZE]=[0;SCANCODE_BUFFER_SIZE];
 
 static mut LEFT_SHIFT_DOWN: bool = false;
 static mut RIGHT_SHIFT_DOWN: bool = false;
@@ -44,21 +39,10 @@ pub enum Key {
     Special(u16),
 }
 
-unsafe fn inb(port: u16) -> u8 {
-    let value: u8;
-
-    core::arch::asm!(
-        "in al, dx",
-        in("dx") port,
-        out("al") value,
-        options(nomem, nostack, preserves_flags)
-    );
-
-    value
-}
+pub(crate) fn bad_byte() {DROPPED_SCANCODES.fetch_add(1,Ordering::Relaxed);}
 
 /// Append one byte to the ring buffer. Called by the IRQ producer.
-fn push_scancode(code: u8) {
+pub(crate) fn push_scancode(code: u8) {
     let head = SCANCODE_HEAD.load(Ordering::Relaxed);
     let next = (head + 1) % SCANCODE_BUFFER_SIZE;
     let tail = SCANCODE_TAIL.load(Ordering::Acquire);
@@ -78,26 +62,16 @@ fn push_scancode(code: u8) {
             .write(code);
     }
 
+    unsafe {core::ptr::addr_of_mut!(SCANCODE_ORDER).cast::<u32>().add(head).write(crate::input_order::next());}
     SCANCODE_HEAD.store(next, Ordering::Release);
 }
 
-/// Called by IRQ1. Collects scancodes without printing or decoding them.
+/// Called by IRQ1/IRQ12. Route shared FIFO bytes without printing or drawing.
 ///
 /// The controller is drained completely rather than reading a single byte.
 /// Its hardware queue is small, so leaving bytes behind while handling other
 /// interrupts can make it overflow and silently lose key releases.
-pub fn handle_irq() {
-    for _ in 0..MAX_BYTES_PER_IRQ {
-        unsafe {
-            if inb(STATUS_PORT) & 1 == 0 {
-                return;
-            }
-
-            let code = inb(DATA_PORT);
-            push_scancode(code);
-        }
-    }
-}
+pub fn handle_irq() {crate::ps2::drain();}
 
 /// Gets the next scancode collected by IRQ1.
 fn read_scancode() -> Option<u8> {
@@ -343,6 +317,11 @@ pub fn right_shift_down() -> bool {
 
 pub fn caps_lock_on() -> bool {
     unsafe { CAPS_LOCK_ON }
+}
+
+pub fn next_order()->Option<u32> {
+    let tail=SCANCODE_TAIL.load(Ordering::Relaxed);
+    if tail==SCANCODE_HEAD.load(Ordering::Acquire) {None}else{Some(unsafe {core::ptr::addr_of!(SCANCODE_ORDER).cast::<u32>().add(tail).read()})}
 }
 
 pub fn queued_scancodes() -> usize {

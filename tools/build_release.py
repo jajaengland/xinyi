@@ -33,18 +33,35 @@ def main():
     subprocess.run([sys.executable,str(ROOT/"tools/build_apps.py"),"--output-dir",str(directory)],cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/system_qemu.py"),"--package",str(directory),"--kernel",str(kernel),
                     "--qemu",qemu,"--output",str(image)],cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/firmware_qemu.py"),"--package",str(directory),"--kernel",str(kernel)],
+                   cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/mouse_qemu.py"),"--kernel",str(kernel),"--disk",str(image),"--vga","cirrus"],
+                   cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/desktop_qemu.py"),"--kernel",str(kernel),"--disk",str(image),"--vga","cirrus"],
+                   cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/window_qemu.py"),"--kernel",str(kernel),"--package",str(directory),"--disk",str(image),"--vga","cirrus","--usb"],
+                   cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/window_drag_qemu.py"),"--disk",str(image),"--output",str(directory/"drag-check.json"),"--check"],
+                   cwd=ROOT,env=environment,check=True)
     shutil.copyfile(kernel,directory/"rust-os")
     shutil.copyfile(ROOT/"programs/apps.txt",directory/"applications.txt")
     (directory/"README.txt").write_text(
         "Xinyi BIOS-bootable release\n\nPrograms are ordinary files in /APPS, not embedded in the kernel.\n"
-        "The installed system drive mounts automatically. Type apps, run snake, run tetris or edit note.txt.\n"
+        "The installed system drive mounts automatically. Type apps, run snake, run tetris, edit note.txt or notepad note.txt.\n"
         "Editor: Ctrl+S save, Ctrl+Shift+S Save As, Ctrl+O open, Ctrl+N new, Ctrl+Z/Y undo/redo, Ctrl+Q quit.\n"
         "Text files currently support ASCII and up to 1024 bytes. Save errors retain the document.\n"
         "Use disks to list numbered drives, use NUMBER to switch, and install NUMBER to preview installation.\n"
         "Installation copies /APPS from the currently mounted source to the destination after confirmation.\n"
-        "A prebuilt QEMU image remembers its QEMU IDE controller; on other hardware select the drive with disks/use.\n"
+        "BIOS disk/USB boots mount the actual boot filesystem as drive 0; IDE destinations use install NUMBER.\n"
         "QEMU speaker sound is enabled by Launch-Xinyi.cmd. Games: P pauses, R restarts, Escape quits.\n"
-        "Verified: BIOS boot, actual app files, editor saves across cold boots and copying apps onto another drive.\n")
+        "Graphics: QEMU std VGA, or BIOS VESA 800x600 RGB565/24/32-bit on supported cards. Type bios for diagnostics.\n"
+        "Type mouse for the blue-screen PS/2 pointer/buttons/menu test; Escape exits.\n"
+        "Type desktop for draggable overlapping windows; X closes, right-click restores, Escape exits.\n"
+        "The mouse/desktop tests and application windows use a simple built-in ASCII bitmap font.\n"
+        "Notepad is /APPS/NOTEPAD.BIN: mouse toolbar, keyboard editing, Ctrl+S save, Ctrl+Q quit.\n"
+        "USB access uses BIOS EDD for the boot drive only; no hotplug/native USB or UEFI support.\n"
+        "Firmware writes are read back, but provide no portable cache-flush durability guarantee.\n"
+        "Verified in QEMU: BIOS boot, actual app files, editor saves across cold boots and copying apps onto another drive.\n")
     # %~dp0 keeps the Windows launcher usable after moving the release folder.
     (directory/"Launch-Xinyi.cmd").write_text('@echo off\n"'+qemu+'" -m 128M -drive "file=%~dp0xinyi.img,format=raw,if=ide,index=0" -boot c -display sdl -name "Xinyi release" -audiodev dsound,id=speaker -machine pcspk-audiodev=speaker -nic none\n')
     files=sorted(path for path in directory.rglob("*") if path.is_file())

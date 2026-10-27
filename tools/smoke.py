@@ -56,6 +56,8 @@ class Guest:
             self.reader.readline()  # QMP greeting
             self.call("qmp_capabilities")
             self.wait_for(boot_message, timeout=15)
+            if boot_message=="Welcome to Xinyi.":
+                self.wait_for("xinyi:/",timeout=30)
         except BaseException:
             self.close()
             raise
