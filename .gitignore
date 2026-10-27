@@ -1,3 +1,35 @@
+# Build output and test captures
 /target/
 __pycache__/
 *.pyc
+*.log
+
+# Generated binaries, disk images and local backups
+*.bin
+*.elf
+*.o
+*.obj
+*.img
+*.iso
+*.vdi
+*.vmdk
+*.qcow
+*.qcow2
+*.vhd
+*.vhdx
+*.bak
+*.tmp
+*.swp
+
+# Local credentials and environment files
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+/.ssh/
+/.aws/
+/.codex/
+/.agents/

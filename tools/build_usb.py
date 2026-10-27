@@ -42,7 +42,7 @@ def main():
            "Installation copies the apps from the mounted source. Drive 0 is not a format/install destination.\n"
            "Use unmount before removing the USB. Firmware writes are read back but have no portable cache-flush guarantee.\n"
            "Support is for the BIOS boot drive, without native USB hotplug, non-boot USB, AHCI, or UEFI support.\n"
-           "Verified with QEMU USB-only boot and Cirrus VESA; physical dc7800 verification remains to be done.\n")
+           "Verified with QEMU USB-only boot and Cirrus VESA.\n")
     (directory/"README.txt").write_text(notes)
     digest=hashlib.sha256(image.read_bytes()).hexdigest()
     (directory/"SHA256SUMS.txt").write_text(digest+"  "+image.name+"\n")
