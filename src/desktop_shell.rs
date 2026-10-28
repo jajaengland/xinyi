@@ -25,6 +25,7 @@ pub struct Shell {
     pub focused: Option<u32>,
     pub open: bool,
     pub capture: Option<Hit>,
+    pub menu_selection: Option<usize>,
     pub x: i32,
     pub y: i32,
     buttons: u8,
@@ -40,6 +41,7 @@ impl Shell {
             focused: None,
             open: false,
             capture: None,
+            menu_selection: None,
             x: 400,
             y: 300,
             buttons: 0,
@@ -114,8 +116,50 @@ impl Shell {
     pub fn reset(&mut self, buttons: u8) {
         self.open = false;
         self.capture = None;
+        self.menu_selection = None;
         self.buttons = buttons;
         self.blocked = false;
+    }
+    /// Cycle in stable taskbar order, including minimized tasks and empty slots.
+    pub fn next_task(&self, reverse: bool) -> Option<u32> {
+        let current = self.tasks.iter().position(|task| {
+            task.is_some_and(|task| Some(task.pid) == self.focused)
+        });
+        let start = current.unwrap_or(if reverse { 0 } else { 3 });
+        for offset in 1..=4 {
+            let index = if reverse { (start + 4 - offset) % 4 } else { (start + offset) % 4 };
+            if let Some(task) = self.tasks[index] { return Some(task.pid); }
+        }
+        None
+    }
+    /// Global Apps shortcut and menu navigation consume keys before applications.
+    pub fn key(&mut self, code: u32) -> (bool, Option<Action>) {
+        let key = code as u16;
+        if key == 27 && code & (1 << 17) != 0 && code & (1 << 18) == 0 {
+            self.open = !self.open;
+            self.capture = None;
+            self.menu_selection = if self.open && self.catalog.len > 0 { Some(0) } else { None };
+            return (true, None);
+        }
+        if !self.open { return (false, None); }
+        match key {
+            27 => { self.open = false; self.menu_selection = None; },
+            0x100 | 0x101 | 0x104 | 0x105 if self.catalog.len > 0 => {
+                let last = self.catalog.len - 1;
+                self.menu_selection = Some(match key {
+                    0x100 => self.menu_selection.map_or(last, |i| if i == 0 { last } else { i - 1 }),
+                    0x101 => self.menu_selection.map_or(0, |i| (i + 1) % self.catalog.len),
+                    0x104 => 0,
+                    _ => last,
+                });
+            },
+            10 => {
+                self.open = false;
+                return (true, self.menu_selection.take().filter(|&i| i < self.catalog.len).map(Action::Launch));
+            },
+            _ => (),
+        }
+        (true, None)
     }
     // Outside presses dismiss menus without clicking through to an application.
     pub fn input(
@@ -125,7 +169,10 @@ impl Shell {
         buttons: u8,
         lost: bool,
     ) -> (bool, Option<Action>, bool) {
-        let previous = (self.open, self.capture, self.hit());
+        let previous = (self.open, self.capture, self.hit(), self.menu_selection);
+        if (x, y) != (self.x, self.y) || buttons != self.buttons || lost {
+            self.menu_selection = None;
+        }
         self.x = x;
         self.y = y;
         let pressed = buttons & !self.buttons;
@@ -166,7 +213,7 @@ impl Shell {
         (
             consumed,
             action,
-            previous != (self.open, self.capture, self.hit()),
+            previous != (self.open, self.capture, self.hit(), self.menu_selection),
         )
     }
 }

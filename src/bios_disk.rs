@@ -2,6 +2,10 @@ use core::sync::atomic::{AtomicU32,Ordering};
 use crate::{bios::{self,Registers},blockdev::BlockDevice};
 pub struct BiosDisk {sectors:AtomicU32,error:AtomicU32}
 pub static BOOT:BiosDisk=BiosDisk{sectors:AtomicU32::new(0),error:AtomicU32::new(0)};
+// Serialized filesystem access only; IRQs never access storage. Do not keep a
+// cache borrow across a firmware call or a worker checkpoint.
+static mut CACHE:crate::block_cache::Cache=crate::block_cache::Cache::new();
+pub fn invalidate_cache() {unsafe {(&mut *core::ptr::addr_of_mut!(CACHE)).clear();}}
 impl BiosDisk {
     pub fn init(&self)->bool {
         if self.sectors.load(Ordering::Relaxed)!=0 {return true;}
@@ -28,15 +32,23 @@ impl BiosDisk {
 }
 impl BlockDevice for BiosDisk {
     fn read_block(&self,block:u32,buffer:&mut [u8])->bool {
-        if buffer.len()<512||!self.transfer(block,false) {return false;}
-        unsafe {core::ptr::copy_nonoverlapping(0x10000 as *const u8,buffer.as_mut_ptr(),512);}true
+        if buffer.len()<512||block>=self.block_count() {return false;}
+        let cached=unsafe {(&mut *core::ptr::addr_of_mut!(CACHE)).read(block,buffer)};
+        if cached {crate::disk_io::checkpoint();return true;}
+        if !self.transfer(block,false) {invalidate_cache();return false;}
+        unsafe {core::ptr::copy_nonoverlapping(0x10000 as *const u8,buffer.as_mut_ptr(),512);}
+        unsafe {(&mut *core::ptr::addr_of_mut!(CACHE)).store(block,buffer);}
+        crate::disk_io::checkpoint();true
     }
     fn write_block(&self,block:u32,buffer:&[u8])->bool {
         if buffer.len()<512 {return false;}
         unsafe {core::ptr::copy_nonoverlapping(buffer.as_ptr(),0x10000 as *mut u8,512);}
-        if !self.transfer(block,true)||!self.transfer(block,false) {return false;}
+        if !self.transfer(block,true)||!self.transfer(block,false) {invalidate_cache();return false;}
         let readback=unsafe {core::slice::from_raw_parts(0x10000 as *const u8,512)};
-        readback==&buffer[..512]
+        let result=readback==&buffer[..512];
+        if result {unsafe {(&mut *core::ptr::addr_of_mut!(CACHE)).store(block,buffer);}}
+        else {invalidate_cache();}
+        crate::disk_io::checkpoint();result
     }
     fn block_size(&self)->usize {512}
     fn block_count(&self)->u32 {self.sectors.load(Ordering::Relaxed)}

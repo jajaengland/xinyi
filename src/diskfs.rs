@@ -284,6 +284,7 @@ pub fn mount() -> Result<u32> {
     if let Some(fs) = unsafe { &*core::ptr::addr_of!(MOUNTED) } {
         return Ok(fs.start_sector());
     }
+    crate::bios_disk::invalidate_cache();
     let fs=if boot_selected() {
         if !crate::bios_disk::BOOT.init() {return Err(Error::Io);}
         Fat16::new(&crate::bios_disk::BOOT)?
@@ -303,6 +304,7 @@ pub fn mount() -> Result<u32> {
 pub fn sync()->Result<()> {if !is_mounted()||if boot_selected(){crate::bios_disk::BOOT.flush()}else{DISK.flush()}{Ok(())}else{Err(Error::Io)}}
 pub fn unmount() -> Result<()> {
     let ok = !is_mounted() || if boot_selected() {crate::bios_disk::BOOT.flush()}else{DISK.flush()};
+    crate::bios_disk::invalidate_cache();
     unsafe {
         *core::ptr::addr_of_mut!(MOUNTED) = None;
     }
@@ -508,3 +510,91 @@ pub fn read_executable(name:&str,output:&mut[u8])->Result<usize>{let result=read
 
 pub fn file_size(name:&str)->Result<usize>{let mut bytes=[0;crate::fs_path::MAX_PATH];let n=absolute(name,&mut bytes)?;let name=core::str::from_utf8(&bytes[..n]).unwrap();let result=match unsafe{&*core::ptr::addr_of!(MOUNTED)}{Some(fs)=>fs.file_size(name),None=>Err(Error::InvalidVolume)};finish(result)}
 pub fn save_large(name:&str,data:&[u8])->Result<()>{let mut bytes=[0;crate::fs_path::MAX_PATH];let n=absolute(name,&mut bytes)?;let name=core::str::from_utf8(&bytes[..n]).unwrap();let result=match unsafe{&*core::ptr::addr_of!(MOUNTED)}{Some(fs)=>fs.save_large(name,data),None=>Err(Error::InvalidVolume)};finish(result)}
+
+// Physical-console-only audit: the desktop worker must have released every FS reference.
+#[derive(Clone, Copy)]
+struct RepairPreview {
+    report: fat16::check::Report,
+    epoch: u32,
+    boot: bool,
+    target: Option<crate::disk_target::Target>,
+}
+static mut REPAIR_PENDING: Option<RepairPreview> = None;
+pub fn cancel_repair() { unsafe { REPAIR_PENDING = None; } }
+fn print_check(r: fat16::check::Report) {
+    println!("FAT16 sector {}: {} files, {} directories",r.volume_start,r.files,r.directories);
+    println!("Clusters: {} live, {} free, {} orphan, {} bad, {} reserved",r.referenced,r.free,r.orphans,r.bad,r.reserved);
+    println!("Errors: {} mirror entries ({} unsafe), {} headers",r.mirrors,r.unsafe_mirrors,r.headers);
+    println!("Chains: {} broken, {} loops, {} crosslinks, {} size errors",r.broken,r.loops,r.cross_links,r.sizes);
+    println!("Other: {} invalid links, {} directory errors, {} scan limits",r.invalid_links,r.directory_errors,r.limits);
+    println!("fsck: {}",if r.clean() {"clean"} else if r.repairable() {"orphan cleanup available"} else {"damage found; automatic repair refused"});
+}
+pub fn check_command(argument: &str) {
+    if crate::multitask::active() || crate::pty::current().is_some() {
+        cancel_repair();
+        println!("Close the desktop and run fsck from the physical console.");return;
+    }
+    let result = check_selected(argument);
+    if let Err(error)=result {
+        crate::bios_disk::invalidate_cache();
+        if matches!(error,Error::Io|Error::Corrupt|Error::InvalidVolume) && is_mounted() {
+            unsafe {MOUNTED=None;}
+            reset_directory();
+            println!("Volume detached after failed scan. File commands now use RAM.");
+        }
+        println!("fsck failed: {}",error.message());
+    }
+}
+fn check_selected(argument: &str) -> Result<()> {
+    use fat16::check::{scan,repair_orphans,WORKSPACE_WORDS};
+    // Confirmation is one-shot, including failure and target changes.
+    let pending = unsafe { REPAIR_PENDING };
+    cancel_repair();
+    if !matches!(argument,""|"repair-orphans"|"confirm") {
+        println!("Usage: fsck | fsck repair-orphans | fsck confirm");return Ok(());
+    }
+    if argument != "" && is_mounted() { return Err(Error::Mounted); }
+    if argument == "confirm" && pending.is_none() { return Err(Error::RepairConfirmationRequired); }
+    let device: &dyn BlockDevice = if boot_selected() {
+        if !crate::bios_disk::BOOT.init() {return Err(Error::Io);}
+        &crate::bios_disk::BOOT
+    } else { init_disk()?; &DISK };
+    let frames = crate::loader::Frames::new((WORKSPACE_WORDS*2+4095)/4096).ok_or(Error::OutOfMemory)?;
+    let scratch=unsafe {core::slice::from_raw_parts_mut(frames.base() as *mut u16,WORKSPACE_WORDS)};
+    crate::bios_disk::invalidate_cache();
+    report_target();
+    if argument == "confirm" {
+        let preview=pending.unwrap();
+        if preview.epoch!=volume_epoch() || preview.boot!=boot_selected() || preview.target!=unsafe{SELECTED} {
+            return Err(Error::DiskChanged);
+        }
+        let after=repair_orphans(device,scratch,preview.report)?;
+        crate::bios_disk::invalidate_cache();
+        reset_directory();
+        print_check(after);
+        println!("Reclaimed {} orphan clusters. Run mount to use this drive.",preview.report.orphans);
+        return Ok(());
+    }
+    let report=scan(device,scratch)?;
+    print_check(report);
+    if argument == "" {
+        println!("Read-only scan; no changes made.");
+        if !report.clean() && is_mounted() {
+            // Detach without writing or flushing damaged metadata.
+            unsafe {MOUNTED=None;}
+            reset_directory();
+            println!("Damaged volume detached. File commands now use RAM.");
+        }
+    } else if !report.repairable() {
+        return Err(Error::Corrupt);
+    } else if report.orphans == 0 {
+        println!("No orphan clusters to reclaim.");
+    } else {
+        println!("Preview: free {} clusters ({} bytes) on the target above.",report.orphans,report.orphans as u64*report.cluster_bytes as u64);
+        println!("This discards lost/unfinished file data in those clusters.");
+        println!("To apply, enter: fsck confirm");
+        println!("Any other command cancels confirmation.");
+        unsafe {REPAIR_PENDING=Some(RepairPreview{report,epoch:volume_epoch(),boot:boot_selected(),target:SELECTED});}
+    }
+    Ok(())
+}

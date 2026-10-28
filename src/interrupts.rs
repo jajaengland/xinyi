@@ -1,9 +1,10 @@
 use core::arch::asm;
 use crate::debug;
 use crate::println;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 static TIMER_TICKS: AtomicU32 = AtomicU32::new(0);
+static PIT_PROGRAMMING_EDGE: AtomicBool = AtomicBool::new(false);
 
 const PIT_FREQUENCY: u32 = 100;
 
@@ -208,7 +209,10 @@ pub extern "C" fn xinyi_exception_handler(
 #[no_mangle]
 pub extern "C" fn xinyi_irq_handler(vector: u32) {
     if vector == 32 {
-        TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+        if !PIT_PROGRAMMING_EDGE.swap(false, Ordering::Relaxed) {
+            TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+        }
+        let _ = crate::monotonic::ticks();
     } else if vector == 33 || vector == 44 {
         crate::keyboard::handle_irq();
     }
@@ -315,6 +319,8 @@ pub fn remap_pic() {
 
 /// Configure the PIT to interrupt 100 times per second.
 pub fn init_pit() {
+    // Mode 3 initially raises OUT. That programming edge is not elapsed time.
+    PIT_PROGRAMMING_EDGE.store(true, Ordering::Relaxed);
     let divisor = 1_193_182u32 / PIT_FREQUENCY;
 
     unsafe {
@@ -344,7 +350,7 @@ pub fn init_pit() {
 
 /// Return the number of timer ticks since PIT initialization.
 pub fn timer_ticks() -> u32 {
-    TIMER_TICKS.load(Ordering::Relaxed)
+    crate::monotonic::ticks().unwrap_or_else(|| TIMER_TICKS.load(Ordering::Relaxed))
 }
 
 pub fn uptime_seconds() -> u32 {

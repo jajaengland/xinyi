@@ -14,3 +14,14 @@ pub fn runnable(state: State, now: u32, event: bool) -> bool {
         State::Waiting => event,
     }
 }
+
+// Internal process slots stay fixed; only the root/taskbar ordering changes.
+pub fn compact_roots<const N: usize>(slots: &mut [Option<usize>; N]) {
+    let mut next = 0;
+    for old in 0..4 {
+        if let Some(slot) = slots.iter_mut().find(|slot| **slot == Some(old)) {
+            *slot = Some(next);
+            next += 1;
+        }
+    }
+}

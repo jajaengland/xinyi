@@ -21,13 +21,14 @@ struct Session {
     pending: bool,
     kill: u32,
     closed: bool,
-    cache: [Cell; 2640],
-    frozen: [Cell; 2640],
+    cache: [Cell; 2720],
+    frozen: [Cell; 2720],
     selection: Option<(usize, usize)>,
     freeze: bool,
     last_cursor: Option<(usize, usize)>,
     view: usize,
     rows:usize,
+    deferred: Option<([u8; 128], usize)>,
 }
 impl Session {
     fn new() -> Self {
@@ -42,13 +43,14 @@ impl Session {
             pending: false,
             kill: 0,
             closed: false,
-            cache: [Cell { ch: 0, color: 0 }; 2640],
-            frozen: [Cell { ch: 0, color: 0 }; 2640],
+            cache: [Cell { ch: 0, color: 0 }; 2720],
+            frozen: [Cell { ch: 0, color: 0 }; 2720],
             selection: None,
             freeze: false,
             last_cursor: None,
             view: 0,
             rows:25,
+            deferred: None,
         }
     }
 }
@@ -237,6 +239,12 @@ pub fn finish() {
         SLOTS = [const { None }; 4];
     }
 }
+fn command_needs_disk(line: &[u8]) -> bool {
+    let text = core::str::from_utf8(line).unwrap_or("");
+    let command = text.split_ascii_whitespace().next().unwrap_or("");
+    !matches!(command, "" | "help" | "version" | "ver" | "uptime" | "echo" |
+        "clear" | "ps" | "kill" | "date" | "pwd")
+}
 pub fn service() {
     let mut ids = [0; 4];
     unsafe {
@@ -259,6 +267,14 @@ pub fn service() {
         crate::diskfs::set_directory(unsafe { (*p).directory });
         let mut shell = unsafe { (*p).shell.take().unwrap() };
         for _ in 0..64 {
+            if unsafe { (*p).deferred.is_some() } {
+                if crate::disk_io::busy() { break; }
+                let (line, n) = unsafe { (*p).deferred.take().unwrap() };
+                crate::run_command(core::str::from_utf8(&line[..n]).unwrap_or(""));
+                if unsafe { (*p).pending || (*p).closed } { break; }
+                crate::println!();
+                shell.prompt();
+            }
             let Some(key) = read_key(id) else {
                 break;
             };
@@ -267,6 +283,11 @@ pub fn service() {
                 break;
             }
             if let Some((line, n)) = shell.key(key) {
+                if crate::disk_io::busy() && command_needs_disk(&line[..n]) {
+                    unsafe { (*p).deferred = Some((line, n)); }
+                    crate::println!("Waiting for disk...");
+                    break;
+                }
                 crate::run_command(core::str::from_utf8(&line[..n]).unwrap_or(""));
                 if unsafe { (*p).pending || (*p).closed } {
                     break;
@@ -281,6 +302,13 @@ pub fn service() {
         }
         crate::diskfs::set_directory(directory);
         set_current(previous);
+    }
+}
+pub fn io_window_owner(pid: u32) -> u32 {
+    unsafe {
+        (&*core::ptr::addr_of!(SLOTS)).iter().flatten()
+            .find(|slot| (*(slot.frames.base() as *const Session)).foreground == pid)
+            .map_or(pid, |slot| slot.owner)
     }
 }
 fn key(id: u32, key: u32) -> u32 {
@@ -404,7 +432,7 @@ pub fn syscall(cs: u32, number: u32, a: u32, b: u32, c: u32) -> u32 {
                 4 => u32::from((*p).closed),
                 6 => (*p).console.scroll_limit((*p).rows) as u32,
                 7 => (*p).console.scrolls as u32,
-                8 if (25..=33).contains(&c)=>{(*p).rows=c as usize;(*p).view=0;(*p).freeze=false;(*p).selection=None;(*p).cache.fill(Cell{ch:0,color:0});(*p).last_cursor=None;0},
+                8 if (25..=34).contains(&c)=>{(*p).rows=c as usize;(*p).view=0;(*p).freeze=false;(*p).selection=None;(*p).cache.fill(Cell{ch:0,color:0});(*p).last_cursor=None;0},
                 5 => {
                     (*p).cache.fill(Cell { ch: 0, color: 0 });
                     (*p).last_cursor = None;
@@ -549,7 +577,7 @@ pub fn syscall(cs: u32, number: u32, a: u32, b: u32, c: u32) -> u32 {
             }
             let s = &mut *p;
             s.view = (c as usize).min(s.console.scroll_limit(s.rows));
-            let mut cells = [Cell { ch: 0, color: 0 }; 2640];
+            let mut cells = [Cell { ch: 0, color: 0 }; 2720];
             if s.freeze {
                 cells = s.frozen;
             } else {

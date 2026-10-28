@@ -41,7 +41,9 @@ pub fn invoke(mut registers:Registers)->Option<Registers> {
         output(0x43,0x36);output(0x40,0);output(0x40,0);
         CONTEXT.write(registers);
         let entry:extern "C" fn()=core::mem::transmute(0x7000usize);
+        let _ = crate::monotonic::ticks();
         entry();
+        let _ = crate::monotonic::ticks();
         registers=CONTEXT.read();
         pic(0x20,0x28,masks);
         crate::interrupts::init_pit();

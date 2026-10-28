@@ -1,4 +1,4 @@
-// Timer preemption only at ring 3; Rust kernel frames are never suspended.
+// User preemption at ring 3; disk calls use one explicitly yielding worker.
 use crate::{
     cpu_context::Cpu,
     loader::{self, Frames},
@@ -18,6 +18,7 @@ enum Pause {
     Console(u32),
     Tty(u32),
     Detach(u32),
+    Io(crate::disk_io::Request),
 }
 static mut ACTIVE: bool = false;
 static mut DESKTOP: bool = false;
@@ -36,6 +37,64 @@ static mut RUNNING: usize = 0;
 static mut ROOTS: usize = 0;
 static mut DIRECTORIES:[Option<crate::fs_path::Path>;LIMIT]=[None;LIMIT];
 static mut KILLS: [u32; 8] = [0; 8];
+#[derive(Clone, Copy)]
+struct Process {
+    pid: u32,
+    name: [u8; 8],
+    name_length: usize,
+    state: State,
+    memory_kib: u32,
+    terminal: bool,
+    disk: bool,
+}
+// Published by the dispatcher before servicing shell commands. Never borrow
+// live Job records while a terminal command can request their termination.
+static mut PROCESSES: [Option<Process>; LIMIT] = [None; LIMIT];
+
+fn sync_processes(jobs: &[Option<Job>; LIMIT]) {
+    let snapshot = core::array::from_fn(|i| jobs[i].as_ref().map(|job| Process {
+        pid: job.pid,
+        name: job.name,
+        name_length: job.name_length,
+        state: job.state,
+        memory_kib: (job.program.image.top() - job.program.image.base()
+            + job.program.stack.top() - job.program.stack.base()
+            + job.stack.top() - job.stack.base()) / 1024 + job.space.memory_kib(),
+        terminal: job.tty.is_some() || job.terminal_owner.is_some(),
+        disk: job.io.is_some(),
+    }));
+    unsafe { core::ptr::addr_of_mut!(PROCESSES).write(snapshot); }
+}
+
+pub fn list_processes() {
+    let snapshot = unsafe { core::ptr::addr_of!(PROCESSES).read() };
+    crate::println!("PID  NAME      STATE    KiB  TYPE");
+    for process in snapshot.iter().flatten() {
+        let state = if process.disk { "disk" } else { match process.state {
+            State::Ready => "ready",
+            State::Sleep(_) => "sleep",
+            State::Waiting => "waiting",
+        }};
+        let name = core::str::from_utf8(&process.name[..process.name_length]).unwrap_or("?");
+        crate::println!("{:<4} {:<8} {:<7} {:>5}  {}", process.pid, name, state,
+            process.memory_kib, if process.terminal { "text" } else { "app" });
+    }
+    crate::println!("Total processes: {}", snapshot.iter().flatten().count());
+    crate::println!("KiB includes private pages and kernel stack; excludes GUI buffers.");
+}
+
+pub fn request_kill(pid: u32) -> Result<(), &'static str> {
+    let snapshot = unsafe { core::ptr::addr_of!(PROCESSES).read() };
+    if !snapshot.iter().flatten().any(|process| process.pid == pid) {
+        return Err("Process not found");
+    }
+    let queue = unsafe { &mut *core::ptr::addr_of_mut!(KILLS) };
+    if queue.contains(&pid) { return Ok(()); }
+    let slot = queue.iter_mut().find(|slot| **slot == 0)
+        .ok_or("Termination queue full; try again")?;
+    *slot = pid;
+    Ok(())
+}
 pub fn queue_kill(pid: u32) {
     unsafe {
         if let Some(slot) = (&mut *core::ptr::addr_of_mut!(KILLS))
@@ -109,6 +168,11 @@ pub fn wait_window() {
 pub fn syscall(number: u32, first: u32, second: u32, third: u32) -> Option<u32> {
     if !active() {
         return None;
+    }
+    if unsafe { DESKTOP } && crate::disk_io::handles(number, first) {
+        pause(Pause::Io(crate::disk_io::Request { number, a: first, b: second, c: third,
+            volume: crate::diskfs::volume_epoch() }));
+        return Some(0);
     }
     if let Some(id) = crate::pty::current() {
         if matches!(number, 60 | 65) {
@@ -263,6 +327,9 @@ struct Job {
     tty: Option<u32>,
     task_slot: Option<usize>,
     terminal_owner: Option<u32>,
+    io: Option<crate::disk_io::Request>,
+    kill_after_io: bool,
+    console_pending: bool,
 }
 fn load(path: &str, arguments: &[u8]) -> Result<Job, &'static str> {
     let staging = Frames::new(16).ok_or("Not enough memory for the program loader.")?;
@@ -313,6 +380,9 @@ fn load(path: &str, arguments: &[u8]) -> Result<Job, &'static str> {
         tty: None,
         task_slot: None,
         terminal_owner: None,
+        io: None,
+        kill_after_io: false,
+        console_pending: false,
     })
 }
 pub fn demo(argument: &str) {
@@ -397,7 +467,12 @@ pub fn terminal_desktop() {
 fn root_slot(jobs: &[Option<Job>; LIMIT]) -> Option<usize> {
     (0..4).find(|&i| !jobs.iter().flatten().any(|j| j.task_slot == Some(i)))
 }
-fn sync_tasks(jobs: &[Option<Job>; LIMIT]) {
+fn sync_tasks(jobs: &mut [Option<Job>; LIMIT]) {
+    let mut slots: [Option<usize>; LIMIT] = core::array::from_fn(|i| jobs[i].as_ref().and_then(|job| job.task_slot));
+    scheduler_model::compact_roots(&mut slots);
+    for (job, slot) in jobs.iter_mut().zip(slots) {
+        if let Some(job) = job { job.task_slot = slot; }
+    }
     unsafe {DIRECTORIES=core::array::from_fn(|i|jobs[i].as_ref().map(|j|j.directory));}
     unsafe {
         RUNNING = jobs.iter().flatten().count();
@@ -419,7 +494,37 @@ fn sync_tasks(jobs: &[Option<Job>; LIMIT]) {
     }
     crate::multi_window::set_tasks(tasks);
 }
+fn open_console(jobs: &mut [Option<Job>; LIMIT], index: usize) {
+    assert!(!crate::disk_io::busy());
+    let free = jobs.iter().position(Option::is_none);
+    let directory = crate::diskfs::directory();
+    crate::diskfs::set_directory(jobs[index].as_ref().unwrap().directory);
+    let terminal = load("/APPS/TERMINAL.BIN", b"");
+    crate::diskfs::set_directory(directory);
+    let job = jobs[index].as_mut().unwrap();
+    job.console_pending = false;
+    match (free, terminal) {
+        (Some(slot), Ok(mut terminal)) => {
+            terminal.task_slot = job.task_slot.take();
+            job.terminal_owner = Some(terminal.pid);
+            crate::debug::write_fmt(format_args!("Desktop: text terminal pid={} terminal={}\n",job.pid,terminal.pid));
+            jobs[slot] = Some(terminal);
+            sync_tasks(jobs);
+        }
+        (_, Err(message)) => { crate::multi_window::status(message.as_bytes()); queue_kill(job.pid); }
+        _ => { crate::multi_window::status(b"No room for a terminal. Close another app."); queue_kill(job.pid); }
+    }
+}
 fn run(mut jobs: [Option<Job>; LIMIT], desktop: bool) {
+    let mut io_worker = if desktop {
+        let Some(worker) = crate::disk_io::Worker::new() else {
+            crate::println!("Desktop: not enough memory for the disk worker.");
+            return;
+        };
+        Some(worker)
+    } else { None };
+    let mut io_last = LIMIT - 1;
+    let mut io_idle_slices = 0u8;
     if let Err(message) = if desktop {
         crate::multi_window::begin_desktop()
     } else {
@@ -435,13 +540,20 @@ fn run(mut jobs: [Option<Job>; LIMIT], desktop: bool) {
         PAUSE = None;
         SAVED = None;
     }
-    sync_tasks(&jobs);
+    sync_tasks(&mut jobs);
     if desktop {
         crate::debug::write_str("Desktop scheduler: ready\n");
     }
     let (mut last, mut switches, mut preemptions, mut sleeps, mut waits) =
         (LIMIT - 1, 0u32, 0u32, 0u32, 0u32);
     loop {
+        if !crate::disk_io::busy() {
+            for index in 0..LIMIT {
+                if jobs[index].as_ref().is_some_and(|job| job.console_pending) {
+                    open_console(&mut jobs, index);
+                }
+            }
+        }
         // A text task keeps its context while its newly-created terminal opens.
         for i in 0..LIMIT {
             if let Some(owner) = jobs[i].as_ref().and_then(|j| j.terminal_owner) {
@@ -460,6 +572,7 @@ fn run(mut jobs: [Option<Job>; LIMIT], desktop: bool) {
                 }
             }
         }
+        sync_processes(&jobs);
         crate::pty::service();
         while let Some(pid) = crate::pty::take_kill() {
             queue_kill(pid);
@@ -468,6 +581,7 @@ fn run(mut jobs: [Option<Job>; LIMIT], desktop: bool) {
             break;
         }
         check_host_stack();
+        if !crate::disk_io::busy() {
         if let Some(request) = unsafe { (*core::ptr::addr_of_mut!(REQUEST)).take() } {
             if request.tty.is_some_and(|id| !crate::pty::exists(id)) {
                 continue;
@@ -501,7 +615,7 @@ fn run(mut jobs: [Option<Job>; LIMIT], desktop: bool) {
                         }
                     }
                 }
-                sync_tasks(&jobs);
+                sync_tasks(&mut jobs);
             } else {
                 crate::multi_window::status(
                     b"No free app slots. Close an app before launching another.",
@@ -532,13 +646,14 @@ fn run(mut jobs: [Option<Job>; LIMIT], desktop: bool) {
                         crate::multi_window::status(error.as_bytes());
                     }
                 }
-                sync_tasks(&jobs);
+                sync_tasks(&mut jobs);
                 crate::multi_window::refresh_catalog();
             } else {
                 crate::multi_window::status(
                     b"Four apps are already running. Close one before starting another.",
                 );
             }
+        }
         }
         if let Some(pid) = crate::multi_window::take_kill() {
             queue_kill(pid);
@@ -548,6 +663,12 @@ fn run(mut jobs: [Option<Job>; LIMIT], desktop: bool) {
                 .iter()
                 .position(|j| j.as_ref().is_some_and(|j| j.pid == pid))
             {
+                if crate::disk_io::owner() == Some(pid) {
+                    jobs[index].as_mut().unwrap().kill_after_io = true;
+                    crate::debug::write_fmt(format_args!("Disk I/O: termination deferred pid={}\n",pid));
+                    crate::multi_window::status(b"Finishing the active disk operation before stopping this app.");
+                    continue;
+                }
                 crate::debug::write_fmt(format_args!("Scheduler: forced exit pid={}\n", pid));
                 crate::multi_window::remove(pid);
                 crate::pty::close_owner(pid);
@@ -555,7 +676,7 @@ fn run(mut jobs: [Option<Job>; LIMIT], desktop: bool) {
                     crate::pty::child_done(id, pid, "Interrupted.");
                 }
                 jobs[index] = None;
-                sync_tasks(&jobs);
+                sync_tasks(&mut jobs);
                 crate::multi_window::refresh_catalog();
                 crate::multi_window::status(b"Focused app stopped. Other apps are still running.");
             }
@@ -563,12 +684,45 @@ fn run(mut jobs: [Option<Job>; LIMIT], desktop: bool) {
         if !desktop && jobs.iter().all(Option::is_none) {
             break;
         }
+        if let Some(worker) = &mut io_worker {
+            if !crate::disk_io::busy() {
+                for offset in 1..=LIMIT {
+                    let index = (io_last + offset) % LIMIT;
+                    if let Some(job) = jobs[index].as_ref().filter(|job| job.io.is_some()) {
+                        worker.start(job.pid, job.io.unwrap());
+                        io_last = index;
+                        break;
+                    }
+                }
+            }
+            if let Some(pid) = crate::disk_io::owner() {
+                let index = jobs.iter().position(|job| job.as_ref().is_some_and(|job| job.pid == pid)).unwrap();
+                let job = jobs[index].as_mut().unwrap();
+                let directory = crate::diskfs::directory();
+                crate::diskfs::set_directory(job.directory);
+                crate::pty::set_current(job.tty);
+                let result = usermode::io_context(&job.program, &job.space, pid, || worker.step());
+                crate::pty::set_current(None);
+                job.directory = crate::diskfs::directory();
+                unsafe { DIRECTORIES[index] = Some(job.directory); }
+                crate::diskfs::set_directory(directory);
+                if let Some(result) = result {
+                    job.cpu.eax = result;
+                    job.io = None;
+                    job.state = State::Ready;
+                    crate::multi_window::io_progress(pid, None);
+                    if job.kill_after_io { queue_kill(pid); }
+                } else {
+                    crate::multi_window::io_progress(pid, Some(crate::disk_io::blocks()));
+                }
+            }
+        }
         let now = crate::interrupts::timer_ticks();
         let mut next = None;
         for offset in 1..=LIMIT {
             let index = (last + offset) % LIMIT;
             if let Some(job) = &jobs[index] {
-                if job.terminal_owner.is_some() {
+                if job.terminal_owner.is_some() || job.console_pending || job.io.is_some() || job.kill_after_io {
                     continue;
                 }
                 if scheduler_model::runnable(
@@ -586,11 +740,18 @@ fn run(mut jobs: [Option<Job>; LIMIT], desktop: bool) {
             }
         }
         let Some(index) = next else {
-            crate::idle::wait_for_pointer();
+            io_idle_slices += 1;
+            // Continue useful disk work while apps sleep. Firmware repeatedly
+            // resets the PIT, so periodically leave one full IRQ window open
+            // to keep sleepers/timers progressing even on the BIOS backend.
+            if !crate::disk_io::busy() || io_idle_slices >= 8 {
+                io_idle_slices = 0;
+                crate::idle::wait_for_pointer();
+            }
             continue;
         };
+        io_idle_slices = 0;
         last = index;
-        let free_slot = jobs.iter().position(Option::is_none);
         let job = jobs[index].as_mut().unwrap();
         job.state = State::Ready;
         switches = switches.wrapping_add(1);
@@ -625,31 +786,8 @@ fn run(mut jobs: [Option<Job>; LIMIT], desktop: bool) {
             job.cpu = cpu;
         }
         if matches!(reason, Some(Pause::Console(_))) {
-            let directory = crate::diskfs::directory();
-            crate::diskfs::set_directory(job.directory);
-            let terminal = load("/APPS/TERMINAL.BIN", b"");
-            crate::diskfs::set_directory(directory);
-            match (free_slot, terminal) {
-                (Some(slot), Ok(mut terminal)) => {
-                    terminal.task_slot = job.task_slot.take();
-                    job.terminal_owner = Some(terminal.pid);
-                    job.state = State::Waiting;
-                    crate::debug::write_fmt(format_args!(
-                        "Desktop: text terminal pid={} terminal={}\n",
-                        job.pid, terminal.pid
-                    ));
-                    jobs[slot] = Some(terminal);
-                    sync_tasks(&jobs);
-                }
-                (_, Err(message)) => {
-                    crate::multi_window::status(message.as_bytes());
-                    queue_kill(job.pid);
-                }
-                _ => {
-                    crate::multi_window::status(b"No room for a terminal. Close another app.");
-                    queue_kill(job.pid);
-                }
-            }
+            job.console_pending = true;
+            job.state = State::Waiting;
             continue;
         }
         let finished = match outcome {
@@ -670,6 +808,10 @@ fn run(mut jobs: [Option<Job>; LIMIT], desktop: bool) {
             None => {
                 assert!(context.is_some());
                 job.state = match reason {
+                    Some(Pause::Io(request)) => {
+                        job.io = Some(request);
+                        State::Waiting
+                    }
                     Some(Pause::Sleep(deadline)) => {
                         sleeps += 1;
                         State::Sleep(deadline)
@@ -702,7 +844,7 @@ fn run(mut jobs: [Option<Job>; LIMIT], desktop: bool) {
                 job.cpu.eip = job.cpu.eip.wrapping_add(2);
                 job.cpu.eax = (-24i32) as u32;
             }
-            sync_tasks(&jobs);
+            sync_tasks(&mut jobs);
         }
         if finished {
             let job = jobs[index].as_ref().unwrap();
@@ -722,7 +864,7 @@ fn run(mut jobs: [Option<Job>; LIMIT], desktop: bool) {
             crate::multi_window::remove(pid);
             jobs[index] = None;
             if desktop {
-                sync_tasks(&jobs);
+                sync_tasks(&mut jobs);
                 crate::multi_window::refresh_catalog();
                 crate::multi_window::status(
                     b"App finished. Apps launches another; Exit returns to the shell when empty.",
@@ -736,6 +878,7 @@ fn run(mut jobs: [Option<Job>; LIMIT], desktop: bool) {
         REQUEST = None;
         RUNNING = 0;
         DIRECTORIES=[None;LIMIT];
+        PROCESSES = [None; LIMIT];
         PAUSE = None;
         SAVED = None;
     }

@@ -53,9 +53,10 @@ def main():
                    cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/terminal_clipboard_qemu.py"),"--disk",str(image),"--vga","cirrus","--usb"],
                    cwd=ROOT,env=environment,check=True)
-    for suite in ("pty_qemu.py", "files_qemu.py", "files_settings_qemu.py", "widgets_qemu.py", "elf_qemu.py", "large_files_qemu.py", "resize_qemu.py", "maximize_qemu.py", "window_lifecycle_qemu.py"):
+    for suite in ("pty_qemu.py", "files_qemu.py", "files_settings_qemu.py", "widgets_qemu.py", "elf_qemu.py", "large_files_qemu.py", "resize_qemu.py", "maximize_qemu.py", "window_lifecycle_qemu.py", "keyboard_qemu.py", "io_qemu.py"):
         subprocess.run([sys.executable,str(ROOT/"tools"/suite),"--disk",str(image),"--vga","cirrus","--usb"],
                        cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/fsck_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/power_qemu.py"),"--disk",str(image),"--kernel",str(kernel)],cwd=ROOT,env=environment,check=True)
     shutil.copyfile(kernel,directory/"rust-os")
     shutil.copyfile(ROOT/"programs/apps.txt",directory/"applications.txt")
@@ -90,6 +91,8 @@ def main():
         "The mouse/windowtest tests and application windows use a simple built-in ASCII bitmap font.\n"
         "Notepad is /APPS/NOTEPAD.BIN: mouse toolbar, keyboard editing, Ctrl+S save, Ctrl+Q quit.\n"
         "USB access uses BIOS EDD for the boot drive only; no hotplug/native USB or UEFI support.\n"
+        "fsck audits the selected FAT16 volume from the physical console without writes.\n"
+        "Unmount, then fsck repair-orphans previews cleanup; fsck confirm applies it. Live-chain damage requires manual recovery.\n"
         "Firmware writes are read back, but provide no portable cache-flush durability guarantee.\n"
         "Verified in QEMU: BIOS boot, actual app files, editor saves across cold boots and copying apps onto another drive.\n")
     # %~dp0 keeps the Windows launcher usable after moving the release folder.

@@ -399,3 +399,22 @@ GLOBAL user_return_cr3
 align 4
 user_return_esp: resd 1
 user_return_cr3: resd 1
+
+SECTION .text
+GLOBAL xinyi_io_switch
+xinyi_io_switch:
+    pushfd
+    push ebp
+    push ebx
+    push esi
+    push edi
+    mov eax, [esp + 24]
+    mov edx, [esp + 28]
+    mov [eax], esp
+    mov esp, edx
+    pop edi
+    pop esi
+    pop ebx
+    pop ebp
+    popfd
+    ret

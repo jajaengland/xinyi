@@ -12,6 +12,8 @@ mod multiboot;
 mod paging;
 mod phys;
 mod rtc;
+mod monotonic;
+mod clock_model;
 mod task;
 mod usermode;
 mod user_buffer;
@@ -56,6 +58,7 @@ mod input_order;
 mod vfs;
 mod loader;
 mod blockdev;
+mod block_cache;
 mod fat16;
 mod fs_path;
 mod ata;
@@ -65,6 +68,7 @@ mod idle;
 mod pci;
 mod disk_target;
 mod diskfs;
+mod disk_io;
 mod installer;
 mod bootdisk;
 mod vga;
@@ -120,7 +124,7 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("use", "use NUMBER", "Select a numbered drive and mount its filesystem"),
     ("run", "run [NAME|FILE]", "Run a bundled application or program file"),
     ("spawn", "spawn [demo]", "Create a paused demo task record (diagnostic)"),
-    ("kill", "kill PID", "Remove a task record and free its memory"),
+    ("kill", "kill PID", "Stop a desktop process or remove a diagnostic task record"),
     ("ls", "ls [PATH]", "List files and folders"),
     ("touch", "touch FILE", "Create a file"),
     ("delete", "delete FILE", "Delete a file from the active filesystem"),
@@ -136,6 +140,7 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("cat", "cat FILE", "Display file contents"),
     ("mount", "mount [NUMBER]", "Open a drive or mount the selected filesystem"),
     ("unmount", "unmount", "Return to the in-memory filesystem"),
+    ("fsck", "fsck [repair-orphans|confirm]", "Check the selected FAT16 volume; preview orphan cleanup"),
     ("format", "format", "Preview destructive primary-disk FAT16 format"),
     (
         "breakpoint",
@@ -278,6 +283,9 @@ fn run_command(input: &str) {
     // Formatting requires a fresh preview immediately followed by confirmation.
     if command != "format" || argument != "confirm" {
         diskfs::cancel_format();
+    }
+    if command != "fsck" || argument != "confirm" {
+        diskfs::cancel_repair();
     }
     if command != "install" || argument != "confirm" {
         installer::cancel();
@@ -449,6 +457,10 @@ fn run_command(input: &str) {
         }
 
         "ps" => {
+            if multitask::active() {
+                multitask::list_processes();
+                return;
+            }
             println!("Prototype task records (not scheduled):");
             if let Some(pid) = task::current_task_id() {
                 println!("Current record: {}", pid);
@@ -534,6 +546,16 @@ fn run_command(input: &str) {
         }
 
         "kill" => {
+            if multitask::active() {
+                match argument.parse::<u32>() {
+                    Ok(pid) => match multitask::request_kill(pid) {
+                        Ok(()) => println!("Termination requested for process {}", pid),
+                        Err(message) => println!("{}", message),
+                    },
+                    Err(_) => println!("Usage: kill PID"),
+                }
+                return;
+            }
             match argument.parse::<u32>() {
                 Ok(pid) if task::remove(pid) => println!("Removed task record {}", pid),
                 Ok(_) => println!("Task record not found"),
@@ -648,6 +670,7 @@ fn run_command(input: &str) {
             Ok(start) => println!("Mounted FAT16 at sector {}. File commands now use disk.", start),
             Err(error) => println!("Mount failed: {}", error.message()),
         },
+        "fsck" => diskfs::check_command(argument),
         "unmount" => match diskfs::unmount() {
             Ok(()) => println!("Unmounted. File commands now use RAM (not persistent)."),
             Err(error) => println!("Unmount failed: {}", error.message()),
@@ -808,6 +831,7 @@ pub extern "C" fn rust_main(magic: u32, info_addr: u32) -> ! {
 
     // Remap the PIC and configure the PIT while interrupts remain disabled.
     bios::init();
+    monotonic::init();
     interrupts::remap_pic();
     interrupts::init_pit();
 

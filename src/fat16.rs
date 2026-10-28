@@ -1,4 +1,6 @@
-// Bounded FAT16 root-directory storage. No heap, directories, or long names.
+// Bounded FAT16 storage with short names and directories; no heap.
+#[path = "fat16_check.rs"]
+pub mod check;
 use crate::blockdev::BlockDevice;
 pub const MAX_FILE_SIZE: usize = 1024;
 pub const MAX_PROGRAM_SIZE: usize = 64 * 1024;
@@ -29,10 +31,14 @@ pub enum Error {
     InstallConfirmationRequired,
     DiskChanged,
     LimitedCapacity,
+    CheckLimit,
+    RepairConfirmationRequired,
 }
 impl Error {
     pub fn message(self) -> &'static str {
         match self {
+            Self::CheckLimit => "filesystem exceeds checker workspace or traversal limits",
+            Self::RepairConfirmationRequired => "run fsck repair-orphans, then fsck confirm immediately",
             Self::Io => "disk I/O failed (or timed out)",
             Self::InvalidVolume => "no supported FAT16 volume",
             Self::InvalidName => "use an ASCII 8.3 filename (for example NOTE.TXT)",
@@ -287,6 +293,9 @@ pub struct Fat16<'a> {
 impl<'a> Fat16<'a> {
     // Accept a whole-volume image or the first primary MBR FAT16 partition.
     pub fn new(device: &'a dyn BlockDevice) -> Result<Self> {
+        Self::open(device, true)
+    }
+    fn open(device: &'a dyn BlockDevice, check_headers: bool) -> Result<Self> {
         if device.block_size() != 512 || device.block_count() == 0 {
             return Err(Error::InvalidVolume);
         }
@@ -294,7 +303,7 @@ impl<'a> Fat16<'a> {
         if !device.read_block(0, &mut sector) {
             return Err(Error::Io);
         }
-        if let Ok(fs) = Self::at(device, 0, device.block_count(), &sector) {
+        if let Ok(fs) = Self::at(device, 0, device.block_count(), &sector, check_headers) {
             return Ok(fs);
         }
         if sector[510..512] != [0x55, 0xaa] {
@@ -318,11 +327,11 @@ impl<'a> Fat16<'a> {
             if !device.read_block(start, &mut boot) {
                 return Err(Error::Io);
             }
-            return Self::at(device, start, count, &boot);
+            return Self::at(device, start, count, &boot, check_headers);
         }
         Err(Error::InvalidVolume)
     }
-    fn at(device: &'a dyn BlockDevice, start: u32, limit: u32, b: &[u8; 512]) -> Result<Self> {
+    fn at(device: &'a dyn BlockDevice, start: u32, limit: u32, b: &[u8; 512], check_headers: bool) -> Result<Self> {
         let spc = b[13] as u32;
         let reserved = u16_at(b, 14) as u32;
         let fats = b[16] as u32;
@@ -367,9 +376,11 @@ impl<'a> Fat16<'a> {
             directory_len: 0,
             directory_readonly: false,
         };
-        let header = fs.fat(0)?;
-        if header != 0xff00 | b[21] as u16 || fs.fat(1)? < 0xfff8 {
-            return Err(Error::InvalidVolume);
+        if check_headers {
+            let header = fs.fat(0)?;
+            if header != 0xff00 | b[21] as u16 || fs.fat(1)? < 0xfff8 {
+                return Err(Error::InvalidVolume);
+            }
         }
         Ok(fs)
     }

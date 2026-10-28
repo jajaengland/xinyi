@@ -41,21 +41,60 @@ Classic non-PAE paging has no NX bit: code is protected from writes, but writabl
 
 ## Processes, terminals and input
 
-`multitask.rs` manages eight job slots: up to four root application windows and their attached text children. Jobs retain arguments, cwd, private CR3, stacks, CPU context and x87/MMX state. PIT interrupts preempt user code; sleep, yield and input waits return to the dispatcher. Kernel calls run to completion, so disk I/O can pause other applications. SSE/AVX and user threads are unsupported.
+`multitask.rs` manages eight job slots: up to four root application windows and their attached text children. Jobs retain arguments, cwd, private CR3, stacks, CPU context and x87/MMX state. PIT interrupts preempt user code; sleep, yield and input waits return to the dispatcher. Desktop file calls queue into a serialized worker; other kernel calls run to completion. SSE/AVX and user threads are unsupported.
 
 A windowless desktop app's first console request opens Terminal and attaches the existing process to its PTY. Graphical children launched from Terminal detach into a free root slot. The physical console retains a synchronous launch path through `task.rs`/`window_api.rs`. Legacy `spawn`/`kill` task records are separate from desktop jobs.
 
-`shell.rs` supplies the physical console and PTYs with the same command dispatcher, line editing, history and completion. `vga.rs` routes output to the current console. `pty.rs` owns session/input/selection state; `pty_model.rs` maintains an 80x25 text-program screen, 64 history rows and basic ANSI cursor/erase/colour handling. The Terminal app displays 25-33 rows, adding history above the compatible text screen, with a scrollbar outside its 80 columns.
+Before servicing terminal shell commands, the dispatcher publishes a bounded
+copy of the live job list. Terminal `ps` reads this snapshot, including private
+frame usage and scheduler states; `kill PID` validates it and queues termination
+for the dispatcher. Shell commands never borrow the live job array. Physical
+console `ps` / `kill` continue to operate on diagnostic task records.
+
+`shell.rs` supplies the physical console and PTYs with the same command dispatcher, line editing, history and completion. `vga.rs` routes output to the current console. `pty.rs` owns session/input/selection state; `pty_model.rs` maintains an 80x25 text-program screen, 64 history rows and basic ANSI cursor/erase/colour handling. The Terminal app displays 25-34 rows, adding history above the compatible 80-column text screen. Its background expands with the client and the scrollbar stays at the right edge.
+
+`monotonic.rs` derives the 100 Hz elapsed-time API from the free-running ACPI PM timer when firmware exposes a validated System I/O register. Fractional ticks and 24/32-bit wrap are accumulated under a short interrupt guard. Sampling before and after firmware calls preserves elapsed time independently of PIC/PIT reprogramming. Unsupported platforms retain the PIT fallback; the PIT fallback filters its initial programming edge without changing the established BIOS/PIC restore order. Counter displays elapsed time rather than counting scheduled redraws.
 
 `ps2.rs`, `keyboard.rs` and `mouse.rs` handle IRQ1/IRQ12 input through bounded queues. Shared sequence ordering preserves keyboard/mouse capture order; overflow/reset handling clears stale input state. Native USB input is not implemented.
+
+## Queued filesystem work
+
+The BIOS backend keeps four verified read-through sectors to avoid rereading the same FAT sectors for each allocation step. Writes still reach firmware and pass readback before updating this cache; there are no dirty entries. Mount/unmount, firmware errors and native writes invalidate cached sectors, including native access that may alias the boot drive.
+
+`disk_io.rs` owns one 128 KiB worker stack. Desktop calls 57/58, 78-81,
+88-90 and Settings saves park the caller with a saved CPU context. The dispatcher
+selects waiting requests round-robin and resumes the worker in the owning
+process's CR3, cwd and PTY context. Each queued request retains its submission volume generation; a changed volume returns -116 before touching the filesystem. It restores the kernel context before
+running another app. User buffers and address spaces remain pinned because
+waiting owners cannot execute or be reclaimed.
+
+The ATA and BIOS disk backends checkpoint after complete block transfers (and
+firmware write readback), with at most eight blocks per slice. No controller or
+BIOS thunk is suspended. A completed operation returns its normal syscall result
+and wakes its owner. A forced stop waits for the active operation to finish;
+queued work can be discarded before it starts. Filesystem operations never
+reenter one another while FAT metadata updates are in flight. A completed block-operation count
+in the owning window title reports activity without claiming a byte percentage.
+
+App launches and catalog refreshes wait for the worker to become idle. Terminal
+line editing and non-disk commands continue; filesystem commands retain their
+order in a deferred command slot. These kernel shell commands and executable
+loads remain synchronous when they eventually run. Firmware/controller timeouts
+can still stall an individual transfer, and this does not add journaling or
+power-loss recovery. Periodic IRQ windows keep sleepers progressing even when
+BIOS transfers repeatedly reset the PIT.
 
 ## Desktop and rendering
 
 `desktop_shell.rs` models Apps/taskbar input. `app_catalog.rs` discovers up to 16 regular `.BIN`/`.ELF` files in `/APPS`. `multi_window.rs` owns four RGB32 surfaces, event queues, z-order, focus/capture and damage. `app_window_ui.rs` models dragging, chrome buttons and resize proposals.
 
+Root task slots compact in their existing order when a process exits. Remaining task buttons shift left without moving their windows or changing PIDs; new roots append at the right. Captured taskbar clicks are canceled if the button mapping changes.
+
+Global keyboard shortcuts are handled before application key queues. Alt+Tab and Shift+Alt+Tab cycle in stable taskbar order, restore minimized windows and cancel pointer capture. Alt+F4 queues CLOSE rather than forcing termination. Ctrl+Esc and Apps menu navigation consume their keys without forwarding them to the focused app.
+
 Windows stay below the top taskbar but may move partly off-screen. Composition clips to screen/source bounds. Minimized apps retain their state and continue executing; hidden updates do not present. Taskbar activation restores visibility. Close is an application request so editors can prompt for unsaved changes.
 
-Resizable apps advertise limits through call 85. Grip dragging previews an outline; release proposes RESIZE. Call 86 accepts only the latest matching size and allocates/copies before replacing the surface. Failure preserves the old geometry. Maximize/restore uses the same handshake, remembers the normal rectangle and fills the frame below the taskbar, centering a client within the app's layout limits. Same-size placement changes reuse the surface. Minimize preserves maximized state; title/grip dragging is disabled while maximized. Legacy and synchronous foreground windows remain fixed-size.
+Resizable apps advertise limits through call 85. Grip dragging previews an outline; release proposes RESIZE. Call 86 accepts only the latest matching size and allocates/copies before replacing the surface. Failure preserves the old geometry. Maximize/restore uses the same handshake, remembers the normal rectangle and fills the frame below the taskbar, centering a client within the app's layout limits. Standard maximized apps use 792x544 clients with four-pixel side/bottom borders and a compact title bar. Same-size placement changes reuse the surface. Minimize preserves maximized state; title/grip dragging is disabled while maximized. Legacy and synchronous foreground windows remain fixed-size.
 
 `canvas.rs` draws into RAM; `graphics.rs` presents an 800x600 scene through QEMU standard VGA or validated BIOS VESA RGB565/24/32-bit framebuffers. Damage-based span copies and cursor protection avoid unnecessary full-screen redraws. GUI text uses `ui_font.rs`; Terminal uses the captured BIOS font. There is no GPU acceleration. Leaving graphics restores text/video state and owned frames.
 
@@ -80,3 +119,9 @@ Notepad is an ELF app stored as `NOTEPAD.BIN` for filename compatibility. Its he
 `power.rs` validates bounded ACPI RSDT/FADT/DSDT tables and recognizes static legacy S5 values without executing arbitrary AML. Shutdown synchronizes the mounted backend, cancels on flush failure and requires confirmation when desktop jobs are running. Unsupported firmware uses a text-mode halted fallback.
 
 Host Rust tests cover storage, documents, memory validation, queues and UI models. Disposable QEMU tests cover BIOS/USB installation and persistence, process isolation/faults, ELF/heap allocation, terminal handoff, file operations, resizing/maximize and frame reclamation. See `tools/build_release.py` for integration checks. Emulator results do not guarantee compatibility with every firmware/controller.
+
+## FAT16 audit and recovery
+
+`fat16_check.rs` shares the normal geometry validation but opens damaged FAT headers for inspection. The physical-console `fsck` scans both FAT copies and walks the complete reachable directory tree with a 384 KiB frame-backed workspace. Cluster ownership detects shared/cyclic chains; file lengths, directory dot entries, mirror entries and reserved headers are checked. Traversal is bounded to eight directory levels, 32 clusters per directory and 1,048,576 entries. A bound/read failure prevents cleanup. Scans never call block writes or flushes.
+
+Orphan repair requires an unmounted volume, a preview and immediate one-shot confirmation. Device identity, volume epoch and a fingerprint of boot/partition metadata, both FAT copies and visited directory sectors are revalidated before writing. Only unreferenced allocated entries are zeroed. Zero-versus-allocated differences in those entries are safely resumable after interrupted cleanup; live or ambiguous differences are refused. Writes touch only changed FAT sectors, are read back and flushed, then the volume is scanned again. Bad/reserved markers and all live chain pointers, directories and data remain unchanged. This is conservative cleanup, not a journal or reconstruction of damaged files. BIOS firmware still cannot provide a portable durability guarantee.

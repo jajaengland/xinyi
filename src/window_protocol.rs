@@ -72,8 +72,8 @@ impl Draw {
 const _: () = assert!(core::mem::size_of::<Event>() == 20 && core::mem::size_of::<Draw>() == 32);
 
 pub fn valid_size(width: u32, height: u32) -> bool {
-    (160..=768).contains(&width)
-        && (80..=528).contains(&height)
+    (160..=792).contains(&width)
+        && (80..=544).contains(&height)
         && width % 8 == 0
         && height % 16 == 0
 }

@@ -39,7 +39,7 @@ fn at(s:&mut State,x:i32,y:i32,buttons:u8)->(bool,Option<Event>) {s.update(mouse
 
 #[test] fn sized_surfaces_validate_and_drag_with_their_own_bounds() {
     assert!(window_protocol::valid_size(320,144));assert!(window_protocol::valid_size(656,400));
-    for (w,h) in [(0,144),(776,144),(320,529),(321,144),(320,143)] {assert!(!window_protocol::valid_size(w,h));}
+    for (w,h) in [(0,144),(800,144),(320,545),(321,144),(320,143)] {assert!(!window_protocol::valid_size(w,h));}
     assert!(Draw::rect(319,143,1,1,0).valid_for(320,144));
     assert!(!Draw::rect(320,143,1,1,0).valid_for(320,144));
     assert!(!Draw::text(313,0,0,b"a").valid_for(320,144));
@@ -77,7 +77,7 @@ fn maximize(s:&mut State)->Event{let r=s.maximize_button();timed(s,r.x+8,r.y+8,1
 #[test]fn maximize_defers_geometry_and_restores_exact_position_and_size(){
  let mut s=State::sized(0,640,400,-200,150);s.limits=Some((640,400,768,528));s.minimizable=true;let old=s.window.rect;
  let e=maximize(&mut s);assert_eq!((e.kind,e.x,e.y),(window_protocol::RESIZE,768,528));assert_eq!(maximize(&mut s),e);assert_eq!(s.window.rect,old);assert!(!s.is_maximized());
- s.resized(e.x,e.y);assert_eq!(s.window.rect,desktop_ui::Rect{x:0,y:24,w:800,h:576});assert_eq!(s.client(),desktop_ui::Rect{x:16,y:58,w:768,h:528});
+ s.resized(e.x,e.y);assert_eq!(s.window.rect,desktop_ui::Rect{x:0,y:24,w:800,h:576});assert_eq!(s.client(),desktop_ui::Rect{x:16,y:52,w:768,h:528});
  // Minimize/taskbar restore keeps the maximized placement and avoids invalid clamp bounds.
  let m=s.minimize_button();at(&mut s,m.x+8,m.y+8,1);at(&mut s,m.x+8,m.y+8,0);assert!(!s.window.visible);s.restore();assert!(s.is_maximized());assert_eq!(s.window.rect.y,24);
  let e=maximize(&mut s);assert_eq!((e.x,e.y),(640,400));assert!(s.is_maximized());s.resized(e.x,e.y);assert!(!s.is_maximized());assert_eq!(s.window.rect,old);
@@ -99,4 +99,12 @@ fn maximize(s:&mut State)->Event{let r=s.maximize_button();timed(s,r.x+8,r.y+8,1
 #[test]fn maximized_terminal_keeps_its_width_and_blocks_grip_and_title_drag(){
  let mut s=State::sized(0,656,400,56,90);s.limits=Some((656,400,656,528));let e=maximize(&mut s);assert_eq!((e.x,e.y),(656,528));s.resized(e.x,e.y);let old=s.window.rect;
  at(&mut s,100,40,1);at(&mut s,500,200,0);assert_eq!(s.window.rect,old);let g=s.grip();at(&mut s,g.x+2,g.y+2,1);assert!(at(&mut s,600,400,0).1.is_none_or(|e|e.kind!=window_protocol::RESIZE));assert!(s.preview().is_none());assert_eq!((s.client().x,s.client().w),(72,656));
+}
+
+#[test]fn maximized_apps_have_four_pixel_side_and_bottom_borders(){
+ let mut s=State::sized(0,640,400,50,100);s.limits=Some((640,400,792,544));
+ let e=maximize(&mut s);assert_eq!((e.x,e.y),(792,544));s.resized(e.x,e.y);
+ let client=s.client();assert_eq!(client,desktop_ui::Rect{x:4,y:52,w:792,h:544});
+ assert_eq!(client.x,4);assert_eq!(800-client.x-client.w,4);assert_eq!(600-client.y-client.h,4);
+ assert!(s.title().y+s.title().h<=client.y);
 }

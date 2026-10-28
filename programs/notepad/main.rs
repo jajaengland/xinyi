@@ -55,12 +55,12 @@ struct Editor {
     capture: Option<usize>,
     hover: Option<usize>,
     message: &'static [u8],
-    cache: [[u8; 96]; 30],
+    cache: [[u8; 96]; 31],
     caret: Option<usize>,
     modal: bool,
     anchor: Option<usize>,
     selecting: bool,
-    marks: [(u8, u8); 30],
+    marks: [(u8, u8); 31],
 }
 impl Editor {
     fn rows(&self) -> usize {
@@ -74,8 +74,8 @@ impl Editor {
             self.bar.rect = Rect::new(self.width as i32 - 16, 32, 16, self.height as i32 - 48);
             self.bar.reset(0);
             self.follow = true;
-            self.cache = [[0; 96]; 30];
-            self.marks = [(0, 0); 30];
+            self.cache = [[0; 96]; 31];
+            self.marks = [(0, 0); 31];
             self.caret = None;
             self.selecting = false;
             self.capture = None;
@@ -108,12 +108,12 @@ impl Editor {
             capture: None,
             hover: None,
             message: b"Ready - files up to 64 KiB",
-            cache: [[0; 96]; 30],
+            cache: [[0; 96]; 31],
             caret: None,
             modal: false,
             anchor: None,
             selecting: false,
-            marks: [(0, 0); 30],
+            marks: [(0, 0); 31],
         }
     }
     fn range(&self) -> Option<(usize, usize)> {
@@ -632,8 +632,8 @@ impl Editor {
     }
     fn draw(&mut self, handle: u32) -> bool {
         if self.modal {
-            self.cache = [[0; 96]; 30];
-            self.marks = [(0, 0); 30];
+            self.cache = [[0; 96]; 31];
+            self.marks = [(0, 0); 31];
         }
         if !matches!(self.mode, Mode::Name(_)) {
             self.dialog = None;
@@ -739,7 +739,7 @@ impl Editor {
             self.height - 16,
             0xc4c4c4,
             0,
-            &status[..self.width as usize / 8],
+            &status[..(self.width as usize / 8).min(status.len())],
         ) < 0
         {
             return false;
@@ -828,7 +828,7 @@ fn main() -> u32 {
         }
         return 1;
     }
-    window::resizable(handle as u32, 640, 400, 768, 528);
+    window::resizable(handle as u32, 640, 400, 792, 544);
     if !editor.draw(handle as u32) {
         return 1;
     }

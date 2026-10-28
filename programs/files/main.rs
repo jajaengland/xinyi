@@ -51,6 +51,9 @@ fn error(n: i32) -> &'static [u8] {
     }
 }
 impl Files {
+    fn toolbar_cell(&self) -> u32 {
+        self.width / 9
+    }
     fn page(&self) -> u16 {
         ((self.height - 112) / 16) as u16
     }
@@ -566,14 +569,14 @@ impl Files {
         if !left {
             return false;
         }
-        if (0..30).contains(&event.y) && event.x >= 0 {
+        if (0..30).contains(&event.y) && (0..self.width as i32).contains(&event.x) {
             return {
-                self.action(event.x as usize / 70);
+                self.action((event.x as u32 / self.toolbar_cell()).min(8) as usize);
                 true
             };
         }
-        if (34..60).contains(&event.y) && (0..280).contains(&event.x) {
-            self.action(9 + event.x as usize / 70);
+        if (34..60).contains(&event.y) && (0..(self.toolbar_cell() * 4) as i32).contains(&event.x) {
+            self.action(9 + event.x as usize / self.toolbar_cell() as usize);
             return true;
         }
         if (80..self.height as i32 - 32).contains(&event.y) {
@@ -601,6 +604,7 @@ impl Files {
     }
     fn paint(&self, w: u32) {
         window::draw(w, &[Draw::rect(0, 0, self.width, self.height, 0xf4f4f4)]);
+        let cell = self.toolbar_cell();
         for (i, label) in [
             b"Up" as &[u8],
             b"Open",
@@ -615,12 +619,13 @@ impl Files {
         .iter()
         .enumerate()
         {
-            let x = i as u32 * 70;
+            let x = i as u32 * cell;
+            let end = if i == 8 { self.width } else { x + cell };
             window::draw(
                 w,
                 &[
-                    Draw::rect(x + 2, 2, 66, 26, 0xc4c4c4),
-                    Draw::text(x + 6, 8, 0, label),
+                    Draw::rect(x + 2, 2, end - x - 4, 26, 0xc4c4c4),
+                    Draw::text(x + (end - x - label.len() as u32 * 8) / 2, 8, 0, label),
                 ],
             );
         }
@@ -628,12 +633,12 @@ impl Files {
             .iter()
             .enumerate()
         {
-            let x = i as u32 * 70;
+            let x = i as u32 * cell;
             window::draw(
                 w,
                 &[
-                    Draw::rect(x + 2, 34, 66, 26, 0xc4c4c4),
-                    Draw::text(x + 6, 40, 0, label),
+                    Draw::rect(x + 2, 34, cell - 4, 26, 0xc4c4c4),
+                    Draw::text(x + (cell - label.len() as u32 * 8) / 2, 40, 0, label),
                 ],
             );
         }
@@ -641,12 +646,15 @@ impl Files {
             w,
             &[
                 Draw::text(
-                    296,
+                    cell * 4 + 16,
                     40,
                     0x153e8e,
-                    &self.path[self.length.saturating_sub(42)..self.length],
+                    &self.path[self.length.saturating_sub(((self.width - cell * 4 - 24) / 8) as usize)..self.length],
                 ),
-                Draw::text(8, 64, 0, b"Name                 Type       Bytes"),
+                Draw::text(8, 64, 0, b"Name"),
+                Draw::text(self.width / 2, 64, 0, b"Type"),
+                Draw::text(self.width - 96, 64, 0, b"Bytes"),
+                Draw::rect(8, 80, self.width - 16, self.height - 112, 0xffffff),
             ],
         );
         for i in 0..self.rows() {
@@ -673,12 +681,12 @@ impl Files {
                     Draw::rect(8, y, self.width - 16, 16, bg),
                     Draw::text(8, y, fg, name),
                     Draw::text(
-                        176,
+                        self.width / 2,
                         y,
                         fg,
                         if e.flags & 1 != 0 { b"Folder" } else { b"File" },
                     ),
-                    Draw::text(264, y, fg, &digits),
+                    Draw::text(self.width - 96, y, fg, &digits),
                 ],
             );
         }
@@ -698,7 +706,7 @@ impl Files {
                     8,
                     self.height - 16,
                     0,
-                    &self.status[..self.status.len().min(78)],
+                    &self.status[..self.status.len().min(((self.width as usize - 16) / 8).min(96))],
                 ),
             ],
         );
@@ -792,7 +800,7 @@ fn main() -> u32 {
         pending: FileClip::new(),
         quit: false,
     };
-    window::resizable(w, 640, 400, 768, 528);
+    window::resizable(w, 640, 400, 792, 544);
     app.refresh();
     if app.rows() > 0 {
         app.select(0, false, false);

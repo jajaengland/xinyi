@@ -872,3 +872,6 @@ fn limited_capacity_allows_existing_accessible_partitions_and_preserving_install
     );
     assert_eq!(&out[..9], b"preserved");
 }
+
+#[path = "fsck_tests.rs"]
+mod fsck_tests;

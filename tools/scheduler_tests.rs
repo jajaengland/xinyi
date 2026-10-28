@@ -14,3 +14,16 @@ use scheduler_model::{State, due, runnable};
     assert!(!runnable(State::Waiting,100,false));
     assert!(runnable(State::Waiting,100,true));
 }
+
+#[test] fn closing_a_root_compacts_only_taskbar_slots_in_existing_order() {
+    let mut slots = [Some(0), None, Some(2), Some(3), None, None, None, None];
+    scheduler_model::compact_roots(&mut slots);
+    assert_eq!(slots, [Some(0), None, Some(1), Some(2), None, None, None, None]);
+    slots[0] = None;
+    scheduler_model::compact_roots(&mut slots);
+    assert_eq!(slots, [None, None, Some(0), Some(1), None, None, None, None]);
+    // A newly launched root is appended; process-array holes stay untouched.
+    slots[0] = Some(2);
+    scheduler_model::compact_roots(&mut slots);
+    assert_eq!(slots, [Some(2), None, Some(0), Some(1), None, None, None, None]);
+}

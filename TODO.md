@@ -2,10 +2,11 @@
 
 ## Next priorities
 
-- [ ] Alt+Tab window switching and consistent desktop keyboard shortcuts.
-- [ ] Asynchronous disk I/O so larger operations do not block the desktop.
+- [x] Alt+Tab / Shift+Alt+Tab window switching, Alt+F4 close requests and Ctrl+Esc Apps keyboard navigation.
+- [x] Queued desktop application file operations with a block-bounded worker and visible I/O activity.
+- [ ] Extend queued I/O to executable loading and kernel shell filesystem commands.
 - [ ] Smaller application layouts and richer shared focus/accessibility conventions.
-- [ ] Process listing/control for real desktop jobs.
+- [x] Process listing/control for real desktop jobs through Terminal `ps` / `kill PID`.
 
 ## Available now
 
@@ -34,7 +35,8 @@
 
 - [ ] Reduce mutable-static references and remaining compiler warnings.
 - [ ] Extend malformed-input testing and harden executable/user-memory permissions.
-- [ ] Improve filesystem metadata recovery and interrupted installation handling.
+- [x] Read-only FAT16 audit, confirmed orphan cleanup and interrupted-write/cleanup tests.
+- [ ] Journal or broader metadata recovery and interrupted installation handling.
 - [ ] Widen block/partition geometry beyond u32 sector counts.
 
 Keep generated artifacts out of Git. Update the relevant docs and run checks appropriate to each change before marking it complete.

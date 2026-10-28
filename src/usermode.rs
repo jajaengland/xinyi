@@ -360,3 +360,31 @@ pub(crate) fn current_space() -> Option<&'static paging::AddressSpace> {
     }
     Some(unsafe { &*run.space })
 }
+
+// A paused owner cannot run or change its mappings while its filesystem call
+// uses these buffers. No live reference to RUN crosses the worker stack switch.
+pub(crate) fn io_context<T>(
+    program: &loader::LoadedProgram, space: &paging::AddressSpace, pid: u32,
+    operation: impl FnOnce() -> T,
+) -> T {
+    let directory = paging::status().page_directory;
+    let flags = kernel_flags();
+    unsafe {
+        core::arch::asm!("cli", options(nostack));
+        assert!(!(*core::ptr::addr_of!(RUN)).active);
+        core::ptr::addr_of_mut!(RUN).write(RunState {
+            active: true, outcome: None, pid, image_size: program.size,
+            directory: space.directory(), space,
+            arguments: program.arguments, argument_length: program.argument_length,
+        });
+        core::arch::asm!("mov cr3, {0:e}", in(reg) space.directory(), options(nostack));
+    }
+    let result = operation();
+    unsafe {
+        core::arch::asm!("cli", options(nostack));
+        (*core::ptr::addr_of_mut!(RUN)).active = false;
+        core::arch::asm!("mov cr3, {0:e}", in(reg) directory, options(nostack));
+        if flags & 0x200 != 0 { core::arch::asm!("sti", options(nostack)); }
+    }
+    result
+}

@@ -30,6 +30,14 @@ def main():
      time.sleep(.04)
    def mem(address,n):
     f=d/'memory.bin';g.call('human-monitor-command',{'command-line':f'pmemsave {address:#x} {n} "{f.as_posix()}"'});return f.read_bytes()
+   def pixel(x,y):
+    if a.vga=='std':
+     device=next(dev for dev in g.call('query-pci')[0]['devices'] if dev.get('id',{}).get('vendor')==0x1234)
+     base=next(region['address'] for region in device['regions'] if region['bar']==0);pitch=3200;size=4
+    else:
+     mode=re.findall(r'BIOS VBE mode [0-9a-f]+ base=([0-9a-f]+) pitch=(\d+) bpp=(\d+)',log())[-1]
+     base=int(mode[0],16);pitch=int(mode[1]);size=int(mode[2])//8
+    return int.from_bytes(mem(base+y*pitch+x*size,size),'little')
    def frames():return int(re.search(r'Free now: +(\d+)',g.command('frames','Free now:'))[1])
    for i in range(24):g.command("touch f"+str(i)+".txt","Created:")
    baseline=frames();g.type('desktop\n');until(lambda:'Desktop scheduler: ready' in log(),'Desktop')
@@ -79,30 +87,44 @@ def main():
     else:click(rx+ow-42,ry+15)
     until(lambda:changes(pid)>before,'Maximize/restore acknowledgement')
     return placement(pid)
-   note=launch('NOTEPAD');original=placement(note);g.type('a'*100)
+   note=launch('NOTEPAD');original=placement(note)
+   rx,ry,ow,oh,m=original
+   until(lambda:pixel(rx+ow-46,ry+13)==0,'Maximize icon missing before pointer hover')
+   g.type('a'*100)
    # Chrome button capture cancels if released elsewhere.
    rx,ry,ow,oh,m=original;before=changes(note);move(rx+ow-42,ry+15);button(True);move(rx+250,ry+50);button(False);assert changes(note)==before,'Cancelled maximize changed window'
-   assert toggle(note)==(0,24,800,576,True);assert current(note)[1:]==(768,528)
+   assert toggle(note)==(0,24,800,576,True);assert current(note)[1:]==(792,544)
    # Input uses the centered client, not the full-frame origin.
-   click(16+24,58+40);g.type('g');g.key('ctrl-s');g.type('max.txt\n');until(lambda:tree().get('MAX.TXT')==b'aaa'+b'g'+b'a'*97,'Maximized Notepad coordinates/save')
+   click(4+24,52+40);g.type('g');g.key('ctrl-s');g.type('max.txt\n');until(lambda:tree().get('MAX.TXT')==b'aaa'+b'g'+b'a'*97,'Maximized Notepad coordinates/save')
    click(734,39);until(lambda:f'Multiwindow: minimized pid={note}' in log(),'Maximized minimize');click(110,11);until(lambda:f'Multiwindow: restored pid={note} pos=0,24' in log(),'Maximized taskbar restore')
    assert toggle(note)==original,'Normal placement was not restored exactly'
    assert toggle(note,True)==(0,24,800,576,True);assert toggle(note,True)==original,'Double-click restore'
    # At maximum client size, toggling placement reuses the existing surface.
-   rx,ry,ow,oh,m=placement(note);drag(rx+100,ry+15,100,39);drag(650,456,778,584);until(lambda:current(note)[1:]==(768,528),'Manual maximum size');surface=current(note)[0]
+   rx,ry,ow,oh,m=placement(note);drag(rx+100,ry+15,100,39);drag(650,456,799,599);until(lambda:current(note)[1:]==(792,544),'Manual maximum size');surface=current(note)[0]
    assert toggle(note)==(0,24,800,576,True);assert current(note)[0]==surface,'Same-size maximize reallocated surface'
-   assert toggle(note)==(0,24,784,566,False);assert current(note)[0]==surface,'Same-size restore reallocated surface'
+   assert toggle(note)==(0,24,808,582,False);assert current(note)[0]==surface,'Same-size restore reallocated surface'
    g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={note} code=0' in log(),'Notepad close')
-   files=launch('FILES');old=placement(files);assert toggle(files)==(0,24,800,576,True);assert current(files)[1:]==(768,528)
+   files=launch('FILES');old=placement(files);assert toggle(files)==(0,24,800,576,True);assert current(files)[1:]==(792,544)
    # Row twenty is newly visible in the expanded client.
-   click(16+40,58+80+20*16+8);addr,w,h=current(files);until(lambda:int.from_bytes(mem(addr+((80+20*16)*w+8)*4,4),'little')==0x153e8e,'Maximized Files row input')
-   assert toggle(files)==old;g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={files} code=0' in log(),'Files close')
-   term=launch('TERMINAL');old=placement(term);g.type('echo normal\n');assert toggle(term)==(0,24,800,576,True);assert current(term)[1:]==(656,528),'Terminal lost its 80-column layout'
+   click(4+40,52+80+20*16+8);addr,w,h=current(files);until(lambda:int.from_bytes(mem(addr+((80+20*16)*w+8)*4,4),'little')==0x153e8e,'Maximized Files row input')
+   addr,w,h=current(files)
+   until(lambda:int.from_bytes(mem(addr+(16*w+w-8)*4,4),'little')==0xc4c4c4,'Files toolbar does not fill expanded width')
+   g.call('screendump',{'filename':str(out/'maximize-files.png'),'format':'png'})
+   assert toggle(files)==old
+   assert toggle(files)==(0,24,800,576,True)
+   click(4+w-20,52+16);until(lambda:f'Scheduler: exit pid={files} code=0' in log(),'Expanded Files Quit button hit target')
+   term=launch('TERMINAL');old=placement(term);g.type('echo normal\n');assert toggle(term)==(0,24,800,576,True);assert current(term)[1:]==(792,544),'Terminal client did not expand with the frame'
+   until(lambda:pixel(5,590)==0 and pixel(770,590)==0,'Maximized client must reach within four pixels of the screen edges')
+   addr,w,h=current(term)
+   until(lambda:int.from_bytes(mem(addr+(300*w+w-8)*4,4),'little')!=0,'Terminal scrollbar did not move to the right edge')
+   # The new bottom row must support selection, not just paint background.
+   move(4,588);button(True);move(44,588);button(False)
+   until(lambda:int.from_bytes(mem(addr+33*16*w*4,4),'little')==0x0000aa,'Terminal row 34 selection did not render')
    g.type('echo maximized\n');time.sleep(.2);g.call('screendump',{'filename':str(out/'maximize-terminal.png'),'format':'png'});assert toggle(term)==old;g.type('echo restored\n');time.sleep(.2);g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={term} code=0' in log(),'Terminal close')
    # Fixed-size legacy apps keep their existing title controls.
    counter=launch('COUNTER');rx,ry,ow,oh,m=placement(counter);before=changes(counter);click(rx+80,ry+15);click(rx+80,ry+15);assert changes(counter)==before;g.key('q');until(lambda:f'Scheduler: exit pid={counter} code=0' in log(),'Counter close')
    click(768,11);g.wait_for('Desktop finished.');assert frames()==baseline,'Maximize/restore leaked frames'
-   print('PASS maximize/restore: button capture, double-click, exact previous placement, top taskbar, centered client input/save, minimize/taskbar restore, Files rows, Terminal width, legacy apps and frame balance',flush=True)
+   print('PASS maximize/restore: button capture, double-click, exact previous placement, top taskbar, centered client input/save, minimize/taskbar restore, initial chrome redraw, responsive Files toolbar/rows, expanded Terminal background/scrollbar, legacy apps and frame balance',flush=True)
   finally:
    g.call('screendump',{'filename':str(out/'maximize-last.png'),'format':'png'});g.close();shutil.copyfile(d/'debug.log',out/'maximize-debug.log')
 if __name__=='__main__':main()

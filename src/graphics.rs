@@ -480,13 +480,21 @@ pub(crate) fn app_scene(state:&crate::app_window_ui::State,title:&[u8],surface:&
 }
 
 #[derive(Clone,Copy)]
-pub(crate) struct WindowView<'a> {pub ui:crate::app_window_ui::State,pub title:&'a[u8],pub pixels:&'a[u32]}
+pub(crate) struct WindowView<'a> {pub ui:crate::app_window_ui::State,pub title:&'a[u8],pub pixels:&'a[u32],pub io_blocks:Option<u32>}
 pub(crate) fn multi_scene(views:&[Option<WindowView<'_>>;4],order:&[usize;4],shell:Option<&crate::desktop_shell::Shell>) {
     let session=unsafe {(&*core::ptr::addr_of!(SESSION)).as_ref().unwrap()};
     let data=unsafe {core::slice::from_raw_parts_mut(session.back.base() as *mut u32,WIDTH*HEIGHT)};let font=&crate::ui_font::FONT;
     {let mut c=Canvas::new(data,WIDTH,HEIGHT,WIDTH).unwrap();c.rect(0,0,800,600,crate::theme::get().desktop);c.text(24,40,crate::theme_model::ink(crate::theme::get().desktop),if shell.is_some() {b"Xinyi desktop"}else{b"Xinyi multitasking"},font);c.text(24,64,crate::theme_model::ink(crate::theme::get().desktop),shell.map_or(b"Drag windows. ESC exits demo. Ctrl+Alt+K stops focused app." as &[u8],|s|&s.message[..s.length]),font);c.rect(0,0,800,24,0xc4c4c4);c.rect(0,22,800,2,0xffffff);c.text(12,5,0,b"Independent programs | Keyboard goes to the focused window",font);}
     for &index in order {let Some(view)=views[index] else{continue;};if !view.ui.window.visible {continue;}let r=view.ui.window.rect;
-        {let mut c=Canvas::new(data,WIDTH,HEIGHT,WIDTH).unwrap();c.rect(r.x+6,r.y+6,r.w,r.h,0x000040);bevel(&mut c,r.x,r.y,r.w,r.h,false);let bar=view.ui.window.title();c.rect(bar.x,bar.y,bar.w,bar.h,if view.ui.focused {crate::theme::get().title}else{0x707070});c.text(r.x+12,r.y+9,crate::theme_model::ink(if view.ui.focused {crate::theme::get().title}else{0x707070}),view.title,font);
+        {let mut c=Canvas::new(data,WIDTH,HEIGHT,WIDTH).unwrap();c.rect(r.x+6,r.y+6,r.w,r.h,0x000040);bevel(&mut c,r.x,r.y,r.w,r.h,false);let bar=view.ui.title();c.rect(bar.x,bar.y,bar.w,bar.h,if view.ui.focused {crate::theme::get().title}else{0x707070});c.text(r.x+12,r.y+9,crate::theme_model::ink(if view.ui.focused {crate::theme::get().title}else{0x707070}),view.title,font);
+        if let Some(mut blocks)=view.io_blocks {
+            let mut label=[b' ';15];label[..5].copy_from_slice(b" I/O ");let mut start=15;
+            loop {start-=1;label[start]=b'0'+(blocks%10) as u8;blocks/=10;if blocks==0 {break;}}
+            label.copy_within(start..15,5);let length=5+15-start;
+            let x=r.x+12+view.title.len() as i32*8;
+            let available=((r.x+r.w-100-x).max(0)/8) as usize;
+            c.text(x,r.y+9,crate::theme_model::ink(if view.ui.focused {crate::theme::get().title}else{0x707070}),&label[..length.min(available)],font);
+        }
         if view.ui.minimizable {let m=view.ui.minimize_button();bevel(&mut c,m.x,m.y,m.w,m.h,view.ui.minimize_pressed());c.rect(m.x+4,m.y+12,10,2,0);}
         if view.ui.limits.is_some(){let m=view.ui.maximize_button();bevel(&mut c,m.x,m.y,m.w,m.h,view.ui.maximize_pressed());let d=if view.ui.maximize_pressed(){1}else{0};if view.ui.is_maximized(){c.rect(m.x+7+d,m.y+4+d,8,8,0);c.rect(m.x+8+d,m.y+6+d,6,5,0xc4c4c4);}c.rect(m.x+4+d,m.y+6+d,9,8,0);c.rect(m.x+5+d,m.y+8+d,7,5,0xc4c4c4);}
         let close=view.ui.window.close();bevel(&mut c,close.x,close.y,close.w,close.h,view.ui.close_pressed());c.line((close.x+5,close.y+5),(close.x+12,close.y+12),0);c.line((close.x+12,close.y+5),(close.x+5,close.y+12),0);}
@@ -504,13 +512,13 @@ pub(crate) fn multi_scene(views:&[Option<WindowView<'_>>;4],order:&[usize;4],she
         let r=Shell::exit();bevel(&mut c,r.x,r.y,r.w,r.h,shell.capture==Some(Hit::Exit));c.text(r.x+8,r.y+2,0,b"Exit",font);
         if shell.open {let r=shell.menu();c.rect(r.x+6,r.y+6,r.w,r.h,0x000040);bevel(&mut c,r.x,r.y,r.w,r.h,false);
             if shell.catalog.len==0 {c.text(r.x+12,r.y+8,0,b"No apps found",font);}
-            for(i,entry) in shell.catalog.entries[..shell.catalog.len].iter().enumerate() {let y=r.y+4+i as i32*24;let hover=shell.hit()==Some(Hit::App(i));if hover {c.rect(r.x+4,y,r.w-8,24,0x153e8e);}c.text(r.x+12,y+4,if hover {0xffffff}else{0},&entry.label[..entry.label_len],font);}
+            for(i,entry) in shell.catalog.entries[..shell.catalog.len].iter().enumerate() {let y=r.y+4+i as i32*24;let hover=shell.menu_selection.map_or(shell.hit()==Some(Hit::App(i)),|selected|selected==i);if hover {c.rect(r.x+4,y,r.w-8,24,0x153e8e);}c.text(r.x+12,y+4,if hover {0xffffff}else{0},&entry.label[..entry.label_len],font);}
         }
     }
 
 }
 
-pub(crate) fn terminal_cells(pixels:&mut[u32],width:usize,height:usize,cells:&[crate::pty_model::Cell;2640],rows:u64,cursor:Option<(usize,usize)>) {
+pub(crate) fn terminal_cells(pixels:&mut[u32],width:usize,height:usize,cells:&[crate::pty_model::Cell;2720],rows:u64,cursor:Option<(usize,usize)>) {
  let colors=[0x000000,0x0000aa,0x00aa00,0x00aaaa,0xaa0000,0xaa00aa,0xaa5500,0xaaaaaa,0x555555,0x5555ff,0x55ff55,0x55ffff,0xff5555,0xff55ff,0xffff55,0xffffff];
  let session=unsafe {(&*core::ptr::addr_of!(SESSION)).as_ref().unwrap()};let font=unsafe {&*(session.font.base() as *const [u8;4096])};let mut canvas=Canvas::new(pixels,width,height,width).unwrap();
  for y in 0..height/16 {if rows&(1<<y)==0 {continue;}for x in 0..80 {let cell=cells[y*80+x];canvas.rect(x as i32*8,y as i32*16,8,16,colors[(cell.color>>4) as usize]);canvas.glyph(x as i32*8,y as i32*16,colors[(cell.color&15) as usize],cell.ch,font);}}

@@ -46,7 +46,7 @@ unsafe fn table(address: u32, signature: &[u8]) -> Option<&'static [u8]> {
     let bytes = core::slice::from_raw_parts(address as *const u8, n);
     checksum(bytes).then_some(bytes)
 }
-fn discover() -> Option<Sleep> {
+pub(crate) fn fadt() -> Option<&'static [u8]> {
     unsafe {
         let ebda = (core::ptr::read_volatile(0x40e as *const u16) as usize) * 16;
         let mut root = None;
@@ -73,7 +73,12 @@ fn discover() -> Option<Sleep> {
                 break;
             }
         }
-        let f = fadt?;
+        fadt
+    }
+}
+fn discover() -> Option<Sleep> {
+    unsafe {
+        let f = fadt()?;
         if f.len() < 116 || u32le(f, 112)? & (1 << 20) != 0 || f[89] < 2 {
             return None;
         }

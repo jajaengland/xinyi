@@ -17,6 +17,7 @@ struct Window {
     height: u32,
     requested:Option<(u32,u32)>,
     dirty: Option<Rect>,
+    io_blocks: Option<u32>,
     events: crate::window_queue::Queue,
 }
 impl Window {
@@ -68,6 +69,7 @@ pub fn status(text: &[u8]) {
     }
 }
 pub fn refresh_catalog() {
+    if crate::disk_io::busy() { return; }
     let mut catalog = crate::app_catalog::Catalog::new();
     let result = crate::diskfs::list("/APPS", |name, _, directory| catalog.add(name, directory));
     catalog.sort();
@@ -80,10 +82,27 @@ pub fn refresh_catalog() {
         status(b"Apps unavailable. Return to the shell to select a mounted drive.");
     }
 }
+pub fn io_progress(pid: u32, blocks: Option<u32>) {
+    let owner = crate::pty::io_window_owner(pid);
+    unsafe {
+        for window in (&mut *core::ptr::addr_of_mut!(WINDOWS)).iter_mut().flatten() {
+            if window.owner == owner && window.io_blocks != blocks {
+                window.io_blocks = blocks;
+                if window.ui.window.visible { damage(window.ui.title()); }
+            }
+        }
+    }
+}
 pub fn set_tasks(tasks: [Option<crate::desktop_shell::Task>; 4]) {
     unsafe {
         if let Some(shell) = &mut *core::ptr::addr_of_mut!(SHELL) {
+            let pids = tasks.map(|task| task.map_or(0, |task| task.pid));
+            let changed = shell.tasks.map(|task| task.map_or(0, |task| task.pid)) != pids;
+            if changed && matches!(shell.capture, Some(crate::desktop_shell::Hit::Task(_))) {
+                shell.capture = None;
+            }
             shell.tasks = tasks;
+            if changed { crate::debug::write_fmt(format_args!("Taskbar: pids={},{},{},{}\n",pids[0],pids[1],pids[2],pids[3])); }
             if shell
                 .focused
                 .is_some_and(|pid| !tasks.iter().flatten().any(|t| t.pid == pid))
@@ -104,7 +123,7 @@ pub fn begin_desktop() -> Result<(), &'static str> {
     unsafe {
         SHELL = Some(crate::desktop_shell::Shell::new());
     }
-    status(b"Apps launches programs. Click a task to switch; close apps before Exit.");
+    status(b"Ctrl+Esc: Apps | Alt+Tab: switch | Alt+F4: close | Close apps before Exit.");
     refresh_catalog();
     unsafe {
         damage(Rect {
@@ -197,28 +216,14 @@ unsafe fn chrome(x: i32, y: i32, buttons: u8, lost: bool) -> bool {
     let opened = shell.open && !old_open;
     match action {
         Some(crate::desktop_shell::Action::Launch(i)) => {
-            LAUNCH = Some(shell.catalog.entries[i]);
+            if core::ptr::addr_of!(LAUNCH).read().is_none() { LAUNCH = Some(shell.catalog.entries[i]); }
+            else { status(b"An app launch is already queued. Please wait."); }
         }
         Some(crate::desktop_shell::Action::Focus(pid)) => {
-            let index = (&*core::ptr::addr_of!(WINDOWS))
-                .iter()
-                .position(|w| w.as_ref().is_some_and(|w| w.owner == pid));
-            if let Some(i)=index {if let Some(w)=&mut WINDOWS[i] {damage(w.ui.window.bounds());w.ui.restore();damage(w.ui.window.bounds());crate::debug::write_fmt(format_args!("Multiwindow: restored pid={} pos={},{}\n",w.owner,w.ui.window.rect.x,w.ui.window.rect.y));}}
-            focus(index);
-            if index.is_none() {
-                if let Some(shell) = &mut *core::ptr::addr_of_mut!(SHELL) {
-                    shell.focused = Some(pid);
-                    damage(Rect {
-                        x: 0,
-                        y: 0,
-                        w: 800,
-                        h: 24,
-                    });
-                }
-            }
+            activate(pid);
         }
         Some(crate::desktop_shell::Action::Exit) => {
-            if shell.tasks.iter().all(Option::is_none) {
+            if shell.tasks.iter().all(Option::is_none) && !crate::disk_io::busy() {
                 STOP = true;
             } else {
                 status(b"Close running apps before leaving. Ctrl+Alt+K stops a stuck focused app.");
@@ -241,6 +246,39 @@ unsafe fn chrome(x: i32, y: i32, buttons: u8, lost: bool) -> bool {
 
 unsafe fn damage(rect: Rect) {
     DAMAGE = Some(DAMAGE.map_or(rect, |old| old.union(rect)));
+}
+unsafe fn dismiss_menu() {
+    if let Some(shell) = &mut *core::ptr::addr_of_mut!(SHELL) {
+        if shell.open {
+            let rect = shell.menu();
+            damage(Rect { w: rect.w + 6, h: rect.h + 6, ..rect });
+        }
+        shell.reset(BUTTONS);
+        damage(Rect { x: 0, y: 0, w: 800, h: 24 });
+    }
+}
+unsafe fn activate(pid: u32) {
+    if let Some(index) = (*core::ptr::addr_of_mut!(CAPTURE)).take() {
+        if let Some(window) = &mut WINDOWS[index] {
+            if let Some(preview) = window.ui.preview() { damage(preview); }
+            window.ui.update(crate::mouse_packet::Event { lost: true, buttons: BUTTONS, ..crate::mouse_packet::Event::default() });
+            window.push(api::Event { kind: api::RESET, buttons: BUTTONS as u32, ..api::Event::default() });
+            damage(window.ui.window.bounds());
+        }
+    }
+    let index = (&*core::ptr::addr_of!(WINDOWS)).iter()
+        .position(|window| window.as_ref().is_some_and(|window| window.owner == pid));
+    if let Some(index) = index {
+        let window = WINDOWS[index].as_mut().unwrap();
+        damage(window.ui.window.bounds());
+        window.ui.restore();
+        damage(window.ui.window.bounds());
+        crate::debug::write_fmt(format_args!("Multiwindow: restored pid={} pos={},{}\n",pid,window.ui.window.rect.x,window.ui.window.rect.y));
+    }
+    focus(index);
+    if index.is_none() {
+        if let Some(shell) = &mut *core::ptr::addr_of_mut!(SHELL) { shell.focused = Some(pid); }
+    }
 }
 unsafe fn focus(index: Option<usize>) {
     assert!(index.is_none_or(|i| i < N));
@@ -365,6 +403,7 @@ fn flush() {
                     views[i] = Some(graphics::WindowView {
                         ui: w.ui,
                         title: &w.title[..w.length],
+                        io_blocks: w.io_blocks,
                         pixels: core::slice::from_raw_parts(
                             w.surface.base() as *const u32,
                             (w.width * w.height) as usize,
@@ -403,6 +442,52 @@ pub fn pump() -> bool {
                 continue;
             };
             unsafe {
+                if code as u16 == 9 && code & (1 << 18) != 0 && code & (1 << 17) == 0 {
+                    if let Some(shell) = &*core::ptr::addr_of!(SHELL) {
+                        let next = shell.next_task(code & (1 << 16) != 0);
+                        dismiss_menu();
+                        if let Some(pid) = next {
+                            activate(pid);
+                            crate::debug::write_fmt(format_args!("Multiwindow: keyboard focus pid={}\n",pid));
+                        }
+                        continue;
+                    }
+                }
+                if code as u16 == 0x123 && code & (1 << 18) != 0 && code & (1 << 17) == 0 {
+                    dismiss_menu();
+                    if let Some(window) = FOCUS.and_then(|index| WINDOWS[index].as_mut()) {
+                        window.push(api::Event { kind: api::CLOSE, ..api::Event::default() });
+                        crate::debug::write_fmt(format_args!("Multiwindow: close request pid={}\n",window.owner));
+                    }
+                    continue;
+                }
+                if code & ((1 << 17) | (1 << 18)) == ((1 << 17) | (1 << 18))
+                    && matches!(code as u16, 75 | 107)
+                {
+                    KILL = if let Some(shell) = &*core::ptr::addr_of!(SHELL) {
+                        shell.focused
+                    } else {
+                        FOCUS.and_then(|i| WINDOWS[i].as_ref().map(|w| w.owner))
+                    };
+                    continue;
+                }
+                if code as u16 == 27 && code & (1 << 17) != 0 && code & (1 << 18) == 0
+                    && (&*core::ptr::addr_of!(SHELL)).as_ref().is_some_and(|shell| !shell.open) {
+                    refresh_catalog();
+                }
+                if let Some(shell) = &mut *core::ptr::addr_of_mut!(SHELL) {
+                    let menu = shell.menu();
+                    let (consumed, action) = shell.key(code);
+                    if consumed {
+                        damage(Rect { w: menu.w + 6, h: menu.h + 6, ..menu });
+                        damage(Rect { x: 0, y: 0, w: 800, h: 24 });
+                        if let Some(crate::desktop_shell::Action::Launch(index)) = action {
+                            if core::ptr::addr_of!(LAUNCH).read().is_none() { LAUNCH = Some(shell.catalog.entries[index]); }
+                            else { status(b"An app launch is already queued. Please wait."); }
+                        }
+                        continue;
+                    }
+                }
                 if code as u16 == 27 {
                     if let Some(shell) = &mut *core::ptr::addr_of_mut!(SHELL) {
                         if shell.open {
@@ -421,7 +506,7 @@ pub fn pump() -> bool {
                             });
                             continue;
                         }
-                        if shell.tasks.iter().all(Option::is_none) {
+                        if shell.tasks.iter().all(Option::is_none) && !crate::disk_io::busy() {
                             STOP = true;
                             break;
                         }
@@ -429,16 +514,6 @@ pub fn pump() -> bool {
                         STOP = true;
                         break;
                     }
-                }
-                if code & ((1 << 17) | (1 << 18)) == ((1 << 17) | (1 << 18))
-                    && matches!(code as u16, 75 | 107)
-                {
-                    KILL = if let Some(shell) = &*core::ptr::addr_of!(SHELL) {
-                        shell.focused
-                    } else {
-                        FOCUS.and_then(|i| WINDOWS[i].as_ref().map(|w| w.owner))
-                    };
-                    continue;
                 }
                 if let Some(i) = FOCUS {
                     if let Some(w) = &mut WINDOWS[i] {
@@ -626,6 +701,7 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
                 width,
                 height,
                 dirty: None,
+                io_blocks: None,
                 events: crate::window_queue::Queue::new(),
             });
             focus(Some(index));
@@ -645,7 +721,19 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
         return (-9i32) as u32;
     };
     let w = unsafe { WINDOWS[index].as_mut().unwrap() };
-    if number==85 {let Some(limits)=api::resize_limits(second,third,w.width,w.height)else{return (-22i32) as u32;};w.ui.limits=Some(limits);w.ui.cancel_resize();w.requested=None;return 0;}
+    if number==85 {
+        let Some(limits)=api::resize_limits(second,third,w.width,w.height)else{return (-22i32) as u32;};
+        w.ui.limits=Some(limits);
+        w.ui.cancel_resize();
+        w.requested=None;
+        // Enabling resize adds a title button and moves minimize. Present the
+        // changed chrome now, even if the pointer never visits this window.
+        let bounds=w.ui.window.bounds();
+        unsafe {damage(bounds);asm!("sti",options(nostack));}
+        flush();
+        unsafe {asm!("cli",options(nostack));}
+        return 0;
+    }
     if number==86 {if third!=0{return (-22i32) as u32;}let size=(second&65535,second>>16);if w.requested!=Some(size){return (-116i32) as u32;}let Some(l)=w.ui.limits else{return (-22i32) as u32;};if !api::valid_size(size.0,size.1)||size.0<l.0 as u32||size.1<l.1 as u32||size.0>l.2 as u32||size.1>l.3 as u32{return (-22i32) as u32;}
         let old=w.ui.window.bounds();
         if size!=(w.width,w.height) {
@@ -811,9 +899,9 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
     }
 }
 
-pub fn terminal_present(owner:u32,handle:u32,cells:&[crate::pty_model::Cell;2640],rows:u64,cursor:Option<(usize,usize)>)->u32 {
+pub fn terminal_present(owner:u32,handle:u32,cells:&[crate::pty_model::Cell;2720],rows:u64,cursor:Option<(usize,usize)>)->u32 {
  let Some(index)=(unsafe {(&*core::ptr::addr_of!(WINDOWS)).iter().position(|w|w.as_ref().is_some_and(|w|w.owner==owner&&w.id==handle))}) else{return (-9i32) as u32;};
- unsafe {let w=WINDOWS[index].as_mut().unwrap();if !matches!(w.width,640|656)||!(400..=528).contains(&w.height) {return (-22i32) as u32;}let pixels=core::slice::from_raw_parts_mut(w.surface.base() as *mut u32,w.width as usize*w.height as usize);asm!("sti",options(nostack));crate::graphics::terminal_cells(pixels,w.width as usize,w.height as usize,cells,rows,cursor);let client=w.ui.client();
+ unsafe {let w=WINDOWS[index].as_mut().unwrap();if !(640..=792).contains(&w.width)||!(400..=544).contains(&w.height) {return (-22i32) as u32;}let pixels=core::slice::from_raw_parts_mut(w.surface.base() as *mut u32,w.width as usize*w.height as usize);asm!("sti",options(nostack));crate::graphics::terminal_cells(pixels,w.width as usize,w.height as usize,cells,rows,cursor);let client=w.ui.client();
  for y in 0..w.height/16 {if w.ui.window.visible&&rows&(1<<y)!=0 {damage(Rect{x:client.x,y:client.y+y as i32*16,w:640,h:16});}}flush();asm!("cli",options(nostack));}0
 }
 

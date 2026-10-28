@@ -53,9 +53,11 @@ fn main() -> u32 {
         return 1;
     }
     let handle = handle as u32;
-    let (mut count, mut last) = (0u32, xinyi::ticks().wrapping_sub(10));
+    let started = xinyi::ticks();
+    let mut last = started.wrapping_sub(10);
     loop {
         let now = xinyi::ticks();
+        let count = now.wrapping_sub(started) / 10;
         if now.wrapping_sub(last) >= 10 {
             let mut line = [b' '; 38];
             line[..7].copy_from_slice(b"Count: ");
@@ -80,7 +82,6 @@ fn main() -> u32 {
                 return 1;
             }
             window::present(handle);
-            count = count.wrapping_add(1);
             last = now;
         }
         if mode == b"check" {

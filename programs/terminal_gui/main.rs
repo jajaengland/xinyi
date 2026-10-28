@@ -7,11 +7,11 @@ use xinyi::{
     widgets::{Rect, Scrollbar},
     window,
 };
-fn banner(window: u32, text: &[u8]) {
+fn banner(window: u32, width: u32, text: &[u8]) {
     window::draw(
         window,
         &[
-            window::Draw::rect(0, 0, 640, 32, 0xc4c4c4),
+            window::Draw::rect(0, 0, width - 16, 32, 0xc4c4c4),
             window::Draw::text(8, 8, 0, text),
         ],
     );
@@ -23,8 +23,10 @@ fn main() -> u32 {
         return 1;
     }
     let window = handle as u32;
-    window::resizable(window, 656, 400, 656, 528);
+    window::resizable(window, 656, 400, 792, 544);
+    let mut width = 656u32;
     let mut height = 400i32;
+    window::draw(window, &[window::Draw::rect(0, 0, width, height as u32, 0)]);
     let session = pty::open();
     if session < 0 {
         return 1;
@@ -76,8 +78,11 @@ fn main() -> u32 {
             match event.kind {
                 window::RESIZE => {
                     if window::resize(window, event) == 0 {
+                        width = event.x as u32;
                         height = event.y;
+                        window::draw(window, &[window::Draw::rect(0, 0, width, height as u32, 0)]);
                         pty::viewport(session, height as u32 / 16);
+                        bar.rect.x = width as i32 - 16;
                         bar.rect.h = height;
                         bar.reset(0);
                         scroll = 0;
@@ -110,8 +115,14 @@ fn main() -> u32 {
                         buttons = event.buttons;
                         continue;
                     }
+                    // The PTY retains its compatible 80-column text screen.
+                    // Extra client width is background, not additional cells.
                     let at = (event.y.clamp(0, height - 1) / 16) as u32 * 80
-                        + (event.x.clamp(0, 640) / 8) as u32;
+                        + (event.x.clamp(0, 639) / 8) as u32;
+                    if event.x >= 640 && !dragging {
+                        buttons = event.buttons;
+                        continue;
+                    }
                     if event.buttons & 1 != 0 && buttons & 1 == 0 {
                         anchor = at;
                         dragging = true;
@@ -177,7 +188,7 @@ fn main() -> u32 {
             }
         }
         if let Some(text) = message {
-            banner(window, text);
+            banner(window, width, text);
         } else if pty::present(session, window, scroll) < 0 {
             return 0;
         }

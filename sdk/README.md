@@ -70,9 +70,9 @@ Call 59 takes EBX output pointer and ECX capacity. It copies the current raw arg
 
 ## Windows and scheduling
 
-Calls 60..64 provide `window::open`, `event`, `draw`, `present` and `close`. The default client is 640x400. `window::open_sized(title,width,height)` uses call 65, packing width/height into EDX (low/high 16 bits). Sizes must be 160..768 by 80..528 with width divisible by 8 and height by 16. Draw coordinates are checked against that client size. Titles are 1..48 printable ASCII bytes; handles belong to the current PID. See `programs/counter/main.rs` for a small example and `programs/notepad/main.rs` for editing.
+Calls 60..64 provide `window::open`, `event`, `draw`, `present` and `close`. The default client is 640x400. `window::open_sized(title,width,height)` uses call 65, packing width/height into EDX (low/high 16 bits). Sizes must be 160..792 by 80..544 with width divisible by 8 and height by 16. Draw coordinates are checked against that client size. Titles are 1..48 printable ASCII bytes; handles belong to the current PID. See `programs/counter/main.rs` for a small example and `programs/notepad/main.rs` for editing.
 
-PIT interrupts preempt user code. Scheduled `sleep_ms`, `window::event(...,true)` and `yield_now()` (66, zero arguments) return control to the dispatcher. Syscalls run to completion, including filesystem I/O. The scheduler preserves x87/MMX state and private ELF globals/heap; SSE/AVX remain unavailable.
+PIT interrupts preempt user code. Scheduled `sleep_ms`, `window::event(...,true)` and `yield_now()` (66, zero arguments) return control to the dispatcher. Desktop filesystem calls park the caller in a serialized queue and yield between completed disk-block slices; other syscalls run to completion. Queued file requests retain their submission volume generation and return -116 if that volume changes before execution. The scheduler preserves x87/MMX state and private ELF globals/heap; SSE/AVX remain unavailable.
 
 The desktop supports mounted-drive file calls and concurrent graphical apps. A windowless app requesting console/key/speaker services gets a Terminal session automatically, retaining its process state. Console/speaker services return -16 for apps that already own graphical windows. Use call 71 to queue child launches. The `multitask` diagnostic runs Counter windows; its legacy file calls 57/58 return -16 outside desktop mode.
 
@@ -88,7 +88,7 @@ The desktop supports mounted-drive file calls and concurrent graphical apps. A w
 
 Clipboard writes are validated/copied before replacing the shared value. Errors include -14 invalid range and -22 invalid length/content/reserved argument. The clipboard survives program close, with no on-disk persistence. PTY output uses bounded screen/history storage without a per-command output cap. Interactive text children use console calls 4/50/53..56 inside their terminal window.
 
-Desktop jobs save/restore a checked canonical working-directory snapshot around each quantum. A terminal's `cd` changes only its own snapshot; a queued launch copies that directory and arguments into kernel-owned storage before yielding. File calls and terminal commands complete serially in kernel context. Launch succeeds as a request (0); subsequent loading errors appear in desktop status. No free slot returns -24, unavailable/busy desktop returns -16, and invalid arguments return -22. A child starts with its parent's directory; Apps launches use the physical shell's starting directory. The physical shell’s `terminal` command opens the scheduled desktop and starts Terminal.
+Desktop jobs save/restore a checked canonical working-directory snapshot around each quantum. A terminal's `cd` changes only its own snapshot; a queued launch copies that directory and arguments into kernel-owned storage before yielding. Desktop file calls run through one serialized I/O worker. Terminal line editing and non-disk commands remain live, while filesystem commands wait for the worker and then execute synchronously. Launch succeeds as a request (0); subsequent loading errors appear in desktop status. No free slot returns -24, unavailable/busy desktop returns -16, and invalid arguments return -22. A child starts with its parent's directory; Apps launches use the physical shell's starting directory. The physical shell’s `terminal` command opens the scheduled desktop and starts Terminal.
 
 ## PTY and directory calls
 
@@ -96,8 +96,8 @@ PTY handles belong to their creator. All calls require an active user image and 
 
 | Call | Arguments |
 | --- | --- |
-| 72 | EBX operation, ECX handle, EDX 0. Operations: 0 open (handle 0), 1 close if idle, 2 force close, 3 foreground PID, 4 closed flag, 5 invalidate display cache, 6 retained history rows (0..64), 7 output-scroll count (reset by console clear), 8 viewport rows in EDX (25..33; clears selection/cache). |
-| 73 | EBX session, ECX owned 640- or 656-wide window, height 400..528; EDX scrollback rows 0..64. Set the PTY viewport rows to match the client height. |
+| 72 | EBX operation, ECX handle, EDX 0. Operations: 0 open (handle 0), 1 close if idle, 2 force close, 3 foreground PID, 4 closed flag, 5 invalidate display cache, 6 retained history rows (0..64), 7 output-scroll count (reset by console clear), 8 viewport rows in EDX (25..34; clears selection/cache). |
+| 73 | EBX session, ECX owned 640..792-wide window, height 400..544; EDX scrollback rows 0..64. Set the PTY viewport rows to match the client height. |
 | 74 | EBX session, ECX key/modifier event, EDX 0. |
 | 75 | EBX session, ECX readable paste pointer, EDX byte length <=1024. Rejects oversized paste atomically. |
 | 76 | EBX session, ECX anchor, EDX endpoint, both 0..`viewport_rows*80` cell offsets. Freezes the selected view. |
@@ -114,7 +114,7 @@ The desktop supports four root application windows and up to four attached text 
 
 Desktop title bars provide minimize and close, with maximize/restore for resizable apps. Minimize keeps the process, surface, pending document and scheduler state alive; another visible window takes input focus. Hidden apps continue executing and drawing into their retained surfaces. Clicking the taskbar restores and brings the window fully into view. Moving partly beyond screen edges does not change client coordinates or buffer sizes: the kernel clips the final surface copy. The top taskbar remains protected. The synchronous foreground API has no taskbar minimize control.
 
-Application files remain capped at 64 KiB and user stacks at 16 KiB plus a guard page. ELF memory spans and heaps are capped separately at 1 MiB each. Whole-file calls 88..90 and Notepad support 64 KiB files; legacy text APIs, shell text commands, EDIT and the shared clipboard retain their 1024-byte limit. Kernel services run serially to completion, so large file operations can pause other apps. Classic 32-bit paging protects code from writes and isolates processes but does not prevent executing writable pages.
+Application files remain capped at 64 KiB and user stacks at 16 KiB plus a guard page. ELF memory spans and heaps are capped separately at 1 MiB each. Whole-file calls 88..90 and Notepad support 64 KiB files; legacy text APIs, shell text commands, EDIT and the shared clipboard retain their 1024-byte limit. Desktop filesystem calls are queued transparently: the calling app waits, while other apps run between disk-block slices. Returned results and buffer validation are unchanged. An active operation finishes before forced termination reclaims its owner; queued operations can be discarded. Individual firmware/controller waits, kernel shell filesystem commands and executable loads remain synchronous. Classic 32-bit paging protects code from writes and isolates processes but does not prevent executing writable pages.
 
 ## File transfers
 
@@ -144,13 +144,13 @@ Scrollbars need a rectangle at least 48 pixels tall. `range(max,page)` sets the 
 
 ## Opt-in desktop resizing
 
-`window::resizable(handle,min_width,min_height,max_width,max_height)` (85) enables the lower-right resize grip. Pack minimum width/height in ECX low/high16 and maximum width/height in EDX low/high16. Limits must contain the current size, align to 8×16 pixels, and stay within 160..768 by 80..528. Existing windows keep their size until an app accepts a request. The synchronous foreground API returns -16 for resizing; apps can continue with their initial layout.
+`window::resizable(handle,min_width,min_height,max_width,max_height)` (85) enables the lower-right resize grip. Pack minimum width/height in ECX low/high16 and maximum width/height in EDX low/high16. Limits must contain the current size, align to 8×16 pixels, and stay within 160..792 by 80..544. Existing windows keep their size until an app accepts a request. The synchronous foreground API returns -16 for resizing; apps can continue with their initial layout.
 
 A `window::RESIZE` event has proposed client width in `x` and height in `y`. Call `window::resize(handle,event)` (86: EBX handle, ECX packed width/height, EDX zero) before changing app layout. Only the latest matching proposal is accepted; stale/unrequested requests return -116, invalid sizes -22 and allocation failure -12. Failure leaves geometry and the surface intact. Success preserves overlapping pixels, initializes new space, replaces the old surface and requires repainting the new layout. Width/height changes do not map pixels into user space. Text drawing and `window::row` accept up to 96 characters within the actual client bounds. RESIZE is a proposal, so user code halfway through drawing can finish against the old geometry safely.
 
 Resizable desktop apps also receive ordinary RESIZE proposals when users maximize or restore with the title-bar button/double-click. No additional app API is required. The frame fills the work area below the taskbar; its centered client respects the advertised maximum dimensions. A successful call 86 publishes the new placement; failure preserves the old frame/surface. Same-size placement changes reuse the surface. Fixed-size and foreground windows retain their existing controls.
 
-Terminal uses `pty::viewport(handle,rows)` (control operation 8) for 25..33 rows after a successful vertical resize. Its 80-column text console remains compatible with existing games/editors; the expanded view includes history. Control 6 reports the scroll limit for that viewport; selection endpoints are bounded by `rows*80`. A viewport change resets scroll/selection and invalidates the cache.
+Terminal uses `pty::viewport(handle,rows)` (control operation 8) for 25..34 rows after a successful vertical resize. Its 80-column text console remains compatible with existing games/editors; the expanded view includes history. Control 6 reports the scroll limit for that viewport; selection endpoints are bounded by `rows*80`. A viewport change resets scroll/selection and invalidates the cache.
 
 ## ELF programs and heap allocation
 

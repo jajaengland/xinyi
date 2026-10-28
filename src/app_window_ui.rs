@@ -72,7 +72,7 @@ impl State {
         if let Some((_, w, h)) = self.maximized {
             return Rect {
                 x: r.x + (r.w - w) / 2,
-                y: r.y + 34,
+                y: r.y + 28,
                 w,
                 h,
             };
@@ -97,6 +97,11 @@ impl State {
     }
     pub fn is_maximized(&self) -> bool {
         self.maximized.is_some()
+    }
+    pub fn title(&self) -> Rect {
+        let mut title = self.window.title();
+        if self.is_maximized() { title.h = 22; }
+        title
     }
     pub fn maximize_button(&self) -> Rect {
         let mut r = self.window.close();
@@ -132,8 +137,8 @@ impl State {
                     h: 576,
                 },
                 true,
-                w.min(768),
-                h.min(528),
+                w.min(792),
+                h.min(544),
             )
         };
         self.placement = Some((target, maximize));
@@ -229,7 +234,7 @@ impl State {
                 && self.grip().contains(self.x, self.y)
             {
                 Some(Capture::Resize)
-            } else if self.window.title().contains(self.x, self.y) {
+            } else if self.title().contains(self.x, self.y) {
                 Some(Capture::Title)
             } else if self.client().contains(self.x, self.y) {
                 Some(Capture::Client)
@@ -269,7 +274,7 @@ impl State {
             {
                 resize = self.toggle_maximize();
             } else if self.capture == Some(Capture::Title) {
-                if !self.dragged && self.window.title().contains(self.x, self.y) {
+                if !self.dragged && self.title().contains(self.x, self.y) {
                     let double = self.title_click.is_some_and(|(tick, x, y)| {
                         now.wrapping_sub(tick) <= 35
                             && (self.x - x).abs() <= 4

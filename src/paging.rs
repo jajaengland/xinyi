@@ -209,6 +209,12 @@ struct Heap {
     pages: [Option<crate::loader::Frames>; 256],
 }
 impl AddressSpace {
+    pub fn memory_kib(&self) -> u32 {
+        let state = unsafe { &*(self.state.base() as *const MemoryState) };
+        let heap = unsafe { &*state.heap.get() };
+        // Directory, user page table and memory metadata, plus committed heap.
+        12 + heap.pages.iter().filter(|page| page.is_some()).count() as u32 * 4
+    }
     pub fn permits(&self, pointer: u32, length: u32, write: bool) -> bool {
         {
             let state = unsafe { &*(self.state.base() as *const MemoryState) };

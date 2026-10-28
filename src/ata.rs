@@ -380,9 +380,14 @@ impl BlockDevice for AtaDisk {
             chunk.copy_from_slice(&word.to_le_bytes());
         }
         self.delay();
-        self.wait(false, true, 200)
+        let result=self.wait(false, true, 200);
+        crate::disk_io::checkpoint();
+        result
     }
     fn write_block(&self, block: u32, buffer: &[u8]) -> bool {
+        // A native target may alias the firmware boot disk (installation or
+        // drive switching), so native writes invalidate firmware read copies.
+        crate::bios_disk::invalidate_cache();
         if buffer.len() < 512 || !self.command(block, true) {
             return false;
         }
@@ -394,7 +399,9 @@ impl BlockDevice for AtaDisk {
             }
         }
         self.delay();
-        self.wait(false, true, 200)
+        let result=self.wait(false, true, 200);
+        crate::disk_io::checkpoint();
+        result
     }
     fn block_size(&self) -> usize {
         512

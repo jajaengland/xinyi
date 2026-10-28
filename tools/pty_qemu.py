@@ -57,6 +57,11 @@ def main():
    def cmd(s,expected):
     g.type(s+'\n');until(lambda:expected in screen(),'Output '+expected+'\n'+screen())
    until(lambda:'xinyi:/' in screen(),'Prompt\n'+screen())
+   cmd('ps','Total processes: 2')
+   listing=screen()
+   assert re.search(r'^'+str(counter)+r'\s+COUNTER\s+(ready|sleep|waiting)\s+\d+\s+app',listing,re.M),listing
+   assert re.search(r'^'+str(terminal)+r'\s+TERMINAL\s+(ready|sleep|waiting)\s+\d+\s+app',listing,re.M),listing
+   cmd('kill 0','Process not found');cmd('kill 4294967295','Process not found');cmd('kill nope','Usage: kill PID')
    cmd('version','Xinyi kernel version');cmd('uptime','Uptime:');cmd('help','install');cmd('clear','xinyi:/>');cmd('mkdir docs','Created');cmd('cd docs','xinyi:/DOCS>');cmd('touch note.txt','Created');cmd('write note.txt shared shell','Wrote');cmd('cat note.txt','shared shell')
    cmd('run hello','User program exited.');assert 'Desktop: text foreground' not in log()
    cmd('run snake','S N A K E');address,w,h=window(counter);before=mem(address,w*h*4);time.sleep(.35);assert mem(address,w*h*4)!=before,'Snake starved Counter';g.key('esc');until(lambda:'User program exited.' in screen(),'Snake return')
@@ -64,7 +69,12 @@ def main():
    cmd('edit note.txt','Xinyi Editor');g.key('end');g.type('!');g.key('ctrl-s');until(lambda:inspect_tree(image,2048)[0].get('DOCS/NOTE.TXT')==b'shared shell!','Editor save');g.key('ctrl-q');until(lambda:'User program exited.' in screen(),'Editor return')
    cmd('run notepad child.txt','Graphical application started.');until(lambda:log().count('Multiwindow: open')==3,'GUI detach');g.type('inherited');g.key('ctrl-s');until(lambda:inspect_tree(image,2048)[0].get('DOCS/CHILD.TXT')==b'inherited','GUI cwd');g.key('ctrl-q');time.sleep(.2)
    click(258,11);cmd('run snake','S N A K E');g.key('ctrl-c');until(lambda:'Interrupted.' in screen(),'Ctrl-C interrupt')
-   g.call('screendump',{'filename':str(out/'pty.png'),'format':'png'});cmd('run spin','run spin');until(lambda:'name=spin' in log(),'Spin start');m=re.search(r'Multiwindow: open pid='+str(terminal)+r' .*pos=(\d+),(\d+)',log());tx,ty=int(m[1]),int(m[2]);click(tx+638,ty+15);time.sleep(.2);g.key('esc');time.sleep(.2);assert f'Scheduler: exit pid={terminal}' not in log();click(tx+638,ty+15);click(tx+638,ty+15);until(lambda:f'Scheduler: exit pid={terminal} code=0' in log(),'Terminal close');click(110,11);g.key('q');until(lambda:f'Scheduler: exit pid={counter} code=0' in log(),'Counter close');click(768,11);g.wait_for('Desktop finished.');assert frames()==baseline,'PTY frame leak';g.command('cat /docs/note.txt','shared shell!');print('PASS PTY: normal shell, windowed Snake/editor, GUI detach/cwd, Ctrl-C and frame balance')
+   cmd('kill '+str(counter),'Termination requested for process '+str(counter))
+   until(lambda:f'Scheduler: forced exit pid={counter}' in log(),'kill did not terminate the selected process')
+   cmd('clear','xinyi:/DOCS>');cmd('ps','Total processes: 1')
+   assert 'COUNTER' not in screen(),screen()
+   cmd('kill '+str(counter),'Process not found')
+   g.call('screendump',{'filename':str(out/'pty.png'),'format':'png'});cmd('run spin','run spin');until(lambda:'name=spin' in log(),'Spin start');m=re.search(r'Multiwindow: open pid='+str(terminal)+r' .*pos=(\d+),(\d+)',log());tx,ty=int(m[1]),int(m[2]);click(tx+656,ty+15);time.sleep(.2);g.key('esc');time.sleep(.2);assert f'Scheduler: exit pid={terminal}' not in log();click(tx+656,ty+15);click(tx+656,ty+15);until(lambda:f'Scheduler: exit pid={terminal} code=0' in log(),'Terminal close');click(768,11);g.wait_for('Desktop finished.');assert frames()==baseline,'PTY frame leak';g.command('cat /docs/note.txt','shared shell!');print('PASS PTY: normal shell, process listing/kill, windowed Snake/editor, GUI detach/cwd, Ctrl-C and frame balance')
   finally:
    g.call('screendump',{'filename':str(out/'pty-last.png'),'format':'png'});g.close();shutil.copyfile(d/'debug.log',out/'pty-debug.log')
 
