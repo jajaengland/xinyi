@@ -29,7 +29,7 @@ def main():
                 while "Desktop scheduler: ready" not in (directory/"debug.log").read_text():
                     assert time.monotonic()<deadline;time.sleep(.01)
                 from folders_qemu import inspect_tree
-                names=sorted(k.split('/')[-1][:-4] for k in inspect_tree(image,2048)[0] if k.startswith('APPS/') and k.count('/')==1 and k.endswith('.BIN'))
+                names=sorted(k.split('/')[-1][:-4] for k in inspect_tree(image,2048)[0] if k.startswith('APPS/') and k.count('/')==1 and k.endswith(('.BIN','.ELF')))
                 for name in ["NOTEPAD","COUNTER"]:
                     click_at(40,11);click_at(40,30+4+names.index(name)*24+12);deadline=time.monotonic()+20
                     while (directory/"debug.log").read_text().count("Multiwindow: open")<(1 if name=="NOTEPAD" else 2):

@@ -10,7 +10,7 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
         if third != 0 || second < 105 {
             return (-22i32) as u32;
         }
-        if !crate::user_buffer::writable(first, 105) {
+        if !crate::user_memory::writable(first, 105) {
             return (-14i32) as u32;
         }
         let mut path = [0; 105];
@@ -23,7 +23,7 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
     if second > 128 || (number == 71 && third != 0) {
         return (-22i32) as u32;
     }
-    if !crate::user_buffer::readable(first, second, image) {
+    if !crate::user_memory::readable(first, second, image) {
         return (-14i32) as u32;
     }
     let mut line = [0; 128];

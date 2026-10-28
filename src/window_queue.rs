@@ -22,7 +22,7 @@ impl Queue {
         if motion && self.last_motion && self.len != 0 {
             let index = (self.head + self.len - 1) % 32;
             let previous = self.events[index];
-            if previous.kind == api::POINTER && previous.buttons == event.buttons {
+            if previous.kind == api::POINTER && previous.buttons == event.buttons && previous.code==event.code {
                 self.events[index] = event;
                 return;
             }
@@ -83,6 +83,19 @@ mod tests {
         assert_eq!(q.pop().unwrap().kind, api::KEY);
         assert_eq!(q.pop().unwrap().x, 101);
         assert_eq!(q.pop().unwrap().buttons, 0);
+        assert!(!q.pending());
+    }
+    #[test]
+    fn modifier_transitions_are_not_coalesced_away() {
+        let mut q = Queue::new();
+        q.push(pointer(1,0),true);
+        let mut shifted=pointer(2,0);shifted.code=1<<16;
+        q.push(shifted,true);
+        shifted.x=3;q.push(shifted,true);
+        q.push(pointer(4,0),true);
+        assert_eq!(q.pop().unwrap().x,1);
+        let e=q.pop().unwrap();assert_eq!(e.x,3);assert_eq!(e.code,1<<16);
+        assert_eq!(q.pop().unwrap().x,4);
         assert!(!q.pending());
     }
     #[test]

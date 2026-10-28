@@ -33,7 +33,8 @@ struct RunState {
     pid: u32,
     image_size: u32,
     directory: u32,
-    arguments: [u8;128],
+    space: *const paging::AddressSpace,
+    arguments: [u8; 128],
     argument_length: usize,
 }
 static mut RUN: RunState = RunState {
@@ -42,7 +43,8 @@ static mut RUN: RunState = RunState {
     pid: 0,
     image_size: 0,
     directory: 0,
-    arguments: [0;128],
+    space: core::ptr::null(),
+    arguments: [0; 128],
     argument_length: 0,
 };
 fn kernel_flags() -> u32 {
@@ -107,10 +109,10 @@ pub fn write(cs: u32, fd: u32, pointer: u32, length: u32) -> u32 {
     if fd != 1 && fd != 2 {
         return (-9i32) as u32;
     }
-    if length > crate::user_buffer::MAX_WRITE {
+    if length > crate::user_memory::MAX_WRITE {
         return (-22i32) as u32;
     }
-    if !crate::user_buffer::readable(pointer, length, state.image_size) {
+    if !crate::user_memory::readable(pointer, length, state.image_size) {
         return (-14i32) as u32;
     }
     if length == 0 {
@@ -118,7 +120,7 @@ pub fn write(cs: u32, fd: u32, pointer: u32, length: u32) -> u32 {
     }
     // The immutable page tables and current CR3 establish that every byte
     // is mapped user memory. User code is suspended during this copy.
-    let mut copy = [0; crate::user_buffer::MAX_WRITE as usize];
+    let mut copy = [0; crate::user_memory::MAX_WRITE as usize];
     unsafe {
         core::ptr::copy_nonoverlapping(pointer as *const u8, copy.as_mut_ptr(), length as usize);
     }
@@ -128,16 +130,19 @@ pub fn write(cs: u32, fd: u32, pointer: u32, length: u32) -> u32 {
 
 pub fn active_image(cs: u32) -> Option<u32> {
     let state = unsafe { &*core::ptr::addr_of!(RUN) };
-    if state.active && state.outcome.is_none() && cs & 3 == 3
-        && paging::status().page_directory == state.directory {
+    if state.active
+        && state.outcome.is_none()
+        && cs & 3 == 3
+        && paging::status().page_directory == state.directory
+    {
         Some(state.image_size)
     } else {
         None
     }
 }
-pub fn arguments() -> ([u8;128],usize) {
-    let state=unsafe {&*core::ptr::addr_of!(RUN)};
-    (state.arguments,state.argument_length)
+pub fn arguments() -> ([u8; 128], usize) {
+    let state = unsafe { &*core::ptr::addr_of!(RUN) };
+    (state.arguments, state.argument_length)
 }
 pub fn enter(argument: &str) {
     if unsafe { (*core::ptr::addr_of!(RUN)).active } {
@@ -207,7 +212,7 @@ pub fn execute(
         "User space: cr3={:08x} image={:08x} entry={:08x} stack={:08x} mode={}\n",
         space.directory(),
         program.image.base(),
-        paging::USER_BASE,
+        program.layout.entry,
         paging::USER_STACK_TOP - 4,
         mode
     ));
@@ -216,7 +221,13 @@ pub fn execute(
         paging::USER_STACK_GUARD
     ));
     // Paint unused syscall-stack storage to check capacity after returning.
-    unsafe {core::slice::from_raw_parts_mut(kernel_stack.base() as *mut u32,((kernel_stack.top()-kernel_stack.base())/4) as usize).fill(0x58475354);}
+    unsafe {
+        core::slice::from_raw_parts_mut(
+            kernel_stack.base() as *mut u32,
+            ((kernel_stack.top() - kernel_stack.base()) / 4) as usize,
+        )
+        .fill(0x58475354);
+    }
     let old_stack = gdt::kernel_stack();
     let old_directory = paging::status().page_directory;
     let old_flags = kernel_flags();
@@ -235,11 +246,12 @@ pub fn execute(
         (*core::ptr::addr_of_mut!(RUN)).active = true;
         (*core::ptr::addr_of_mut!(RUN)).pid = pid;
         (*core::ptr::addr_of_mut!(RUN)).image_size = program.size;
+        (*core::ptr::addr_of_mut!(RUN)).space = &space;
         (*core::ptr::addr_of_mut!(RUN)).directory = space.directory();
         (*core::ptr::addr_of_mut!(RUN)).arguments = program.arguments;
         (*core::ptr::addr_of_mut!(RUN)).argument_length = program.argument_length;
         enter_user_mode(
-            paging::USER_BASE,
+            program.layout.entry,
             paging::USER_STACK_TOP - 4,
             mode,
             kernel_stack.base(),
@@ -247,9 +259,21 @@ pub fn execute(
             program.image.base(),
         );
     }
-    let unused=unsafe {core::slice::from_raw_parts(kernel_stack.base() as *const u32,((kernel_stack.top()-kernel_stack.base())/4) as usize)}.iter().take_while(|&&word|word==0x58475354).count()*4;
-    assert!(unused>=64,"foreground syscall stack overflow");
-    crate::debug::write_fmt(format_args!("User syscall stack: unused={} bytes\n",unused));
+    let unused = unsafe {
+        core::slice::from_raw_parts(
+            kernel_stack.base() as *const u32,
+            ((kernel_stack.top() - kernel_stack.base()) / 4) as usize,
+        )
+    }
+    .iter()
+    .take_while(|&&word| word == 0x58475354)
+    .count()
+        * 4;
+    assert!(unused >= 64, "foreground syscall stack overflow");
+    crate::debug::write_fmt(format_args!(
+        "User syscall stack: unused={} bytes\n",
+        unused
+    ));
     let restored_flags = kernel_flags();
     assert!(restored_flags & 0x7600 == old_flags & 0x7600);
     gdt::set_kernel_stack(old_stack);
@@ -289,14 +313,50 @@ pub fn execute(
     }
 }
 
-unsafe extern "C" {fn enter_scheduled_user(cpu:*const crate::cpu_context::Cpu,directory:u32);}
-pub(crate) fn quantum(program:&loader::LoadedProgram,space:&paging::AddressSpace,stack:&Frames,pid:u32,cpu:&crate::cpu_context::Cpu)->Option<Outcome> {
-    let old_stack=gdt::kernel_stack();let old_directory=paging::status().page_directory;let old_flags=kernel_flags();
+unsafe extern "C" {
+    fn enter_scheduled_user(cpu: *const crate::cpu_context::Cpu, directory: u32);
+}
+pub(crate) fn quantum(
+    program: &loader::LoadedProgram,
+    space: &paging::AddressSpace,
+    stack: &Frames,
+    pid: u32,
+    cpu: &crate::cpu_context::Cpu,
+) -> Option<Outcome> {
+    let old_stack = gdt::kernel_stack();
+    let old_directory = paging::status().page_directory;
+    let old_flags = kernel_flags();
     gdt::set_kernel_stack(stack.top());
     unsafe {
-        let run=&mut *core::ptr::addr_of_mut!(RUN);run.active=true;run.outcome=None;run.pid=pid;run.image_size=program.size;run.directory=space.directory();run.arguments=program.arguments;run.argument_length=program.argument_length;
-        enter_scheduled_user(cpu,space.directory());
+        let run = &mut *core::ptr::addr_of_mut!(RUN);
+        run.active = true;
+        run.outcome = None;
+        run.pid = pid;
+        run.image_size = program.size;
+        run.directory = space.directory();
+        run.space = space;
+        run.arguments = program.arguments;
+        run.argument_length = program.argument_length;
+        enter_scheduled_user(cpu, space.directory());
     }
-    gdt::set_kernel_stack(old_stack);assert!(paging::status().page_directory==old_directory);assert!(kernel_flags()&0x7600==old_flags&0x7600);
-    unsafe {let run=&mut *core::ptr::addr_of_mut!(RUN);run.active=false;run.outcome.take()}
+    gdt::set_kernel_stack(old_stack);
+    assert!(paging::status().page_directory == old_directory);
+    assert!(kernel_flags() & 0x7600 == old_flags & 0x7600);
+    unsafe {
+        let run = &mut *core::ptr::addr_of_mut!(RUN);
+        run.active = false;
+        run.outcome.take()
+    }
+}
+
+pub(crate) fn current_space() -> Option<&'static paging::AddressSpace> {
+    let run = unsafe { &*core::ptr::addr_of!(RUN) };
+    if !run.active
+        || run.outcome.is_some()
+        || paging::status().page_directory != run.directory
+        || run.space.is_null()
+    {
+        return None;
+    }
+    Some(unsafe { &*run.space })
 }

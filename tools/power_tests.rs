@@ -1,0 +1,2 @@
+#[path="../src/acpi_sleep.rs"]mod acpi_sleep;
+#[test]fn static_s5_packages_are_bounded_and_validate_types(){use acpi_sleep::sleep_types;let p=[8,92,95,83,53,95,0x12,6,2,0x0a,5,0x0a,6];assert_eq!(sleep_types(&p,false),Some((5<<10,6<<10)));for n in 0..p.len(){assert_eq!(sleep_types(&p[..n],false),None);}let mut bad=p;bad[10]=8;assert_eq!(sleep_types(&bad,false),None);let bare=[8,95,83,53,95,0x12,4,2,0,1];assert_eq!(sleep_types(&bare,false),None);assert_eq!(sleep_types(&bare,true),Some((0,1<<10)));assert_eq!(sleep_types(b"not a NameOp _S5_",true),None);}

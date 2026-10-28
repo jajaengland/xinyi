@@ -39,7 +39,7 @@ def main():
     move(x,y)
     for down in [True,False]:g.call('input-send-event',{'events':[{'type':'btn','data':{'button':'left','down':down}}]});time.sleep(.07)
    def launch(name):
-    names=sorted(k.split('/')[-1][:-4] for k in inspect_tree(image,2048)[0] if k.startswith('APPS/') and k.count('/')==1 and k.endswith('.BIN'));start=len(log());click(40,11);click(40,46+names.index(name)*24)
+    names=sorted(k.split('/')[-1][:-4] for k in inspect_tree(image,2048)[0] if k.startswith('APPS/') and k.count('/')==1 and k.endswith(('.BIN','.ELF')));start=len(log());click(40,11);click(40,46+names.index(name)*24)
     until(lambda:re.search(r'Desktop: launch pid=(\d+) path=/APPS/'+name+r'\.BIN',log()[start:]),'Launch '+name);pid=int(re.search(r'Desktop: launch pid=(\d+)',log()[start:])[1]);until(lambda:f'Multiwindow: open pid={pid} ' in log()[start:],'Window '+name);return pid
    def window(pid):
     m=re.search(r'Multiwindow: open pid='+str(pid)+r' handle=\d+ surface=([0-9a-f]+) client=(\d+)x(\d+) pos=(\d+),(\d+)',log());return int(m[1],16),int(m[2]),int(m[3])
@@ -47,7 +47,7 @@ def main():
     m=re.search(r'Multiwindow: open pid='+str(pid)+r' .*pos=(\d+),(\d+)',log());return int(m[1]),int(m[2])
    def button(down):g.call('input-send-event',{'events':[{'type':'btn','data':{'button':'left','down':down}}]});time.sleep(.1)
    def drag(x,y,tx,ty):move(x,y);button(True);move(tx,ty);button(False);time.sleep(.2)
-   counter=launch('COUNTER');pad=launch('NOTEPAD');g.type('keep this unsaved');x,y=rect(pad);click(x+615,y+15);until(lambda:f'Multiwindow: minimized pid={pad}' in log(),'Minimize editor');assert f'Scheduler: exit pid={pad}' not in log()
+   counter=launch('COUNTER');pad=launch('NOTEPAD');g.type('keep this unsaved');x,y=rect(pad);click(x+591,y+15);until(lambda:f'Multiwindow: minimized pid={pad}' in log(),'Minimize editor');assert f'Scheduler: exit pid={pad}' not in log()
    click(258,11);until(lambda:f'Multiwindow: restored pid={pad}' in log(),'Restore editor');g.key('ctrl-s');g.type('kept.txt\n');until(lambda:inspect_tree(image,2048)[0].get('KEPT.TXT')==b'keep this unsaved','Minimize lost document')
    x,y=rect(pad);drag(x+100,y+15,799,599);g.call('screendump',{'filename':str(out/'window-offscreen-right.png'),'format':'png'});assert 'Xinyi panic:' not in log()
    click(258,11);until(lambda:f'Multiwindow: restored pid={pad} pos=138,156' in log(),'Recover offscreen window');drag(138+500,156+15,0,120);g.call('screendump',{'filename':str(out/'window-offscreen-left.png'),'format':'png'});click(258,11);g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={pad}' in log(),'Close editor')
@@ -55,7 +55,7 @@ def main():
    x,y=rect(counter);click(110,11);click(x+295,y+15);until(lambda:f'Multiwindow: minimized pid={counter}' in log(),'Minimize Counter');address,w,h=window(counter);before=mem(address,w*h*4);time.sleep(.35);assert before!=mem(address,w*h*4),'Minimized app stopped';click(110,11)
    # No program-name guesses: the first console call of any app opens a PTY.
    for name in ['HELLO','SNAKE','EDIT']:
-    start=len(log());names=sorted(k.split('/')[-1][:-4] for k in inspect_tree(image,2048)[0] if k.startswith('APPS/') and k.count('/')==1 and k.endswith('.BIN'));click(40,11);click(40,46+names.index(name)*24)
+    start=len(log());names=sorted(k.split('/')[-1][:-4] for k in inspect_tree(image,2048)[0] if k.startswith('APPS/') and k.count('/')==1 and k.endswith(('.BIN','.ELF')));click(40,11);click(40,46+names.index(name)*24)
     until(lambda:'Desktop: text attached' in log()[start:],'No terminal for '+name);terminal=int(re.search(r'Desktop: text attached pid=\d+ terminal=(\d+)',log()[start:])[1]);until(lambda:f'Multiwindow: open pid={terminal}' in log()[start:],'No terminal window');assert 'Desktop: text foreground' not in log()
     if name=='SNAKE':g.key('esc')
     if name=='EDIT':g.key('ctrl-q')

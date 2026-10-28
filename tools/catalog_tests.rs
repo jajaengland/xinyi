@@ -5,5 +5,7 @@ use app_catalog::Catalog;
     assert_eq!(c.len,2);assert_eq!(&c.entries[0].path[..c.entries[0].path_len],b"/APPS/HELLO.BIN");assert_eq!(&c.entries[1].label[..c.entries[1].label_len],b"NOTEPAD");
 }
 #[test] fn catalog_bounds_popup_count_and_reports_more_files() {
-    let mut c=Catalog::new();for _ in 0..17 {c.add(b"HELLO   BIN",false);}assert_eq!(c.len,16);assert!(c.truncated);
+    let mut c=Catalog::new();for i in 0..17 {let mut name=*b"APP00   BIN";name[3]=b'0'+i/10;name[4]=b'0'+i%10;c.add(&name,false);}assert_eq!(c.len,16);assert!(c.truncated);
 }
+
+#[test]fn elf_apps_are_listed_and_bin_wins_duplicate_stems(){let mut c=Catalog::new();c.add(b"TEST    ELF",false);assert_eq!(&c.entries[0].path[..c.entries[0].path_len],b"/APPS/TEST.ELF");c.add(b"TEST    BIN",false);c.add(b"TEST    ELF",false);assert_eq!(c.len,1);assert_eq!(&c.entries[0].path[..c.entries[0].path_len],b"/APPS/TEST.BIN");}

@@ -21,12 +21,13 @@ struct Session {
     pending: bool,
     kill: u32,
     closed: bool,
-    cache: [Cell; 2000],
-    frozen: [Cell; 2000],
+    cache: [Cell; 2640],
+    frozen: [Cell; 2640],
     selection: Option<(usize, usize)>,
     freeze: bool,
     last_cursor: Option<(usize, usize)>,
     view: usize,
+    rows:usize,
 }
 impl Session {
     fn new() -> Self {
@@ -41,12 +42,13 @@ impl Session {
             pending: false,
             kill: 0,
             closed: false,
-            cache: [Cell { ch: 0, color: 0 }; 2000],
-            frozen: [Cell { ch: 0, color: 0 }; 2000],
+            cache: [Cell { ch: 0, color: 0 }; 2640],
+            frozen: [Cell { ch: 0, color: 0 }; 2640],
             selection: None,
             freeze: false,
             last_cursor: None,
             view: 0,
+            rows:25,
         }
     }
 }
@@ -385,7 +387,7 @@ pub fn syscall(cs: u32, number: u32, a: u32, b: u32, c: u32) -> u32 {
         return (-9i32) as u32;
     };
     if number == 72 {
-        if c != 0 {
+        if c != 0 && a!=8 {
             return (-22i32) as u32;
         }
         unsafe {
@@ -400,6 +402,9 @@ pub fn syscall(cs: u32, number: u32, a: u32, b: u32, c: u32) -> u32 {
                 }
                 3 => (*p).foreground,
                 4 => u32::from((*p).closed),
+                6 => (*p).console.scroll_limit((*p).rows) as u32,
+                7 => (*p).console.scrolls as u32,
+                8 if (25..=33).contains(&c)=>{(*p).rows=c as usize;(*p).view=0;(*p).freeze=false;(*p).selection=None;(*p).cache.fill(Cell{ch:0,color:0});(*p).last_cursor=None;0},
                 5 => {
                     (*p).cache.fill(Cell { ch: 0, color: 0 });
                     (*p).last_cursor = None;
@@ -417,7 +422,7 @@ pub fn syscall(cs: u32, number: u32, a: u32, b: u32, c: u32) -> u32 {
         if c > 1024 {
             return (-22i32) as u32;
         }
-        if !crate::user_buffer::readable(b, c, image) {
+        if !crate::user_memory::readable(b, c, image) {
             return (-14i32) as u32;
         }
         let mut text = [0; 1024];
@@ -465,13 +470,13 @@ pub fn syscall(cs: u32, number: u32, a: u32, b: u32, c: u32) -> u32 {
         }
         n as u32
     } else if number == 76 {
-        if b > 2000 || c > 2000 {
+        if b > unsafe{(*p).rows as u32*80} || c > unsafe{(*p).rows as u32*80} {
             return (-22i32) as u32;
         }
         unsafe {
             let s = &mut *p;
             if !s.freeze {
-                s.console.snapshot(s.view, &mut s.frozen);
+                s.console.snapshot_rows(s.view,s.rows, &mut s.frozen);
                 s.freeze = true;
             }
             s.selection = Some((b.min(c) as usize, b.max(c) as usize));
@@ -543,12 +548,12 @@ pub fn syscall(cs: u32, number: u32, a: u32, b: u32, c: u32) -> u32 {
                 return (-32i32) as u32;
             }
             let s = &mut *p;
-            s.view = (c as usize).min(s.console.history_len);
-            let mut cells = [Cell { ch: 0, color: 0 }; 2000];
+            s.view = (c as usize).min(s.console.scroll_limit(s.rows));
+            let mut cells = [Cell { ch: 0, color: 0 }; 2640];
             if s.freeze {
                 cells = s.frozen;
             } else {
-                s.console.snapshot(s.view, &mut cells);
+                s.console.snapshot_rows(s.view,s.rows, &mut cells);
             }
             if let Some((a, b)) = s.selection {
                 for cell in &mut cells[a..b] {
@@ -556,12 +561,12 @@ pub fn syscall(cs: u32, number: u32, a: u32, b: u32, c: u32) -> u32 {
                 }
             }
             let cursor = if s.view == 0 && !s.freeze && s.console.visible {
-                Some((s.console.x, s.console.y))
+                Some((s.console.x, s.console.y+s.console.padding(s.rows)))
             } else {
                 None
             };
-            let mut rows = 0u32;
-            for y in 0..25 {
+            let mut rows = 0u64;
+            for y in 0..s.rows {
                 if cells[y * 80..y * 80 + 80] != s.cache[y * 80..y * 80 + 80] {
                     rows |= 1 << y;
                 }
@@ -588,3 +593,5 @@ pub fn syscall(cs: u32, number: u32, a: u32, b: u32, c: u32) -> u32 {
         u32::MAX
     }
 }
+
+pub fn directory_in_use(path:&crate::fs_path::Path)->bool {unsafe {(&*core::ptr::addr_of!(SLOTS)).iter().flatten().any(|s|path.contains(&(*(s.frames.base() as *const Session)).directory))}}

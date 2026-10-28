@@ -53,7 +53,7 @@ def seed_apps(image,package):
         assert data[apps+11]&0x10;directory=word(apps+26)
     expected={}
     for app in json.loads((package/"applications.json").read_text()):
-        payload=(package/"apps"/(app["name"]+".bin")).read_bytes();name=app["file"]
+        payload=(package/"apps"/app["file"].lower()).read_bytes();name=app["file"]
         assert 0<len(payload)<=65536
         expected["APPS/"+name]=payload
         base,extension=name.split(".");encoded=(base.ljust(8)+extension.ljust(3)).encode()

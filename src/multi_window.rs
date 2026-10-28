@@ -1,7 +1,7 @@
 // The scheduler pumps this compositor only between user quanta. Syscalls are
 // non-preemptible kernel work; IRQs never borrow the window pool or surfaces.
 use crate::{
-    app_window_ui::State, desktop_ui::Rect, graphics, loader::Frames, user_buffer, usermode,
+    app_window_ui::State, desktop_ui::Rect, graphics, loader::Frames, user_memory as user_buffer, usermode,
     window_protocol as api,
 };
 use core::arch::asm;
@@ -15,6 +15,7 @@ struct Window {
     surface: Frames,
     width: u32,
     height: u32,
+    requested:Option<(u32,u32)>,
     dirty: Option<Rect>,
     events: crate::window_queue::Queue,
 }
@@ -504,15 +505,17 @@ pub fn pump() -> bool {
             assert!(target.is_none_or(|i| i < N));
             if let Some(i) = target {
                 if let Some(w) = &mut WINDOWS[i] {
-                    let previous = w.ui.window.bounds();
+                    let previous = w.ui.preview().map_or(w.ui.window.bounds(),|p|w.ui.window.bounds().union(p));
                     w.ui.x = old.0;
                     w.ui.y = old.1;
                     w.ui.buttons = BUTTONS;
-                    let (changed, input) = w.ui.update(event);
+                    let (changed, input) = w.ui.update_at(event,crate::interrupts::timer_ticks());
                     if changed {
-                        damage(previous.union(w.ui.window.bounds()));
+                        damage(previous.union(w.ui.window.bounds()).union(w.ui.preview().unwrap_or(w.ui.window.bounds())));
                     }
-                    if let Some(input) = input {
+                    if let Some(mut input) = input {
+                        if input.kind==api::RESIZE {w.requested=Some((input.x as u32,input.y as u32));}
+                        if input.kind==api::POINTER {input.code=crate::keyboard::modifiers();}
                         if input.kind == api::CLOSE {
                             crate::debug::write_fmt(format_args!(
                                 "Multiwindow: close request pid={}\n",
@@ -619,6 +622,7 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
                 title,
                 length: second as usize,
                 surface,
+                requested:None,
                 width,
                 height,
                 dirty: None,
@@ -641,6 +645,19 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
         return (-9i32) as u32;
     };
     let w = unsafe { WINDOWS[index].as_mut().unwrap() };
+    if number==85 {let Some(limits)=api::resize_limits(second,third,w.width,w.height)else{return (-22i32) as u32;};w.ui.limits=Some(limits);w.ui.cancel_resize();w.requested=None;return 0;}
+    if number==86 {if third!=0{return (-22i32) as u32;}let size=(second&65535,second>>16);if w.requested!=Some(size){return (-116i32) as u32;}let Some(l)=w.ui.limits else{return (-22i32) as u32;};if !api::valid_size(size.0,size.1)||size.0<l.0 as u32||size.1<l.1 as u32||size.0>l.2 as u32||size.1>l.3 as u32{return (-22i32) as u32;}
+        let old=w.ui.window.bounds();
+        if size!=(w.width,w.height) {
+            let Some(surface)=Frames::new((size.0 as usize*size.1 as usize*4).div_ceil(4096))else{w.requested=None;w.ui.cancel_resize();return (-12i32) as u32;};
+            let pixels=unsafe{core::slice::from_raw_parts_mut(surface.base() as *mut u32,(size.0*size.1) as usize)};pixels.fill(0xffffff);
+            let source=unsafe{core::slice::from_raw_parts(w.surface.base() as *const u32,(w.width*w.height) as usize)};
+            for y in 0..size.1.min(w.height) as usize {let n=size.0.min(w.width) as usize;pixels[y*size.0 as usize..y*size.0 as usize+n].copy_from_slice(&source[y*w.width as usize..y*w.width as usize+n]);}
+            w.surface=surface;w.width=size.0;w.height=size.1;
+        }
+        w.ui.resized(size.0 as i32,size.1 as i32);w.requested=None;w.dirty=None;
+        let bounds=old.union(w.ui.window.bounds());crate::debug::write_fmt(format_args!("Multiwindow: resized pid={} surface={:08x} client={}x{} pos={},{} maximized={}\n",owner,w.surface.base(),w.width,w.height,w.ui.window.rect.x,w.ui.window.rect.y,w.ui.is_maximized()));unsafe{damage(bounds);asm!("sti",options(nostack));}flush();unsafe{asm!("cli",options(nostack));}return 0;
+    }
     match number {
         61 => {
             if third > 1 {
@@ -670,7 +687,7 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
                 return (if third > 16 { -22i32 } else { -14i32 }) as u32;
             }
             let mut commands = [api::Draw::default(); 16];
-            let mut texts = [[0u8; 80]; 16];
+            let mut texts = [[0u8; 96]; 16];
             if third != 0 {
                 unsafe {
                     core::ptr::copy_nonoverlapping(
@@ -794,8 +811,10 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
     }
 }
 
-pub fn terminal_present(owner:u32,handle:u32,cells:&[crate::pty_model::Cell;2000],rows:u32,cursor:Option<(usize,usize)>)->u32 {
+pub fn terminal_present(owner:u32,handle:u32,cells:&[crate::pty_model::Cell;2640],rows:u64,cursor:Option<(usize,usize)>)->u32 {
  let Some(index)=(unsafe {(&*core::ptr::addr_of!(WINDOWS)).iter().position(|w|w.as_ref().is_some_and(|w|w.owner==owner&&w.id==handle))}) else{return (-9i32) as u32;};
- unsafe {let w=WINDOWS[index].as_mut().unwrap();if w.width!=640||w.height!=400 {return (-22i32) as u32;}let pixels=core::slice::from_raw_parts_mut(w.surface.base() as *mut u32,640*400);asm!("sti",options(nostack));crate::graphics::terminal_cells(pixels,cells,rows,cursor);let client=w.ui.client();
- for y in 0..25 {if w.ui.window.visible&&rows&(1<<y)!=0 {damage(Rect{x:client.x,y:client.y+y*16,w:640,h:16});}}flush();asm!("cli",options(nostack));}0
+ unsafe {let w=WINDOWS[index].as_mut().unwrap();if !matches!(w.width,640|656)||!(400..=528).contains(&w.height) {return (-22i32) as u32;}let pixels=core::slice::from_raw_parts_mut(w.surface.base() as *mut u32,w.width as usize*w.height as usize);asm!("sti",options(nostack));crate::graphics::terminal_cells(pixels,w.width as usize,w.height as usize,cells,rows,cursor);let client=w.ui.client();
+ for y in 0..w.height/16 {if w.ui.window.visible&&rows&(1<<y)!=0 {damage(Rect{x:client.x,y:client.y+y as i32*16,w:640,h:16});}}flush();asm!("cli",options(nostack));}0
 }
+
+pub fn redraw(){unsafe {damage(Rect{x:0,y:0,w:800,h:600});}flush();}

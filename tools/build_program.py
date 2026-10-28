@@ -1,4 +1,4 @@
-"""Build a freestanding Rust source into a fixed-address Xinyi flat image."""
+"""Build freestanding Rust as a Xinyi flat BIN or static ELF32 executable."""
 import argparse
 import json
 from pathlib import Path
@@ -34,11 +34,25 @@ def flat_image(elf):
     return image
 
 
+def executable_image(elf):
+    # Keep only ELF/program headers and PT_LOAD contents; omit debug/symbol sections.
+    count=struct.unpack_from('<H',elf,44)[0];ph=struct.unpack_from('<I',elf,28)[0];stride=struct.unpack_from('<H',elf,42)[0]
+    loads=[list(struct.unpack_from('<8I',elf,ph+i*stride)) for i in range(count) if struct.unpack_from('<I',elf,ph+i*stride)[0]==1 and struct.unpack_from('<I',elf,ph+i*stride+20)[0]]
+    header=bytearray(elf[:52]);struct.pack_into('<II',header,28,52,0);struct.pack_into('<HHHH',header,42,32,len(loads),0,0);struct.pack_into('<H',header,50,0)
+    image=header+bytes(32*len(loads))
+    for i,p in enumerate(loads):
+        offset=len(image);offset+=((p[2]&4095)-offset)%4096
+        image.extend(bytes(offset-len(image)));data=elf[p[1]:p[1]+p[4]];p[1]=offset;p[7]=4096
+        struct.pack_into('<8I',image,52+i*32,*p);image.extend(data)
+    if not loads or len(image)>65536:raise ValueError('ELF executable file exceeds the 64 KiB filesystem limit')
+    return image
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--format", choices=("flat","elf"), default="flat")
     args = parser.parse_args()
     if not args.source.is_file():
         parser.error("Source file does not exist")
@@ -57,10 +71,10 @@ def main():
                             '\n[profile.release]\npanic="abort"\nopt-level="s"\n', encoding="utf-8")
         built = subprocess.run(["cargo", "+nightly", "rustc", "--manifest-path", str(manifest),
                         "--target", str(ROOT / "i686-unknown-none.json"), "--target-dir", str(ROOT / "target/user-build"),
-                        "--release", "--offline", "-Z", "build-std=core", "--message-format=json", "--",
+                        "--release", "--offline", "-Z", "build-std=core,alloc" if args.format=="elf" else "build-std=core", "--message-format=json", "--",
                         "-C", "relocation-model=static",
-                        "-C", f"linker={linker}", "-C", f"link-arg=-T{ROOT / 'sdk/user.ld'}",
-                        "-C", "link-arg=--gc-sections"], capture_output=True, text=True)
+                        "-C", f"linker={linker}", "-C", f"link-arg=-T{ROOT / ('sdk/user-elf.ld' if args.format=='elf' else 'sdk/user.ld')}",
+                        "-C", "link-arg=--gc-sections", *(["--cfg","xinyi_elf"] if args.format=="elf" else [])], capture_output=True, text=True)
         sys.stderr.write(built.stderr)
         artifacts = []
         for line in built.stdout.splitlines():
@@ -71,7 +85,7 @@ def main():
                 artifacts.append(Path(record["executable"]))
         built.check_returncode()
         elf_path = artifacts[-1]
-        image = flat_image(elf_path.read_bytes())
+        image = executable_image(elf_path.read_bytes()) if args.format=="elf" else flat_image(elf_path.read_bytes())
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("wb" if args.force else "xb") as stream:
         stream.write(image)

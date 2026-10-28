@@ -774,6 +774,8 @@ impl<'a> Fat16<'a> {
         }
         Ok(copied)
     }
+    pub fn file_size(&self,name:&str)->Result<usize>{let(dir,name)=self.parent(name)?;let entry=dir.find(&name)?;if entry.data[11]&0x10!=0{return Err(Error::NotFile);}Ok(entry.size())}
+    pub fn save_large(&self,name:&str,input:&[u8])->Result<()> {if input.len()>MAX_PROGRAM_SIZE{return Err(Error::ProgramTooLarge);}let(mut dir,name)=self.parent(name)?;if dir.directory_readonly{return Err(Error::ReadOnly);}let entry=match dir.find(&name){Ok(entry)=>{if entry.data[11]&0x10!=0{return Err(Error::NotFile);}if entry.data[11]&1!=0{return Err(Error::ReadOnly);}entry},Err(Error::NotFound)=>{let mut entry=dir.free_entry(0)?;entry.data=[0;32];entry.data[..11].copy_from_slice(&name);entry.data[11]=0x20;entry},Err(e)=>return Err(e)};dir.write_entry(entry,input,MAX_PROGRAM_SIZE)}
     pub fn write(&self, name: &str, input: &[u8]) -> Result<()> {
         self.write_bounded(name,input,MAX_FILE_SIZE)
     }
@@ -786,13 +788,16 @@ impl<'a> Fat16<'a> {
         if directory.directory_readonly {
             return Err(Error::ReadOnly);
         }
-        let mut entry = directory.find(&name)?;
+        let entry = directory.find(&name)?;
         if entry.data[11] & 0x10 != 0 {
             return Err(Error::NotFile);
         }
         if entry.data[11] & 1 != 0 {
             return Err(Error::ReadOnly);
         }
+        directory.write_entry(entry,input,limit)
+    }
+    fn write_entry(&self,mut entry:Entry,input:&[u8],limit:usize)->Result<()> {
         let (old, old_count) = self.bounded_chain::<128>(&entry,limit)?;
         let count = (input.len() + self.sectors_per_cluster as usize * 512 - 1)
             / (self.sectors_per_cluster as usize * 512);
@@ -834,6 +839,92 @@ impl<'a> Fat16<'a> {
             self.set_fat(*cluster, 0)?;
         }
         self.flush()
+    }
+
+    /// Rename within a directory, preserving the data chain and all attributes.
+    pub fn rename(&self,source:&str,destination:&str)->Result<()> {
+        let (from,old)=self.parent(source)?;let (to,new)=self.parent(destination)?;
+        if from.directory!=to.directory {return Err(Error::InvalidName);}
+        let mut entry=from.find(&old)?;
+        if from.directory_readonly||entry.data[11]&1!=0 {return Err(Error::ReadOnly);}
+        if old==new {return Ok(());}
+        match to.find(&new) {Ok(_)=>return Err(Error::Exists),Err(Error::NotFound)=>(),Err(e)=>return Err(e)}
+        if entry.data[11]&0x10!=0 {self.is_directory(source)?;}else {self.bounded_chain::<128>(&entry,MAX_PROGRAM_SIZE)?;}
+        entry.data[..11].copy_from_slice(&new);from.store_entry(&entry)?;from.flush()
+    }
+    /// Copy regular files, including executables, without publishing an empty target.
+    pub fn copy_file(&self,source:&str,destination:&str,buffer:&mut[u8])->Result<()> {
+        let (from,name)=self.parent(source)?;let original=from.find(&name)?;
+        if original.data[11]&0x10!=0 {return Err(Error::NotFile);}
+        let (mut to,name)=self.parent(destination)?;
+        if to.directory_readonly {return Err(Error::ReadOnly);}
+        match to.find(&name) {Ok(_)=>return Err(Error::Exists),Err(Error::NotFound)=>(),Err(e)=>return Err(e)}
+        let size=self.read_program(source,buffer)?;
+        let mut target=to.free_entry(0)?;target.data=original.data;
+        target.data[..11].copy_from_slice(&name);target.data[26..32].fill(0);
+        to.write_entry(target,&buffer[..size],MAX_PROGRAM_SIZE)
+    }
+    /// Cross-directory moves copy first; failed copying never deletes the source.
+    pub fn move_file(&self,source:&str,destination:&str,buffer:&mut[u8])->Result<()> {
+        let (from,name)=self.parent(source)?;let entry=from.find(&name)?;
+        if entry.data[11]&0x10!=0 {return Err(Error::NotFile);}
+        if from.directory_readonly||entry.data[11]&1!=0 {return Err(Error::ReadOnly);}
+        let (to,_)=self.parent(destination)?;
+        if from.directory==to.directory {return self.rename(source,destination);}
+        self.copy_file(source,destination,buffer)?;self.delete(source)
+    }
+
+    /// Bounded recursive transfer. A failed copy never removes the source tree.
+    pub fn transfer_tree(&self,source:&str,destination:&str,moving:bool,buffer:&mut[u8])->Result<()> {
+        use crate::fs_path::Path;
+        let from=Path::parse(source,&Path::ROOT)?;let to=Path::parse(destination,&Path::ROOT)?;
+        if from.depth==0||to.depth==0 {return Err(Error::InvalidName);}
+        let (parent,name)=self.parent(source)?;let entry=parent.find(&name)?;
+        if moving&&from.depth==to.depth&&from.names[..from.depth-1]==to.names[..to.depth-1] {return self.rename(source,destination);}
+        let (dest,name)=self.parent(destination)?;
+        if dest.directory_readonly {return Err(Error::ReadOnly);}
+        match dest.find(&name) {Ok(_)=>return Err(Error::Exists),Err(Error::NotFound)=>(),Err(e)=>return Err(e)}
+        if from.contains(&to) {return Err(Error::InvalidName);}
+        let mut budget=256;self.check_tree(&from,to.depth,moving,&mut budget)?;
+        if entry.data[11]&0x10==0 {return if moving {self.move_file(source,destination,buffer)}else{self.copy_file(source,destination,buffer)};}
+        self.copy_tree_inner(&from,&to,buffer)?;
+        if moving {self.remove_tree_inner(&from)?;}
+        Ok(())
+    }
+    fn append_path(mut path:crate::fs_path::Path,name:[u8;11])->Result<crate::fs_path::Path> {
+        if path.depth==crate::fs_path::MAX_DEPTH {return Err(Error::PathTooDeep);}
+        path.names[path.depth]=name;path.depth+=1;Ok(path)
+    }
+    fn check_tree(&self,path:&crate::fs_path::Path,target_depth:usize,moving:bool,budget:&mut usize)->Result<()> {
+        if *budget==0 {return Err(Error::TooLarge);}*budget-=1;
+        if target_depth>crate::fs_path::MAX_DEPTH {return Err(Error::PathTooDeep);}
+        let mut bytes=[0;crate::fs_path::MAX_PATH];let n=path.encode(&mut bytes);let (parent,name)=self.parent(core::str::from_utf8(&bytes[..n]).unwrap())?;let entry=parent.find(&name)?;
+        if moving&&(parent.directory_readonly||entry.data[11]&1!=0) {return Err(Error::ReadOnly);}
+        if entry.data[11]&0x10==0 {self.bounded_chain::<128>(&entry,MAX_PROGRAM_SIZE)?;return Ok(());}
+        let dir=self.walk(path,path.depth)?;
+        for slot in 2..dir.entry_count() {let child=dir.entry(slot)?;if child.data[0]==0 {break;}if child.data[0]==0xe5||child.data[11]&8!=0 {continue;}
+            let mut name=[0;11];name.copy_from_slice(&child.data[..11]);self.check_tree(&Self::append_path(*path,name)?,target_depth+1,moving,budget)?;
+        }Ok(())
+    }
+    fn copy_tree_inner(&self,source:&crate::fs_path::Path,dest:&crate::fs_path::Path,buffer:&mut[u8])->Result<()> {
+        let (mut a,mut b)=([0;crate::fs_path::MAX_PATH],[0;crate::fs_path::MAX_PATH]);let na=source.encode(&mut a);let nb=dest.encode(&mut b);
+        let src=core::str::from_utf8(&a[..na]).unwrap();let dst=core::str::from_utf8(&b[..nb]).unwrap();
+        let (parent,name)=self.parent(src)?;let original=parent.find(&name)?;
+        if original.data[11]&0x10==0 {return self.copy_file(src,dst,buffer);}
+        self.mkdir(dst)?;let dir=self.walk(source,source.depth)?;
+        for slot in 2..dir.entry_count() {let e=dir.entry(slot)?;if e.data[0]==0 {break;}if e.data[0]==0xe5||e.data[11]&8!=0 {continue;}
+            let mut name=[0;11];name.copy_from_slice(&e.data[..11]);self.copy_tree_inner(&Self::append_path(*source,name)?,&Self::append_path(*dest,name)?,buffer)?;
+        }
+        let (parent,name)=self.parent(dst)?;let mut entry=parent.find(&name)?;entry.data[11]=original.data[11];parent.store_entry(&entry)?;parent.flush()
+    }
+    fn remove_tree_inner(&self,path:&crate::fs_path::Path)->Result<()> {
+        let mut bytes=[0;crate::fs_path::MAX_PATH];let n=path.encode(&mut bytes);let text=core::str::from_utf8(&bytes[..n]).unwrap();
+        let (parent,name)=self.parent(text)?;let e=parent.find(&name)?;
+        if e.data[11]&0x10==0 {return self.delete(text);}
+        let dir=self.walk(path,path.depth)?;
+        for slot in 2..dir.entry_count() {let e=dir.entry(slot)?;if e.data[0]==0 {break;}if e.data[0]==0xe5||e.data[11]&8!=0 {continue;}
+            let mut name=[0;11];name.copy_from_slice(&e.data[..11]);self.remove_tree_inner(&Self::append_path(*path,name)?)?;
+        }self.rmdir(text)
     }
 
     pub fn delete(&self, name: &str) -> Result<()> {

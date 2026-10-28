@@ -214,20 +214,11 @@ impl Console {
             }
         }
     }
-    pub fn snapshot(&self, scroll: usize, out: &mut [Cell; 2000]) {
-        let scroll = scroll.min(self.history_len);
-        let start = self.history_len - scroll;
-        for row in 0..25 {
-            let virtual_row = start + row;
-            if virtual_row < self.history_len {
-                let i = (self.head + 64 - self.history_len + virtual_row) % 64;
-                out[row * 80..row * 80 + 80].copy_from_slice(&self.history[i]);
-            } else {
-                let r = virtual_row - self.history_len;
-                out[row * 80..row * 80 + 80].copy_from_slice(&self.cells[r * 80..r * 80 + 80]);
-            }
-        }
-    }
+    pub fn snapshot(&self,scroll:usize,out:&mut[Cell;2000]){self.snapshot_rows(scroll,25,out);}
+    pub fn padding(&self,rows:usize)->usize{self.history_len.min(rows.saturating_sub(25)).min(self.scrolls)}
+    pub fn scroll_limit(&self,rows:usize)->usize{self.history_len-self.padding(rows)}
+    pub fn snapshot_rows(&self,scroll:usize,rows:usize,out:&mut[Cell]){let total=self.history_len+25;let live=self.scroll_limit(rows);let start=live.saturating_sub(scroll.min(live));for row in 0..rows{let n=start+row;let target=&mut out[row*80..row*80+80];if n<self.history_len{let i=(self.head+64-self.history_len+n)%64;target.copy_from_slice(&self.history[i]);}else if n<total{let r=n-self.history_len;target.copy_from_slice(&self.cells[r*80..r*80+80]);}else{target.fill(BLANK);}}}
+
 }
 #[cfg(test)]
 mod tests {

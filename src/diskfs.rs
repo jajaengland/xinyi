@@ -11,6 +11,8 @@ static mut BOOT_SELECTED:bool=false;
 pub fn boot_selected()->bool {unsafe {*core::ptr::addr_of!(BOOT_SELECTED)}}
 static mut MOUNTED: Option<Fat16<'static>> = None;
 static mut FORMAT_PENDING: Option<FormatPlan> = None;
+static mut VOLUME_EPOCH:u32=1;
+pub fn volume_epoch()->u32 {unsafe {VOLUME_EPOCH}}
 static mut CWD: crate::fs_path::Path = crate::fs_path::Path::ROOT;
 #[derive(Clone,Copy)]
 struct Drive {target:crate::disk_target::Target,channel:crate::pci::IdeChannel,model:[u8;40],sectors:u32,fat:bool,apps:bool}
@@ -92,6 +94,7 @@ pub fn startup_mount() {
 }
 fn reset_directory() {
     unsafe {
+        VOLUME_EPOCH=VOLUME_EPOCH.wrapping_add(1).max(1);
         *core::ptr::addr_of_mut!(CWD) = crate::fs_path::Path::ROOT;
     }
 }
@@ -297,6 +300,7 @@ pub fn mount() -> Result<u32> {
     reset_directory();
     Ok(start)
 }
+pub fn sync()->Result<()> {if !is_mounted()||if boot_selected(){crate::bios_disk::BOOT.flush()}else{DISK.flush()}{Ok(())}else{Err(Error::Io)}}
 pub fn unmount() -> Result<()> {
     let ok = !is_mounted() || if boot_selected() {crate::bios_disk::BOOT.flush()}else{DISK.flush()};
     unsafe {
@@ -385,7 +389,7 @@ pub fn mkdir(name: &str) -> Result<()> {
 pub fn rmdir(name: &str) -> Result<()> {
     let base = unsafe { *core::ptr::addr_of!(CWD) };
     let path = crate::fs_path::Path::parse(name, &base)?;
-    if path.contains(&base) {
+    if path.contains(&base)||crate::multitask::directory_in_use(&path)||crate::pty::directory_in_use(&path) {
         return Err(Error::DirectoryBusy);
     }
     let mut buffer = [0; crate::fs_path::MAX_PATH];
@@ -477,3 +481,30 @@ pub fn scan() {
     }
     println!("Scan leaves the selected target unchanged. Use disk select to change it.");
 }
+
+/// Transfers stay on the mounted volume and never replace an existing name.
+pub fn transfer(source:&str,destination:&str,operation:u32)->Result<()> {
+    if operation>2 {return Err(Error::InvalidName);}
+    let base=directory();let from=crate::fs_path::Path::parse(source,&base)?;let to=crate::fs_path::Path::parse(destination,&base)?;
+    let mut src=[0;crate::fs_path::MAX_PATH];let n=from.encode(&mut src);let source=core::str::from_utf8(&src[..n]).unwrap();
+    let mut dst=[0;crate::fs_path::MAX_PATH];let n=to.encode(&mut dst);let destination=core::str::from_utf8(&dst[..n]).unwrap();
+    let Some(fs)=(unsafe {(&*core::ptr::addr_of!(MOUNTED)).as_ref()}) else{return Err(Error::InvalidVolume);};
+    if operation!=1 {
+        match fs.is_directory(source) {
+            Ok(()) if from.contains(&base)||crate::multitask::directory_in_use(&from)||crate::pty::directory_in_use(&from)=>return Err(Error::DirectoryBusy),
+            Err(e) if e!=Error::NotDirectory=>return finish(Err(e)),_=>(),
+        }
+    }
+    let result=if operation==0 {fs.rename(source,destination)}else {
+        let frames=crate::loader::Frames::new(16).ok_or(Error::OutOfMemory)?;
+        let data=unsafe {core::slice::from_raw_parts_mut(frames.base() as *mut u8,65536)};
+        fs.transfer_tree(source,destination,operation==2,data)
+    };
+    finish(result)
+}
+
+/// Exact cwd paths take precedence; bare names then search /APPS, .BIN before .ELF.
+pub fn read_executable(name:&str,output:&mut[u8])->Result<usize>{let result=read_program(name,output);if !matches!(result,Err(Error::NotFound))||name.contains('/')||name.contains('\\'){return result;}let mut path=[0u8;105];for ext in [".BIN",".ELF",""]{if name.contains('.')&&!ext.is_empty(){continue;}let n=6+name.len()+ext.len();if n>path.len(){return Err(Error::InvalidName);}path[..6].copy_from_slice(b"/APPS/");path[6..6+name.len()].copy_from_slice(name.as_bytes());path[6+name.len()..n].copy_from_slice(ext.as_bytes());let result=read_program(core::str::from_utf8(&path[..n]).unwrap(),output);if !matches!(result,Err(Error::NotFound)){return result;}}Err(Error::NotFound)}
+
+pub fn file_size(name:&str)->Result<usize>{let mut bytes=[0;crate::fs_path::MAX_PATH];let n=absolute(name,&mut bytes)?;let name=core::str::from_utf8(&bytes[..n]).unwrap();let result=match unsafe{&*core::ptr::addr_of!(MOUNTED)}{Some(fs)=>fs.file_size(name),None=>Err(Error::InvalidVolume)};finish(result)}
+pub fn save_large(name:&str,data:&[u8])->Result<()>{let mut bytes=[0;crate::fs_path::MAX_PATH];let n=absolute(name,&mut bytes)?;let name=core::str::from_utf8(&bytes[..n]).unwrap();let result=match unsafe{&*core::ptr::addr_of!(MOUNTED)}{Some(fs)=>fs.save_large(name,data),None=>Err(Error::InvalidVolume)};finish(result)}

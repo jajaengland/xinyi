@@ -64,7 +64,7 @@ def main():
             def click(x,y):move(x,y);button(True);button(False)
             move(140,155);button(True);move(240,135);button(False);click(240,220)
             until(lambda:"pos=200,120;300,210" in log() and "clicks=1/0" in log(),"Desktop setup state")
-            names=['BAD','COUNTER','CRASH','CUSTOM','EDIT','FILES','HELLO','NOTEPAD','SNAKE','TERMINAL','TETRIS']
+            names=['BAD','COUNTER','CRASH','CUSTOM','EDIT','FILES','HELLO','MEMDEMO','NOTEPAD','SETTINGS','SNAKE','TERMINAL','TETRIS']
             def launch(name):
                 menu_offset=len(log());click(40,11);until(lambda:"apps=true" in log()[menu_offset:],"Apps menu did not open");top=30
                 guest.call("screendump",{"filename":str(output/f"apps-menu-{args.vga}.png"),"format":"png"})

@@ -9,7 +9,7 @@ SECTIONS {
     .bss (NOLOAD) : { *(.bss .bss.* .sbss* .tbss*) *(COMMON) } :image
     _image_end = .;
     ASSERT(SIZEOF(.data) == 0 && SIZEOF(.bss) == 0,
-        "Current Xinyi programs support read-only images and stack locals, not writable globals")
+        "Flat images require read-only code/data; use --format elf for writable globals/BSS")
     ASSERT(. <= 0x40010000, "Program exceeds 64 KiB image limit")
     /DISCARD/ : { *(.eh_frame* .comment .note*) }
 }

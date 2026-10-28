@@ -1,83 +1,82 @@
 # Architecture
 
-Xinyi is a freestanding 32-bit x86 kernel. Rust supplies kernel services; NASM handles boot entry, interrupts, firmware transitions and user-context entry/return. There is no Rust standard library or kernel heap.
+Xinyi is a freestanding 32-bit x86 kernel written in Rust and NASM. It has no standard library or general kernel heap. Protected applications can use a bounded private heap.
 
 ## Build and boot
 
-`build.rs` assembles the boot/interrupt code and BIOS loaders, then builds the applications listed in `programs/apps.txt` as separate files. The application binaries are packaged into FAT16 `/APPS`, not embedded in the kernel. `tools/build_release.py` installs and verifies a bootable image in QEMU.
+`build.rs` assembles boot/interrupt code and BIOS loaders, then builds the applications listed in `programs/apps.txt`. Applications are separate FAT16 `/APPS` files. `tools/build_release.py` builds and verifies an installed image in QEMU; `tools/build_usb.py` packages and checks its BIOS USB boot path.
 
-The BIOS disk layout reserves the first 2048 sectors for boot code and kernel payload:
+Fresh installations reserve the first 2048 sectors for boot code and the kernel:
 
 | Location | Contents |
 | --- | --- |
 | LBA 0 | MBR and partition table |
-| LBA 1–32 | Stage-2 loader |
+| LBA 1-32 | Stage-2 loader |
 | LBA 63 | Kernel header and checksum |
 | LBA 64 onward | Initialized kernel payload |
-| LBA 2048 onward | FAT16 partition on a fresh installation |
+| LBA 2048 onward | FAT16 partition |
 
-Stage 2 obtains the memory map, validates payload bounds/checksum and available RAM, loads the kernel and enters protected mode. It also preserves firmware boot-drive information. Direct Multiboot loading is supported for diagnostics but lacks the BIOS handoff used for firmware storage/video.
+Stage 2 validates the payload and available RAM, collects the memory map and firmware boot-drive information, then enters protected mode. `boot.asm` preserves a pristine kernel snapshot for installation and establishes the supervisor stack. Direct Multiboot loading remains available for diagnostics but lacks the BIOS handoff used by firmware storage/video.
 
-`boot.asm` saves a pristine initialized kernel snapshot for installation and establishes the supervisor stack. `multiboot.rs` parses boot memory; `gdt.rs` and `interrupts.rs` install the kernel GDT, TSS, IDT, PIC and PIT. The PIT runs at 100 Hz.
+`multiboot.rs`, `gdt.rs` and `interrupts.rs` initialize memory discovery, GDT/TSS, IDT, PIC and the 100 Hz PIT.
 
-## Memory and program isolation
+## Memory and executable loading
 
-`phys.rs` allocates owned 4 KiB physical frames from usable boot-map ranges, excluding reserved memory, boot structures and the kernel. Kernel memory uses supervisor identity mappings. There is no general heap allocator.
+`phys.rs` allocates owned 4 KiB frames from usable boot-map ranges, excluding reserved memory, boot structures and the kernel. Kernel memory uses supervisor identity mappings.
 
-`paging.rs` builds private user address spaces. Current flat programs have read-only code at `0x40000000` (up to 64 KiB), a writable 16 KiB stack at `0x403fc000..0x40400000`, and an unmapped guard at `0x403fb000`. Kernel memory, hardware mappings and physical aliases remain supervisor-only. Legacy non-PAE stacks are executable; this is not a hardened security boundary.
+`elf.rs` validates static ELF32/i386 ET_EXEC images. It rejects dynamic linking, interpreters, TLS, overlapping segment pages, RWX declarations, invalid entry points and out-of-range segments. `loader.rs` owns backing frames, copies initialized data and zeros BSS. Raw flat binaries remain supported. File size is capped at 64 KiB.
 
-`loader.rs` owns program backing frames. `usermode.rs` validates active user identity/CR3, enters ring 3 and handles exit/fault recovery. Kernel interrupt stacks and the supervisor stack are 64 KiB with capacity checks. `user_buffer.rs` validates complete user ranges before copying data or applying side effects.
+`paging.rs` constructs private address spaces:
 
-## Scheduling and execution
+| User region | Purpose |
+| --- | --- |
+| `0x40000000..0x40100000` | ELF load segments with per-segment write permissions; flat read-only code uses at most the first 64 KiB |
+| `0x40100000..0x40200000` | Private heap, initially unmapped |
+| `0x403fb000..0x403fc000` | Unmapped stack guard |
+| `0x403fc000..0x40400000` | Writable 16 KiB stack |
 
-`multitask.rs` owns eight job slots: up to four root application windows and their attached text children. Each job retains its code, arguments, working directory, private CR3, user/kernel stacks, CPU context and x87/MMX state. `cpu_context.rs` matches the assembly interrupt-frame layout. SSE/AVX and writable image globals are not supported.
+Each address space owns a metadata page containing its layout, heap break and backing-frame records. Call 87 allocates pages before publishing mappings, rolls back on exhaustion, and unmaps before freeing on shrink. The SDK allocator splits/coalesces free blocks and retains pages until shrink or exit. `user_memory.rs` checks complete syscall buffers against the active layout, permissions and exact heap break. Exit/fault recovery reclaims the process's frames.
 
-PIT interrupts preempt ring-3 code. Sleep, yield and input waits return to the host dispatcher. Kernel Rust frames are never suspended: syscalls and disk operations run to completion. Blocking input saves context and retries the intercepted INT after wakeup, revalidating user buffers.
+Classic non-PAE paging has no NX bit: code is protected from writes, but writable data, heap and stacks remain executable. Kernel interrupt and supervisor stacks are 64 KiB; size guards keep scheduler records bounded.
 
-A desktop app's first console request creates a Terminal root in its taskbar slot. Once that window opens its PTY, the original task attaches and retries its syscall without restarting. A graphical child launched from Terminal detaches into a free root window slot and returns the shell prompt. Failures and owner termination clean up waiting children and owned memory.
+## Processes, terminals and input
 
-Physical-console launches retain a synchronous path through `task.rs`/`window_api.rs`. The old task-record selector is separate from the real timer scheduler; `ps` is not yet a full list of desktop processes. `windowtest` retains the legacy window/launcher diagnostic.
+`multitask.rs` manages eight job slots: up to four root application windows and their attached text children. Jobs retain arguments, cwd, private CR3, stacks, CPU context and x87/MMX state. PIT interrupts preempt user code; sleep, yield and input waits return to the dispatcher. Kernel calls run to completion, so disk I/O can pause other applications. SSE/AVX and user threads are unsupported.
 
-## Console and terminal sessions
+A windowless desktop app's first console request opens Terminal and attaches the existing process to its PTY. Graphical children launched from Terminal detach into a free root slot. The physical console retains a synchronous launch path through `task.rs`/`window_api.rs`. Legacy `spawn`/`kill` task records are separate from desktop jobs.
 
-`shell.rs` supplies the physical console and PTYs with the same line editor, eight-command history, completion and dispatcher. `vga.rs` routes output, cursor, colour and positioned drawing to the current PTY or the physical VGA console.
+`shell.rs` supplies the physical console and PTYs with the same command dispatcher, line editing, history and completion. `vga.rs` routes output to the current console. `pty.rs` owns session/input/selection state; `pty_model.rs` maintains an 80x25 text-program screen, 64 history rows and basic ANSI cursor/erase/colour handling. The Terminal app displays 25-33 rows, adding history above the compatible text screen, with a scrollbar outside its 80 columns.
 
-`pty.rs` owns bounded session storage, keyboard queues, selection, rendering caches and foreground-child lifetime. `pty_model.rs` stores an 80×25 cell screen, 64 rows of history and basic ANSI cursor/erase/16-colour handling. Terminal is an ordinary protected app in `programs/terminal_gui`.
+`ps2.rs`, `keyboard.rs` and `mouse.rs` handle IRQ1/IRQ12 input through bounded queues. Shared sequence ordering preserves keyboard/mouse capture order; overflow/reset handling clears stale input state. Native USB input is not implemented.
 
-The shared clipboard (`clipboard.rs`) holds up to 1024 ASCII bytes. Set/get validate the entire range; insufficient capacity does not produce a partial copy. Selection in Notepad is maintained by the document model; edits replace ranges with a single undo checkpoint.
+## Desktop and rendering
 
-## Desktop, input and rendering
+`desktop_shell.rs` models Apps/taskbar input. `app_catalog.rs` discovers up to 16 regular `.BIN`/`.ELF` files in `/APPS`. `multi_window.rs` owns four RGB32 surfaces, event queues, z-order, focus/capture and damage. `app_window_ui.rs` models dragging, chrome buttons and resize proposals.
 
-`ps2.rs`, `keyboard.rs` and `mouse.rs` route IRQ1/IRQ12 input into bounded queues. Keyboard/mouse events share capture sequence ordering. Overflow/reset handling clears stale modifier and pointer-capture state. Native USB input is not implemented.
+Windows stay below the top taskbar but may move partly off-screen. Composition clips to screen/source bounds. Minimized apps retain their state and continue executing; hidden updates do not present. Taskbar activation restores visibility. Close is an application request so editors can prompt for unsaved changes.
 
-`desktop_shell.rs` models Apps/taskbar input. `app_catalog.rs` lists up to 16 regular `.BIN` files from `/APPS`, sorted by name. `multi_window.rs` owns four RGB32 client surfaces and event queues, window order, focus/capture and damage regions. `app_window_ui.rs` handles title dragging, close requests and minimizing.
+Resizable apps advertise limits through call 85. Grip dragging previews an outline; release proposes RESIZE. Call 86 accepts only the latest matching size and allocates/copies before replacing the surface. Failure preserves the old geometry. Maximize/restore uses the same handshake, remembers the normal rectangle and fills the frame below the taskbar, centering a client within the app's layout limits. Same-size placement changes reuse the surface. Minimize preserves maximized state; title/grip dragging is disabled while maximized. Legacy and synchronous foreground windows remain fixed-size.
 
-Windows stay below y=24 but can extend partly beyond the other screen edges. Surface copies clip both screen and source coordinates. Minimized windows retain their surfaces/processes, lose focused input and do not present hidden updates. Taskbar activation restores the window fully into view. Close remains an application request so editors can check unsaved changes.
+`canvas.rs` draws into RAM; `graphics.rs` presents an 800x600 scene through QEMU standard VGA or validated BIOS VESA RGB565/24/32-bit framebuffers. Damage-based span copies and cursor protection avoid unnecessary full-screen redraws. GUI text uses `ui_font.rs`; Terminal uses the captured BIOS font. There is no GPU acceleration. Leaving graphics restores text/video state and owned frames.
 
-`canvas.rs` draws into RAM; `graphics.rs` presents an 800×600 scene using either QEMU standard VGA or validated BIOS VESA linear RGB565/24/32-bit modes. VESA mode records, masks, pitch and address ranges are checked before use. Presentation copies spans, converts packed formats when needed and protects the cursor footprint. There is no native GPU acceleration.
+## Storage and applications
 
-Text mode, font/palette/register state and owned frame allocations are restored when leaving graphics or reporting fatal diagnostics. Application GUI text uses `ui_font.rs`; terminal cells use the captured BIOS bitmap font.
+`diskfs.rs` provides mounted-drive selection and canonical per-job paths. `fat16.rs` checks volume geometry and bounded chains. Paths use ASCII 8.3 names with up to eight components; volumes remain below 2 GiB. `vfs.rs` supplies a small RAM backend for console use; application file calls require a mounted drive.
 
-## Filesystems and disks
+`ata.rs` and `pci.rs` discover compatible IDE channels and perform bounded PIO polling with LBA28/LBA48. BIOS EDD access through `bios_disk.rs`/`bios_thunk.asm` supports the boot drive, including boot USB storage, without native USB hotplug or non-boot USB support.
 
-`diskfs.rs` provides canonical per-job paths, mounted-drive selection and shared filesystem calls. Paths use ASCII 8.3 names, up to eight components. `fat16.rs` validates volume geometry and bounded directory/file chains. `vfs.rs` provides a small RAM backend for console use. Program file calls require a mounted drive.
+Legacy text calls 57/58 and shell text commands retain a 1024-byte limit. Volume-tagged whole-file calls 88-90 support 64 KiB reads/saves/size queries. Kernel frame buffers stage data before copying successful reads to users or writing saves to disk. New saves publish entries after writing data; replacement writes a new chain before publishing metadata and freeing the old chain. FAT mirrors, flushes and readback checks detect failures, but there is no journal or power-loss rollback. Firmware cache-flush durability is not guaranteed.
 
-Ordinary text-file reads/writes are limited to 1024 bytes; the separate executable reader supports 64 KiB. Replacement allocates a new chain, writes data and publishes metadata, then releases the old chain. FAT mirrors and readback checks detect failures, but there is no journal or power-loss rollback.
+`installer.rs` previews/revalidates destinations and stages source applications. It publishes bootability after writing the payload, preserving compatible FAT16 layouts or formatting incompatible ones. Installation and `format` require explicit confirmation and are not power-loss safe.
 
-`ata.rs`, `pci.rs` and the ATA helper modules discover and validate compatible IDE channels, perform bounded PIO polling and support LBA28/LBA48. Full disk capacity is kept separately from the u32 accessible-sector count. FAT16 volumes remain below 2 GiB.
+Files supports shared selections through `file_clipboard.rs`, with version/volume checks. Recursive transfers preflight up to 256 entries at depth eight, refuse overwrites and delete move sources only after copying the tree. Errors can leave partial destinations or independent copies. In-use directories cannot be moved/removed.
 
-`bios.rs`/`bios_thunk.asm` bridge protected mode to BIOS services. `bios_disk.rs` accesses the boot drive through EDD, allowing boot USB storage without a native USB controller driver. This does not support hotplug or arbitrary non-boot USB devices. Firmware writes are synchronous and read back; firmware cache-flush durability is not guaranteed.
+Notepad is an ELF app stored as `NOTEPAD.BIN` for filename compatibility. Its heap-backed model supports 64 KiB ASCII documents, four undo/redo snapshots, saved-content comparison and indexed visual rows. Open validates a replacement before changing the document; failed opens/saves retain it. EDIT keeps its fixed 1 KiB model. The shared text clipboard is also limited to 1 KiB.
 
-`installer.rs` previews and revalidates the destination, stages source applications, and requires an immediately following confirmation. Compatible FAT16 layouts can be preserved; incompatible layouts are formatted. Bootability is published after the payload is written. `format` uses a separate preview/confirmation flow. Both operations can destroy data; neither is power-loss safe.
+`sdk/widgets.rs`, `gui.rs` and `file_dialog.rs` provide shared controls and Open/Save browsing without changing cwd. `theme.rs` loads validated desktop/title colours from `/GUI.CFG`; Settings can apply or persist them. Detailed syscall layouts and SDK usage belong in the [SDK reference](sdk/README.md).
 
-## Applications and API
+## Shutdown and verification
 
-`int 0x80` uses saved-register dispatch. User ranges, handles, ownership and reserved arguments are checked before use. Calls provide console/input/timing, bounded files/arguments, windows, clipboard, PTYs and directory operations. The detailed contract is in [sdk/README.md](sdk/README.md).
+`power.rs` validates bounded ACPI RSDT/FADT/DSDT tables and recognizes static legacy S5 values without executing arbitrary AML. Shutdown synchronizes the mounted backend, cancels on flush failure and requires confirmation when desktop jobs are running. Unsupported firmware uses a text-mode halted fallback.
 
-Files and Notepad are separate applications. Files lists 18 rows per view using a bounded paginated directory ABI, opens text files in Notepad and executables through Terminal, and confirms deletion. Text files/clipboard and flat-image limits are shared with the rest of the system.
-
-## Verification
-
-Host Rust tests cover geometry/capture, queues, scheduling, document edits, storage and pointer checks. QEMU tests use disposable images and check BIOS/USB boot, installation, persistent files, isolation/fault recovery, terminal handoff, minimize/restore, clipped composition and frame reclamation. Drag benchmarks check cursor visibility and catch-up latency; they are not hardware frame-rate guarantees.
-
-See `tools/build_release.py` for the release integration suite. Hardware support remains dependent on firmware/controller compatibility; emulator results are not a universal hardware guarantee.
+Host Rust tests cover storage, documents, memory validation, queues and UI models. Disposable QEMU tests cover BIOS/USB installation and persistence, process isolation/faults, ELF/heap allocation, terminal handoff, file operations, resizing/maximize and frame reclamation. See `tools/build_release.py` for integration checks. Emulator results do not guarantee compatibility with every firmware/controller.

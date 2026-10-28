@@ -296,12 +296,7 @@ pub fn poll_event() -> Option<u32> {
         Key::ArrowRight => 0x103,
         Key::Special(code) => code as u32,
     };
-    let modifiers = unsafe {
-        ((LEFT_SHIFT_DOWN || RIGHT_SHIFT_DOWN) as u32) << 16
-        | ((CTRL_DOWN[0] || CTRL_DOWN[1]) as u32) << 17
-        | ((ALT_DOWN[0] || ALT_DOWN[1]) as u32) << 18
-        | (CAPS_LOCK_ON as u32) << 19
-    };
+    let modifiers = modifiers();
     Some(code | modifiers)
 }
 
@@ -340,5 +335,14 @@ fn letter(lower: char, shift: bool, caps: bool) -> char {
         lower.to_ascii_uppercase()
     } else {
         lower
+    }
+}
+
+pub fn modifiers()->u32 {
+    unsafe {
+        ((LEFT_SHIFT_DOWN || RIGHT_SHIFT_DOWN) as u32) << 16
+        | ((CTRL_DOWN[0] || CTRL_DOWN[1]) as u32) << 17
+        | ((ALT_DOWN[0] || ALT_DOWN[1]) as u32) << 18
+        | (CAPS_LOCK_ON as u32) << 19
     }
 }

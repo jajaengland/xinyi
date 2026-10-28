@@ -31,3 +31,40 @@ impl Listing {
     }
 }
 const _: () = assert!(core::mem::size_of::<Listing>() == 776);
+
+#[repr(C)]
+pub struct Transfer {
+    pub source: [u8; 105],
+    pub destination: [u8; 105],
+    pub source_length: u16,
+    pub destination_length: u16,
+    pub operation: u16,
+    pub volume: u32,
+}
+const _: () = assert!(core::mem::size_of::<Transfer>() == 220);
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FileClipboard {
+    pub paths: [[u8; 105]; 32],
+    pub lengths: [u16; 32],
+    pub flags: [u8; 32],
+    pub count: u16,
+    pub cut: u16,
+    pub volume: u32,
+    pub version: u32,
+}
+impl FileClipboard {
+    pub const fn new() -> Self {
+        Self {
+            paths: [[0; 105]; 32],
+            lengths: [0; 32],
+            flags: [0; 32],
+            count: 0,
+            cut: 0,
+            volume: 0,
+            version: 0,
+        }
+    }
+}
+const _: () = assert!(core::mem::size_of::<FileClipboard>() == 3468);

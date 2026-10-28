@@ -1,150 +1,375 @@
 #![no_std]
 #![no_main]
+mod selection;
 #[path = "../../sdk/xinyi.rs"]
 mod xinyi;
+use selection::Selection;
 use xinyi::{
     directory::{self, Listing},
+    file_clipboard::{self, Selection as FileClip},
     key,
     window::{self, Draw},
 };
 struct Files {
+    width: u32,
+    height: u32,
     list: Listing,
     offset: u16,
-    selected: usize,
+    selection: Selection,
     path: [u8; 105],
     length: usize,
+    volume: u32,
     status: &'static [u8],
     mode: u8,
     input: [u8; 12],
     used: usize,
     last: usize,
     clicked: u32,
+    modifiers: u32,
+    menu: Option<(i32, i32)>,
+    hover: Option<usize>,
+    can_paste: bool,
+    pending: FileClip,
+    quit: bool,
 }
 fn error(n: i32) -> &'static [u8] {
     match n {
-        -2 => b"File no longer exists. Refresh the folder.",
-        -13 => b"Read-only file.",
+        -2 => b"Item no longer exists. Refresh the folder.",
+        -13 => b"Read-only item or folder.",
         -17 => b"That name already exists.",
         -20 => b"Not a folder.",
-        -21 => b"That is a folder.",
-        -22 => b"Use an ASCII 8.3 name, for example NOTE.TXT.",
-        -24 => b"Close another window before opening this file.",
-        -27 => b"File is too large for Notepad.",
+        -21 => b"Expected a regular file.",
+        -22 => b"Invalid 8.3 path, or destination is inside the source.",
+        -24 => b"Close another window before opening this item.",
+        -27 => b"File/tree exceeds the supported size or depth.",
         -28 => b"The disk is full.",
-        -39 => b"Folder is not empty. Remove its contents first.",
-        -16 => b"Folder is in use, or another launch is pending.",
-        _ => b"Disk operation failed.",
+        -39 => b"Folder is not empty.",
+        -16 => b"Folder is in use.",
+        -116 => b"Drive or file selection changed. Refresh and select again.",
+        -12 => b"Not enough memory.",
+        _ => b"Disk operation failed. Check remaining items.",
     }
 }
 impl Files {
+    fn page(&self) -> u16 {
+        ((self.height - 112) / 16) as u16
+    }
+    fn resize(&mut self, w: u32, e: window::Event) {
+        if window::resize(w, e) == 0 {
+            self.width = e.x as u32;
+            self.height = e.y as u32;
+            self.menu = None;
+            self.hover = None;
+            self.last = usize::MAX;
+            self.refresh();
+        }
+    }
+    fn rows(&self) -> usize {
+        (self.list.count as usize).min(self.page() as usize)
+    }
     fn refresh(&mut self) {
         self.last = usize::MAX;
+        let volume = directory::volume();
         let n = directory::list(b".", self.offset, &mut self.list);
         if n < 0 {
             self.list = Listing::new();
             self.status = error(n);
-        } else {
-            if self.offset as u32 >= self.list.total && self.offset > 0 {
-                self.offset = 0;
-                self.refresh();
-                return;
-            }
-            self.selected = self.selected.min(self.rows().saturating_sub(1));
+        } else if self.offset as u32 >= self.list.total && self.offset > 0 {
+            self.offset = 0;
+            self.refresh();
+            return;
         }
         let n = xinyi::working_directory(&mut self.path);
         self.length = n.max(0) as usize;
+        if volume != directory::volume() {
+            self.volume = 0;
+            self.list = Listing::new();
+            self.selection.clear();
+            self.status = error(-116);
+        } else {
+            self.volume = volume;
+        }
     }
-    fn rows(&self) -> usize {
-        (self.list.count as usize).min(18)
-    }
-    fn cd(&mut self, path: &[u8]) {
-        let n = directory::cd(path);
+    fn navigate(&mut self, name: &[u8]) {
+        let n = directory::cd(name);
         if n < 0 {
             self.status = error(n);
         } else {
             self.offset = 0;
-            self.selected = 0;
+            self.selection.clear();
             self.status = b"Folder opened.";
             self.refresh();
         }
     }
     fn launch(&mut self, prefix: &[u8], name: &[u8]) {
-        let mut command = [0; 128];
+        let mut line = [0; 128];
         let n = prefix.len() + name.len();
-        command[..prefix.len()].copy_from_slice(prefix);
-        command[prefix.len()..n].copy_from_slice(name);
-        let result = xinyi::launch(&command[..n]);
-        self.status = if result < 0 {
-            error(result)
+        line[..prefix.len()].copy_from_slice(prefix);
+        line[prefix.len()..n].copy_from_slice(name);
+        let n = xinyi::launch(&line[..n]);
+        self.status = if n < 0 {
+            error(n)
         } else {
             b"Opened. Use the taskbar to return to Files; F5 refreshes."
         };
     }
     fn open(&mut self) {
-        if self.selected >= self.rows() {
+        if self.selection.count != 1 {
+            self.status = b"Select one item to open.";
             return;
         }
-        let e = self.list.entries[self.selected];
-        let name = &e.name[..e.length as usize];
-        if e.flags & 1 != 0 {
-            self.cd(name);
-        } else if name.ends_with(b".BIN") {
-            self.launch(b"terminal run ", name);
+        if self.volume != directory::volume() {
+            self.status = error(-116);
+            return;
+        }
+        let name = self.selection.names[0];
+        let n = self.selection.lengths[0] as usize;
+        if self.selection.flags[0] & 1 != 0 {
+            self.navigate(&name[..n]);
+        } else if (name[..n].ends_with(b".BIN")||name[..n].ends_with(b".ELF")) {
+            self.launch(b"terminal run ", &name[..n]);
         } else {
-            self.launch(b"notepad ", name);
+            self.launch(b"notepad ", &name[..n]);
         }
     }
-    fn action(&mut self, action: usize) -> bool {
-        self.status = b"";
-        match action {
-            0 => self.cd(b".."),
+    fn select(&mut self, row: usize, ctrl: bool, shift: bool) {
+        let e = self.list.entries[row];
+        let index = self.offset + row as u16;
+        if shift {
+            let anchor = self.selection.anchor.unwrap_or(index);
+            let a = anchor.min(index);
+            let b = anchor.max(index);
+            if b - a >= 32 {
+                self.status = b"Select at most 32 items at a time.";
+                return;
+            }
+            let mut page = Listing::new();
+            let n = directory::list(b".", a, &mut page);
+            if n < 0 {
+                self.status = error(n);
+                return;
+            }
+            if page.count < (b - a + 1) as u32 {
+                self.status = b"Folder changed. Refresh before selecting.";
+                return;
+            }
+            self.selection.clear();
+            for e in &page.entries[..(b - a + 1) as usize] {
+                self.selection
+                    .add(&e.name[..e.length as usize], e.flags as u8);
+            }
+            self.selection.anchor = Some(anchor);
+            self.selection.focus = Some(index);
+        } else if ctrl {
+            if !self
+                .selection
+                .toggle(&e.name[..e.length as usize], e.flags as u8, index)
+            {
+                self.status = b"Select at most 32 items at a time.";
+            }
+        } else {
+            self.selection
+                .plain(&e.name[..e.length as usize], e.flags as u8, index);
+        }
+    }
+    fn stage(&mut self, cut: bool) {
+        if self.selection.count == 0 {
+            self.status = b"Select files or folders first.";
+            return;
+        }
+        let r = &mut self.pending;
+        *r = FileClip::new();
+        r.count = self.selection.count as u16;
+        r.cut = cut as u16;
+        r.volume = self.volume;
+        for i in 0..self.selection.count {
+            let extra = usize::from(self.length > 1);
+            let n = self.length + extra + self.selection.lengths[i] as usize;
+            if n > 105 {
+                self.status = error(-22);
+                return;
+            }
+            r.paths[i][..self.length].copy_from_slice(&self.path[..self.length]);
+            if extra != 0 {
+                r.paths[i][self.length] = b'/';
+            }
+            r.paths[i][self.length + extra..n]
+                .copy_from_slice(&self.selection.names[i][..self.selection.lengths[i] as usize]);
+            r.lengths[i] = n as u16;
+            r.flags[i] = self.selection.flags[i];
+        }
+        let n = file_clipboard::set(r);
+        self.status = if n < 0 {
+            error(n)
+        } else if cut {
+            b"Move selected. Open the destination, in any Files window, then Paste."
+        } else {
+            b"Copy selected. Open the destination, in any Files window, then Paste."
+        };
+    }
+    fn paste(&mut self) {
+        let n = file_clipboard::get(&mut self.pending);
+        if n < 0 {
+            self.status = error(n);
+            return;
+        }
+        if self.pending.count == 0 {
+            self.status = b"Copy or Move files first.";
+            return;
+        }
+        self.selection.clear();
+        self.paste_next(None);
+    }
+    fn paste_next(&mut self, renamed: Option<&[u8]>) {
+        let mut override_name = renamed;
+        while self.pending.count > 0 {
+            let path = self.pending.paths[0];
+            let n = self.pending.lengths[0] as usize;
+            let start = path[..n]
+                .iter()
+                .rposition(|&b| b == b'/')
+                .map_or(0, |i| i + 1);
+            let name = override_name.take().unwrap_or(&path[start..n]);
+            let result = directory::transfer_on(
+                &path[..n],
+                name,
+                if self.pending.cut != 0 { 2 } else { 1 },
+                self.pending.volume,
+            );
+            if result == -17 {
+                self.mode = 5;
+                self.used = 0;
+                self.status = b"Name exists. Paste as another name, or Escape to stop this batch.";
+                self.refresh();
+                return;
+            }
+            if result < 0 {
+                self.status = error(result);
+                self.refresh();
+                return;
+            }
+            self.selection.add(name, self.pending.flags[0]);
+            for i in 1..self.pending.count as usize {
+                self.pending.paths[i - 1] = self.pending.paths[i];
+                self.pending.lengths[i - 1] = self.pending.lengths[i];
+                self.pending.flags[i - 1] = self.pending.flags[i];
+            }
+            self.pending.count -= 1;
+            if self.pending.cut != 0 {
+                let n = file_clipboard::update(&self.pending);
+                if n < 0 {
+                    self.status =
+                        b"Moved an item; shared selection changed. Remaining moves stopped.";
+                    self.refresh();
+                    return;
+                }
+                self.pending.version = n as u32;
+            }
+        }
+        self.status = b"Paste complete.";
+        self.refresh();
+    }
+    fn delete(&mut self) {
+        let s = self.selection;
+        for i in 0..s.count {
+            let n = directory::action_on(
+                &s.names[i][..s.lengths[i] as usize],
+                if s.flags[i] & 1 != 0 { 2 } else { 1 },
+                self.volume,
+            );
+            if n < 0 {
+                self.status = error(n);
+                self.selection.clear();
+                self.refresh();
+                return;
+            }
+        }
+        self.status = b"Deleted selected items.";
+        self.selection.clear();
+        self.refresh();
+    }
+    fn action(&mut self, n: usize) -> bool {
+        self.menu = None;
+        self.hover = None;
+        if matches!(n, 4 | 10 | 11) && self.selection.count == 0 {
+            self.status = b"Select files or folders first.";
+            return false;
+        }
+        match n {
+            0 => self.navigate(b".."),
             1 => self.open(),
             2 | 3 => {
-                self.mode = if action == 2 { 1 } else { 2 };
+                self.mode = if n == 2 { 1 } else { 2 };
                 self.used = 0;
             }
-            4 => {
-                if self.rows() > 0 {
-                    self.mode = 3;
-                }
+            4 => self.mode = 3,
+            5 => {
+                self.selection.clear();
+                self.refresh();
             }
-            5 => self.refresh(),
             6 => {
-                self.offset = self.offset.saturating_sub(18);
-                self.selected = 0;
+                self.offset = self.offset.saturating_sub(self.page());
                 self.refresh();
             }
             7 => {
-                if self.offset as u32 + 18 < self.list.total {
-                    self.offset += 18;
-                    self.selected = 0;
+                if self.offset as u32 + (self.page() as u32) < self.list.total {
+                    self.offset += self.page();
                     self.refresh();
                 }
             }
-            8 => return true,
+            8 => {
+                self.quit = true;
+                return true;
+            }
+            9 => {
+                if self.selection.count != 1 {
+                    self.status = b"Select one item to rename.";
+                } else {
+                    self.mode = 4;
+                    self.used = 0;
+                }
+            }
+            10 => self.stage(false),
+            11 => self.stage(true),
+            12 => self.paste(),
             _ => (),
         }
         false
     }
     fn key(&mut self, event: u32) -> bool {
+        self.modifiers = event & (key::CTRL | key::SHIFT);
         let code = event as u16;
         let ctrl = event & key::CTRL != 0;
+        if self.menu.is_some() {
+            if code == 27 {
+                self.menu = None;
+                return false;
+            }
+            if code == 10 {
+                if let Some(i) = self.hover {
+                    return self.action([1, 9, 10, 11, 12, 4, 5][i]);
+                }
+            }
+            if matches!(code, key::UP | key::DOWN) {
+                self.hover = Some(match (self.hover, code) {
+                    (Some(i), key::UP) => i.saturating_sub(1),
+                    (Some(i), _) => (i + 1).min(6),
+                    _ => 0,
+                });
+            }
+            return false;
+        }
         if self.mode != 0 {
             if code == 27 {
                 self.mode = 0;
-                self.status = b"Cancelled.";
+                self.pending.count = 0;
+                self.status = b"Cancelled. Earlier batch items may have completed.";
                 return false;
             }
             if self.mode == 3 {
                 if matches!(code, 89 | 121) {
-                    let e = self.list.entries[self.selected];
-                    let n = directory::action(
-                        &e.name[..e.length as usize],
-                        if e.flags & 1 != 0 { 2 } else { 1 },
-                    );
                     self.mode = 0;
-                    self.status = if n < 0 { error(n) } else { b"Deleted." };
-                    self.refresh();
+                    self.delete();
                 } else if matches!(code, 78 | 110) {
                     self.mode = 0;
                     self.status = b"Cancelled.";
@@ -158,12 +383,30 @@ impl Files {
                     let used = self.used;
                     let mode = self.mode;
                     self.mode = 0;
-                    if mode == 2 {
-                        let n = directory::action(&name[..used], 0);
-                        self.status = if n < 0 { error(n) } else { b"Folder created." };
-                        self.refresh();
-                    } else {
-                        self.launch(b"notepad ", &name[..used]);
+                    match mode {
+                        1 => self.launch(b"notepad ", &name[..used]),
+                        2 => {
+                            let n = directory::action_on(&name[..used], 0, self.volume);
+                            self.status = if n < 0 { error(n) } else { b"Folder created." };
+                            self.refresh();
+                        }
+                        4 => {
+                            let s = self.selection;
+                            let n = directory::transfer_on(
+                                &s.names[0][..s.lengths[0] as usize],
+                                &name[..used],
+                                0,
+                                self.volume,
+                            );
+                            self.status = if n < 0 { error(n) } else { b"Renamed." };
+                            if n == 0 {
+                                self.selection.clear();
+                                self.selection.add(&name[..used], s.flags[0]);
+                            }
+                            self.refresh();
+                        }
+                        5 => self.paste_next(Some(&name[..used])),
+                        _ => (),
                     }
                 }
                 32..=126 if !ctrl => {
@@ -176,19 +419,63 @@ impl Files {
             }
             return false;
         }
-        if ctrl && matches!(code, 81 | 113) {
-            return true;
-        }
-        if ctrl && matches!(code, 78 | 110) {
-            return self.action(2);
+        if ctrl {
+            match code {
+                81 | 113 => return true,
+                78 | 110 => return self.action(2),
+                67 | 99 => return self.action(10),
+                88 | 120 => return self.action(11),
+                86 | 118 => return self.action(12),
+                65 | 97 => {
+                    if self.list.total > 32 {
+                        self.status = b"Select at most 32 items at a time.";
+                    } else {
+                        let mut page = Listing::new();
+                        if directory::list(b".", 0, &mut page) == 0 {
+                            self.selection.clear();
+                            for e in &page.entries[..page.count as usize] {
+                                self.selection
+                                    .add(&e.name[..e.length as usize], e.flags as u8);
+                            }
+                        }
+                    }
+                    return false;
+                }
+                _ => (),
+            }
         }
         match code {
-            key::UP => self.selected = self.selected.saturating_sub(1),
-            key::DOWN => self.selected = (self.selected + 1).min(self.rows().saturating_sub(1)),
-            key::HOME => self.selected = 0,
-            key::END => self.selected = self.rows().saturating_sub(1),
+            0x121 => {
+                self.action(9);
+            }
+            key::UP | key::DOWN | key::HOME | key::END => {
+                if self.rows() > 0 {
+                    let old = self.selection.focus.unwrap_or(self.offset);
+                    let index = match code {
+                        key::UP => old.saturating_sub(1),
+                        key::DOWN => {
+                            if self.selection.focus.is_none() {
+                                self.offset
+                            } else {
+                                old.saturating_add(1)
+                                    .min(self.list.total.saturating_sub(1) as u16)
+                            }
+                        }
+                        key::HOME => 0,
+                        _ => self.list.total.saturating_sub(1) as u16,
+                    };
+                    if index < self.offset || index >= self.offset + self.page() {
+                        self.offset = index / self.page() * self.page();
+                        self.refresh();
+                    }
+                    let row = (index - self.offset) as usize;
+                    if row < self.rows() {
+                        self.select(row, false, event & key::SHIFT != 0);
+                    }
+                }
+            }
             10 => self.open(),
-            8 => self.cd(b".."),
+            8 => self.navigate(b".."),
             key::DELETE => {
                 self.action(4);
             }
@@ -198,17 +485,136 @@ impl Files {
             key::PAGE_DOWN => {
                 self.action(7);
             }
-            key::F5 => self.refresh(),
+            key::F5 => {
+                self.selection.clear();
+                self.refresh();
+            }
             _ => (),
         }
         false
     }
+    fn enabled(&self, i: usize) -> bool {
+        match i {
+            0 | 1 => self.selection.count == 1,
+            2 | 3 | 5 => self.selection.count > 0,
+            4 => self.can_paste,
+            _ => true,
+        }
+    }
+    fn menu_hit(&self, x: i32, y: i32) -> Option<usize> {
+        let (a, b) = self.menu?;
+        if (a + 4..a + 164).contains(&x) && (b + 4..b + 158).contains(&y) {
+            Some(((y - b - 4) / 22) as usize)
+        } else {
+            None
+        }
+    }
+    fn pointer(&mut self, event: window::Event, previous: u32) -> bool {
+        let left = event.buttons & 1 != 0 && previous & 1 == 0;
+        let right = event.buttons & 2 != 0 && previous & 2 == 0;
+        if self.mode != 0 {
+            return false;
+        }
+        if self.menu.is_some() {
+            if left {
+                let hit = self.menu_hit(event.x, event.y);
+                self.menu = None;
+                if let Some(i) = hit {
+                    if self.enabled(i) {
+                        self.action([1, 9, 10, 11, 12, 4, 5][i]);
+                    }
+                }
+                return true;
+            }
+            if !right {
+                let hover = self.menu_hit(event.x, event.y);
+                let changed = hover != self.hover;
+                self.hover = hover;
+                return changed;
+            }
+        }
+        let row = if (8..self.width as i32 - 8).contains(&event.x)
+            && (80..self.height as i32 - 32).contains(&event.y)
+        {
+            let row = (event.y - 80) as usize / 16;
+            if row < self.rows() {
+                Some(row)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if right {
+            if let Some(row) = row {
+                let e = self.list.entries[row];
+                if !self.selection.contains(&e.name[..e.length as usize]) {
+                    self.select(row, false, false);
+                }
+            } else {
+                self.selection.clear();
+            }
+            self.can_paste = file_clipboard::get(&mut self.pending) == 0 && self.pending.count > 0;
+            self.menu = Some((
+                event.x.clamp(0, self.width as i32 - 168),
+                event.y.clamp(0, self.height as i32 - 162),
+            ));
+            self.hover = None;
+            self.last = usize::MAX;
+            return true;
+        }
+        if !left {
+            return false;
+        }
+        if (0..30).contains(&event.y) && event.x >= 0 {
+            return {
+                self.action(event.x as usize / 70);
+                true
+            };
+        }
+        if (34..60).contains(&event.y) && (0..280).contains(&event.x) {
+            self.action(9 + event.x as usize / 70);
+            return true;
+        }
+        if (80..self.height as i32 - 32).contains(&event.y) {
+            if let Some(row) = row {
+                let modifiers = event.code;
+                let ctrl = modifiers & key::CTRL != 0;
+                let shift = modifiers & key::SHIFT != 0;
+                self.select(row, ctrl, shift);
+                let now = xinyi::ticks();
+                if !ctrl && !shift && self.last == row && now.wrapping_sub(self.clicked) < 30 {
+                    self.open();
+                    self.last = usize::MAX;
+                } else {
+                    self.last = if ctrl || shift { usize::MAX } else { row };
+                    self.clicked = now;
+                }
+            } else {
+                self.selection.clear();
+                self.last = usize::MAX;
+                self.clicked = 0;
+            }
+            return true;
+        }
+        false
+    }
     fn paint(&self, w: u32) {
-        window::draw(w, &[Draw::rect(0, 0, 640, 400, 0xf4f4f4)]);
-        let labels: [&[u8]; 9] = [
-            b"Up", b"Open", b"New", b"Folder", b"Delete", b"Refresh", b"<", b">", b"Quit",
-        ];
-        for (i, label) in labels.iter().enumerate() {
+        window::draw(w, &[Draw::rect(0, 0, self.width, self.height, 0xf4f4f4)]);
+        for (i, label) in [
+            b"Up" as &[u8],
+            b"Open",
+            b"New",
+            b"Folder",
+            b"Delete",
+            b"Refresh",
+            b"<",
+            b">",
+            b"Quit",
+        ]
+        .iter()
+        .enumerate()
+        {
             let x = i as u32 * 70;
             window::draw(
                 w,
@@ -218,34 +624,54 @@ impl Files {
                 ],
             );
         }
-        let start = self.length.saturating_sub(78);
+        for (i, label) in [b"Rename" as &[u8], b"Copy", b"Move", b"Paste"]
+            .iter()
+            .enumerate()
+        {
+            let x = i as u32 * 70;
+            window::draw(
+                w,
+                &[
+                    Draw::rect(x + 2, 34, 66, 26, 0xc4c4c4),
+                    Draw::text(x + 6, 40, 0, label),
+                ],
+            );
+        }
         window::draw(
             w,
             &[
-                Draw::text(8, 40, 0x153e8e, &self.path[start..self.length]),
+                Draw::text(
+                    296,
+                    40,
+                    0x153e8e,
+                    &self.path[self.length.saturating_sub(42)..self.length],
+                ),
                 Draw::text(8, 64, 0, b"Name                 Type       Bytes"),
             ],
         );
         for i in 0..self.rows() {
             let e = self.list.entries[i];
-            let y = 80 + i as u32 * 16;
-            let bg = if self.selected == i {
-                0x153e8e
+            let name = &e.name[..e.length as usize];
+            let chosen = self.selection.contains(name);
+            let (bg, fg) = if chosen {
+                (0x153e8e, 0xffffff)
             } else {
-                0xffffff
+                (0xffffff, 0)
             };
-            let fg = if self.selected == i { 0xffffff } else { 0 };
+            let y = 80 + i as u32 * 16;
             let mut digits = [b' '; 10];
             let mut value = e.size;
-            for digit in digits.iter_mut().rev() {
-                *digit = b'0' + (value % 10) as u8;
+            for n in (0..10).rev() {
+                digits[n] = b'0' + (value % 10) as u8;
                 value /= 10;
             }
+            let start = digits.iter().position(|&b| b != b'0').unwrap_or(9);
+            digits[..start].fill(b' ');
             window::draw(
                 w,
                 &[
-                    Draw::rect(8, y, 624, 16, bg),
-                    Draw::text(8, y, fg, &e.name[..e.length as usize]),
+                    Draw::rect(8, y, self.width - 16, 16, bg),
+                    Draw::text(8, y, fg, name),
                     Draw::text(
                         176,
                         y,
@@ -256,24 +682,84 @@ impl Files {
                 ],
             );
         }
-        let text = match self.mode {
+        let hint = match self.mode {
             1 => b"New file (8.3): " as &[u8],
             2 => b"New folder (8.3): ",
-            3 => b"Delete selected item? Y confirms / N cancels",
-            _ => b"Enter opens | Backspace up | F5 refresh | PgUp/PgDn pages",
+            3 => b"Delete selected items? Y confirms / N cancels",
+            4 => b"Rename to (8.3): ",
+            5 => b"Paste as (8.3): ",
+            _ => b"Ctrl/Shift select | Ctrl+C/X/V | F2 rename | Right-click actions",
         };
         window::draw(
             w,
             &[
-                Draw::text(8, 368, 0, text),
-                Draw::text(8, 384, 0, &self.status[..self.status.len().min(78)]),
+                Draw::text(8, self.height - 32, 0, hint),
+                Draw::text(
+                    8,
+                    self.height - 16,
+                    0,
+                    &self.status[..self.status.len().min(78)],
+                ),
             ],
         );
-        if self.mode == 1 || self.mode == 2 {
+        if matches!(self.mode, 1 | 2 | 4 | 5) {
             window::draw(
                 w,
-                &[Draw::text(160, 368, 0x153e8e, &self.input[..self.used])],
+                &[Draw::text(
+                    160,
+                    self.height - 32,
+                    0x153e8e,
+                    &self.input[..self.used],
+                )],
             );
+        }
+        if let Some((x, y)) = self.menu {
+            window::draw(
+                w,
+                &[
+                    Draw::rect((x + 4) as u32, (y + 4) as u32, 164, 158, 0x404040),
+                    Draw::rect(x as u32, y as u32, 168, 162, 0xc4c4c4),
+                ],
+            );
+            for (i, label) in [
+                b"Open" as &[u8],
+                b"Rename",
+                b"Copy",
+                b"Move",
+                b"Paste",
+                b"Delete",
+                b"Refresh",
+            ]
+            .iter()
+            .enumerate()
+            {
+                let yy = y + 4 + i as i32 * 22;
+                let hot = self.hover == Some(i) && self.enabled(i);
+                window::draw(
+                    w,
+                    &[
+                        Draw::rect(
+                            (x + 4) as u32,
+                            yy as u32,
+                            160,
+                            22,
+                            if hot { 0x153e8e } else { 0xc4c4c4 },
+                        ),
+                        Draw::text(
+                            (x + 10) as u32,
+                            (yy + 3) as u32,
+                            if !self.enabled(i) {
+                                0x707070
+                            } else if hot {
+                                0xffffff
+                            } else {
+                                0
+                            },
+                            label,
+                        ),
+                    ],
+                );
+            }
         }
         window::present(w);
     }
@@ -285,67 +771,70 @@ fn main() -> u32 {
     }
     let w = w as u32;
     let mut app = Files {
+        width: 640,
+        height: 400,
         list: Listing::new(),
         offset: 0,
-        selected: 0,
+        selection: Selection::new(),
         path: [0; 105],
         length: 0,
-        status: b"Select a file or folder, then Open (or double-click).",
+        volume: 0,
+        status: b"Ctrl/Shift selects multiple items. Right-click for actions.",
         mode: 0,
         input: [0; 12],
         used: 0,
         last: usize::MAX,
         clicked: 0,
+        modifiers: 0,
+        menu: None,
+        hover: None,
+        can_paste: false,
+        pending: FileClip::new(),
+        quit: false,
     };
+    window::resizable(w, 640, 400, 768, 528);
     app.refresh();
+    if app.rows() > 0 {
+        app.select(0, false, false);
+    }
     app.paint(w);
     let mut buttons = 0;
     loop {
-        let mut event = window::Event::default();
-        let n = window::event(w, &mut event, true);
+        let mut e = window::Event::default();
+        let n = window::event(w, &mut e, true);
         if n < 0 {
             return 1;
         }
         if n == 0 {
             continue;
         }
-        let mut repaint = false;
-        match event.kind {
+        let repaint = match e.kind {
+            window::RESIZE => {
+                app.resize(w, e);
+                true
+            }
             window::CLOSE => return 0,
             window::KEY => {
-                if app.key(event.code) {
+                if app.key(e.code) {
                     return 0;
                 }
-                repaint = true;
+                true
             }
-            window::RESET => buttons = event.buttons,
+            window::RESET => {
+                buttons = e.buttons;
+                app.menu = None;
+                app.modifiers = 0;
+                true
+            }
             window::POINTER => {
-                if event.buttons & 1 != 0 && buttons & 1 == 0 {
-                    if app.mode == 0 {
-                        if event.y < 30 && event.y >= 0 && event.x >= 0 {
-                            if app.action(event.x as usize / 70) {
-                                return 0;
-                            }
-                        } else if (80..368).contains(&event.y) {
-                            let row = (event.y - 80) as usize / 16;
-                            if row < app.rows() {
-                                app.selected = row;
-                                let now = xinyi::ticks();
-                                if app.last == row && now.wrapping_sub(app.clicked) < 30 {
-                                    app.open();
-                                    app.last = usize::MAX;
-                                } else {
-                                    app.last = row;
-                                    app.clicked = now;
-                                }
-                            }
-                        }
-                    }
-                    repaint = true;
-                }
-                buttons = event.buttons;
+                let changed = app.pointer(e, buttons);
+                buttons = e.buttons;
+                changed
             }
-            _ => (),
+            _ => false,
+        };
+        if app.quit {
+            return 0;
         }
         if repaint {
             app.paint(w);

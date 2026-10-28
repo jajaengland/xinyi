@@ -35,7 +35,7 @@ pub fn syscall(cs: u32, number: u32, pointer: u32, length: u32, reserved: u32) -
         return (-22i32) as u32;
     }
     if number == 67 {
-        if !crate::user_buffer::readable(pointer, length, image) {
+        if !crate::user_memory::readable(pointer, length, image) {
             return (-14i32) as u32;
         }
         let mut text = [0; LIMIT];
@@ -61,7 +61,7 @@ pub fn syscall(cs: u32, number: u32, pointer: u32, length: u32, reserved: u32) -
         if (length as usize) < data.len() {
             return (-28i32) as u32;
         }
-        if !crate::user_buffer::writable(pointer, data.len() as u32) {
+        if !crate::user_memory::writable(pointer, data.len() as u32) {
             return (-14i32) as u32;
         }
         if !data.is_empty() {

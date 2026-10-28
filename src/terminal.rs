@@ -1,6 +1,6 @@
 // Foreground program services. IRQs only update time/the scancode queue;
 // no second task or IRQ can access the terminal writer during these calls.
-use crate::{interrupts, keyboard, user_buffer, usermode, vga};
+use crate::{interrupts, keyboard, user_memory as user_buffer, usermode, vga};
 const INVALID: u32 = (-22i32) as u32;
 static mut USED: bool = false;
 static mut SAVED_COLOR: u8 = 0x0a;

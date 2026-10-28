@@ -17,16 +17,19 @@ def main():
     entries=[];names=set()
     for line in (ROOT/"programs/apps.txt").read_text().splitlines():
         if not line.strip() or line.lstrip().startswith("#"):continue
-        name,source,description=line.split("|",2)
+        fields=line.split("|");name,source,description=fields[:3];format=fields[3] if len(fields)>=4 else "flat"
+        if len(fields) not in (3,4,5) or format not in ("flat","elf"):raise ValueError("Invalid application format")
+        extension="."+fields[4] if len(fields)==5 else (".elf" if format=="elf" else ".bin")
+        if extension not in (".elf",".bin"):raise ValueError("Invalid application extension")
         if not re.fullmatch(r"[a-z][a-z0-9_]{0,7}",name) or name in names or name=="demo":
             raise ValueError(f"Invalid or duplicate application name: {name}")
         names.add(name)
         source=(ROOT/source).resolve();source.relative_to(ROOT/"programs")
         subprocess.run([sys.executable,str(ROOT/"tools/build_program.py"),str(source),
-                        "--output",str(output/f"apps/{name}.bin"),"--force"],check=True)
-        size=(output/f"apps/{name}.bin").stat().st_size
+                        "--output",str(output/f"apps/{name}{extension}"),"--force","--format",format],check=True)
+        size=(output/f"apps/{name}{extension}").stat().st_size
         if not 0<size<=65536:raise ValueError(f"Invalid image size for {name}: {size}")
-        entries.append({"name":name,"description":description,"file":name.upper()+".BIN"})
+        entries.append({"name":name,"description":description,"file":name.upper()+extension.upper()})
     if not entries:raise ValueError("The application manifest must not be empty")
     (output/"applications.json").write_text(json.dumps(entries,indent=2))
 

@@ -2,7 +2,11 @@
 #![no_main]
 #[path = "../../sdk/xinyi.rs"]
 mod xinyi;
-use xinyi::{key, pty, window};
+use xinyi::{
+    gui, key, pty,
+    widgets::{Rect, Scrollbar},
+    window,
+};
 fn banner(window: u32, text: &[u8]) {
     window::draw(
         window,
@@ -14,11 +18,13 @@ fn banner(window: u32, text: &[u8]) {
     window::present(window);
 }
 fn main() -> u32 {
-    let handle = window::open(b"Terminal");
+    let handle = window::open_sized(b"Terminal", 656, 400);
     if handle < 0 {
         return 1;
     }
     let window = handle as u32;
+    window::resizable(window, 656, 400, 656, 528);
+    let mut height = 400i32;
     let session = pty::open();
     if session < 0 {
         return 1;
@@ -27,6 +33,9 @@ fn main() -> u32 {
     let (mut scroll, mut anchor, mut dragging, mut buttons, mut closing) =
         (0u32, 0u32, false, 0u32, false);
     let mut message: Option<&[u8]> = None;
+    let mut bar = Scrollbar::new(Rect::new(640, 0, 16, 400));
+    let mut painted = None;
+    let mut last_scrolls = pty::control(session, 7).max(0) as u32;
     // Optional initial command, used when opening an executable from Files.
     let mut args = [0; 128];
     let n = xinyi::arguments(&mut args);
@@ -40,6 +49,21 @@ fn main() -> u32 {
         if pty::control(session, 4) > 0 {
             return 0;
         }
+        let history = pty::control(session, 6).max(0) as u32;
+        let output_scrolls = pty::control(session, 7).max(0) as u32;
+        if scroll > 0 {
+            scroll = if output_scrolls >= last_scrolls {
+                scroll
+                    .saturating_add(output_scrolls - last_scrolls)
+                    .min(history)
+            } else {
+                0
+            };
+        }
+        last_scrolls = output_scrolls;
+        bar.range(history, height as u32 / 16);
+        scroll = scroll.min(history);
+        bar.value = history.saturating_sub(scroll);
         for _ in 0..64 {
             let mut event = window::Event::default();
             let result = window::event(window, &mut event, false);
@@ -50,6 +74,17 @@ fn main() -> u32 {
                 break;
             }
             match event.kind {
+                window::RESIZE => {
+                    if window::resize(window, event) == 0 {
+                        height = event.y;
+                        pty::viewport(session, height as u32 / 16);
+                        bar.rect.h = height;
+                        bar.reset(0);
+                        scroll = 0;
+                        dragging = false;
+                        painted = None;
+                    }
+                }
                 window::CLOSE => {
                     let result = pty::control(session, if closing { 2 } else { 1 });
                     if result == 0 {
@@ -61,9 +96,21 @@ fn main() -> u32 {
                 window::RESET => {
                     dragging = false;
                     buttons = event.buttons;
+                    bar.reset(event.buttons);
                 }
                 window::POINTER => {
-                    let at = (event.y.clamp(0, 399) / 16) as u32 * 80
+                    let on_bar =
+                        !dragging && (bar.rect.contains(event.x, event.y) || bar.dragging());
+                    if bar.pointer(event.x, event.y, event.buttons) {
+                        scroll = history - bar.value;
+                        pty::clear_selection(session);
+                    }
+                    if on_bar {
+                        dragging = false;
+                        buttons = event.buttons;
+                        continue;
+                    }
+                    let at = (event.y.clamp(0, height - 1) / 16) as u32 * 80
                         + (event.x.clamp(0, 640) / 8) as u32;
                     if event.buttons & 1 != 0 && buttons & 1 == 0 {
                         anchor = at;
@@ -108,16 +155,18 @@ fn main() -> u32 {
                     if shift && matches!(code, key::PAGE_UP | key::PAGE_DOWN) {
                         pty::clear_selection(session);
                         if code == key::PAGE_UP {
-                            scroll = (scroll + 12).min(64);
+                            scroll = (scroll + 12).min(history);
                         } else {
                             scroll = scroll.saturating_sub(12);
                         }
                         continue;
                     }
                     if ctrl && matches!(code, 81 | 113) && pty::control(session, 3) == 0 {
-                        if pty::control(session, 1)==0 {return 0;}
-                        closing=true;
-                        message=Some(b"Program starting. X terminates it. Escape cancels.");
+                        if pty::control(session, 1) == 0 {
+                            return 0;
+                        }
+                        closing = true;
+                        message = Some(b"Program starting. X terminates it. Escape cancels.");
                         continue;
                     }
                     pty::clear_selection(session);
@@ -131,6 +180,13 @@ fn main() -> u32 {
             banner(window, text);
         } else if pty::present(session, window, scroll) < 0 {
             return 0;
+        }
+        bar.value = history.saturating_sub(scroll);
+        let state = (bar.value, bar.max, bar.dragging());
+        if painted != Some(state) {
+            gui::scrollbar(window, &bar);
+            window::present(window);
+            painted = Some(state);
         }
         xinyi::sleep_ms(10);
     }

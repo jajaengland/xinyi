@@ -2,7 +2,7 @@
 // command and text before touching the owned client surface. IRQs only queue input.
 use crate::canvas::Canvas;
 use crate::{
-    app_window_ui::State, graphics, loader::Frames, user_buffer, usermode, window_protocol as api,
+    app_window_ui::State, graphics, loader::Frames, user_memory as user_buffer, usermode, window_protocol as api,
 };
 use core::arch::asm;
 struct App {
@@ -158,7 +158,8 @@ fn input(app: &mut App, wait: bool) -> Option<api::Event> {
             unsafe {
                 asm!("cli", options(nostack));
             }
-            if let Some(event) = event {
+            if let Some(mut event) = event {
+                if event.kind==api::POINTER {event.code=crate::keyboard::modifiers();}
                 return Some(event);
             }
         }
@@ -177,6 +178,7 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
     let Some(image) = usermode::active_image(cs) else {
         return u32::MAX;
     };
+    if matches!(number,85|86){return (-16i32) as u32;}
     if number == 60 || number == 65 {
         let (width, height) = if number == 65 {
             (third & 0xffff, third >> 16)
@@ -251,7 +253,7 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
                 return (-14i32) as u32;
             }
             let mut commands = [api::Draw::default(); api::MAX_COMMANDS];
-            let mut texts = [[0u8; 80]; api::MAX_COMMANDS];
+            let mut texts = [[0u8; 96]; api::MAX_COMMANDS];
             if bytes != 0 {
                 unsafe {
                     core::ptr::copy_nonoverlapping(
@@ -386,3 +388,5 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
         _ => (-22i32) as u32,
     }
 }
+
+pub fn redraw(){unsafe {if let Some(app)=(&*core::ptr::addr_of!(APP)).as_ref() {compose(app);graphics::move_pointer((app.ui.x,app.ui.y),(app.ui.x,app.ui.y));graphics::present_guarded(0,0,800,600,(app.ui.x,app.ui.y));}}}

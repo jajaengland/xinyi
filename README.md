@@ -28,16 +28,22 @@ qemu-system-i386 -kernel target/i686-unknown-none/release/rust-os
 
 ## Desktop and applications
 
-Type `desktop` at the shell. Apps lists the actual `.BIN` files in `/APPS`; replacing or deleting a file changes the available programs. Up to four root application windows and their attached text processes can run together.
+Type `desktop` at the shell. Apps lists the actual `.BIN` and `.ELF` files in `/APPS`; replacing or deleting a file changes the available programs. Up to four root application windows and their attached text processes can run together.
 
-- **Files:** browse folders, open documents in Notepad, run programs through Terminal, create folders and confirm deletions. F5 refreshes; PageUp/PageDown changes pages.
-- **Notepad:** graphical text editing, open/save/save-as, undo/redo and unsaved-change prompts. Drag or Shift+arrows selects text; Ctrl+A/C/X/V selects all, copies, cuts and pastes. Ctrl+S saves; Ctrl+Q quits.
-- **Terminal:** uses the same shell as the physical console. Text apps launched from Apps automatically get a terminal window. Ctrl+C interrupts a program; Ctrl+Shift+C copies selected output; Ctrl+V pastes. Shift+PageUp/PageDown browses scrollback.
+- **Files:** browse folders, open documents in Notepad, run programs through Terminal, create folders and confirm deletions. F5 refreshes; PageUp/PageDown changes pages. Click empty space to clear selection; arrow keys select an item again. F2 renames a file or unused folder. Ctrl+click toggles items; Shift+click selects a range; Ctrl+A selects up to 32 items. Right-click for actions. Copy/Move (Ctrl+C/X) shares the selection across Files windows, even after closing the source window; open a destination and Paste (Ctrl+V). Folders transfer recursively. Existing names offer Paste as rather than overwrite. Delete removes files and empty folders after confirmation.
+- **Settings:** choose desktop and active title-bar colours. Apply changes the current session; Save writes `/GUI.CFG` on the mounted drive for the next boot.
+- **Notepad:** edit ASCII documents up to 64 KiB, with scrolling, four undo steps and unsaved-change prompts. Drag or Shift+arrows selects text; Ctrl+A/C/X/V selects all, copies, cuts and pastes. Ctrl+S saves, Ctrl+Shift+S opens Save As, Ctrl+O opens a file, Ctrl+N starts a new document, Ctrl+Z/Y undoes/redoes and Ctrl+Q quits. Open/Save As browses folders without changing the working directory.
+- **Terminal:** uses the same shell as the physical console. Text apps launched from Apps automatically get a terminal window. Ctrl+C interrupts a program; Ctrl+Shift+C copies selected output; Ctrl+V pastes. Drag the right-hand scrollbar, click its arrows/track, or use Shift+PageUp/PageDown for up to 64 rows of scrollback. The text area retains all 80 columns.
 - **EDIT:** text-mode file editor, also usable inside Terminal. Ctrl+S saves; Ctrl+Q quits.
 - **Snake / Tetris:** text games with pause/restart; Escape quits. Snake beeps when food is collected.
 - **Counter / Hello:** small application and scheduling examples.
+- **MEMDEMO:** an ELF application demonstrating writable globals, zeroed BSS, and heap-backed Rust `Vec`/`Box`. Run it from Apps or with `run memdemo`.
 
-Drag title bars to move windows, including partly off-screen. Windows stay below the top taskbar. The **_** button minimizes without closing or pausing the program; its taskbar button restores it fully into view. Ctrl+Alt+K stops the focused app. Close running apps before selecting Exit.
+Use the maximize/restore title-bar button or double-click the title bar in Files, Notepad and Terminal. Maximized frames fill the desktop below the taskbar, respect app layout limits and restore their previous size/position. Minimize and taskbar restore preserve maximized state.
+
+Drag the lower-right grip to resize Files or Notepad; Notepad reflows text and Files shows more rows. Terminal grows vertically while preserving its 80-column text-program layout, displaying up to 33 rows. Apps that do not opt in remain fixed-size.
+
+Drag normal title bars to move windows, including partly off-screen. Windows stay below the top taskbar. The **_** button minimizes without closing or pausing the program; its taskbar button restores it into view. Ctrl+Alt+K stops the focused app. Close running apps before selecting Exit.
 
 ## Shell and storage
 
@@ -47,13 +53,15 @@ Drag title bars to move windows, including partly off-screen. Windows stay below
 | --- | --- |
 | Browse | `pwd`, `ls [PATH]`, `cd PATH`, `mkdir PATH`, `rmdir PATH` |
 | Text files | `touch FILE`, `cat FILE`, `write FILE TEXT`, `delete FILE` |
-| Applications | `apps`, `run NAME [ARGS]`, `edit [FILE]`, `notepad [FILE]`, `terminal` |
+| Applications | `apps`, `run NAME [ARGS]`, `edit [FILE]`, `notepad [FILE]`, `terminal`, `settings` |
 | Drives | `disks`, `use NUMBER`, `mount`, `unmount` |
-| System | `version`, `uptime`, `date`, `reboot` |
+| System | `version`, `uptime`, `date`, `reboot`, `shutdown` |
 
 The system mounts its boot filesystem automatically. BIOS boot-drive access supports boot USB media; native disks use ATA/IDE PIO, including compatible IDE emulation. BIOS boot media appears as drive 0, with native IDE targets numbered separately. Use `disks` before selecting a target.
 
 `install NUMBER` previews a bootable installation onto a native IDE destination and stages `/APPS` from the mounted source. Only `install confirm` immediately after the preview applies it. Compatible FAT16 layouts can be preserved; incompatible layouts are replaced after confirmation. `format` previews a whole-disk quick format; `format confirm` applies it and removes existing partitions and bootability. **Both operations can destroy data: inspect the target and preview carefully.**
+
+`shutdown` flushes the selected disk before attempting ACPI soft-off. From the desktop terminal, save your work and use `shutdown confirm` to close the running applications. If power-off is unsupported, Xinyi restores text mode, reports that it is safe to turn off the computer, and halts. Flush failures cancel shutdown.
 
 ## USB images
 
@@ -69,10 +77,12 @@ USB access uses BIOS services for the boot drive only. Unmount before removal. F
 
 - Legacy BIOS boot; no UEFI or native USB/AHCI drivers.
 - FAT16 volumes below 2 GiB, ASCII 8.3 names and paths up to eight components.
-- Text files and the shared clipboard: 1024 bytes. Executable images: 64 KiB.
-- Flat read-only program images with writable stacks; no writable globals, user heap or in-kernel ELF loader.
-- Fixed-size windows, basic bitmap fonts and 800×600 framebuffer graphics; no GPU acceleration.
-- Kernel services run to completion, so disk I/O can briefly delay other applications.
+- Notepad documents: 64 KiB of ASCII text, with a scrollbar and four undo steps. Shell text commands, EDIT and the shared clipboard retain their 1024-byte limit. Executable images: 64 KiB.
+- Flat binaries remain supported. Static ELF32/i386 apps can use writable data/BSS (up to a 1 MiB image span) and a private heap capped at 1 MiB. Executable files still fit within 64 KiB. No dynamic linking, TLS, user threads or Linux ABI compatibility.
+- Bounded opt-in window resizing, shared GUI controls, basic bitmap fonts and 800×600 framebuffer graphics; no GPU acceleration.
+- Kernel services run to completion, so disk I/O can pause other applications, particularly larger saves through BIOS USB.
+- Folder transfers: up to 256 entries per tree, eight path components and 64 KiB per file. Batch operations stop on failure; completed items and partial destination trees can remain.
+- ACPI shutdown supports simple static legacy S5 tables; firmware needing AML methods, hardware-reduced ACPI or unsupported table layouts uses the safe halt fallback.
 - No filesystem journal or power-loss recovery. This is a learning OS, not a hardened system for important data or untrusted programs.
 
 ## Development and tests
@@ -82,7 +92,10 @@ Automated storage tests use disposable QEMU images. `python tools/build_release.
 ```powershell
 python tools/smoke.py --kernel target/i686-unknown-none/release/rust-os --qemu qemu-system-i386
 python tools/window_lifecycle_qemu.py --disk PATH/TO/xinyi.img --vga cirrus --usb
+python tools/maximize_qemu.py --disk PATH/TO/xinyi.img --vga cirrus --usb
+python tools/large_files_qemu.py --disk PATH/TO/xinyi.img --vga cirrus --usb
 rustc --edition=2021 --test tools/window_tests.rs -o target/window-tests.exe
+.\target\window-tests.exe
 ```
 
 `graphics`, `mouse`, `windowtest` and `multitask` provide interactive diagnostics. Deliberate fault/panic probes are test tools, not normal applications.

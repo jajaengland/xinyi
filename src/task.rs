@@ -57,7 +57,7 @@ pub fn create_task(program: crate::loader::LoadedProgram) -> Option<u32> {
     let kernel_frames = crate::loader::Frames::new(crate::loader::KERNEL_STACK_PAGES)?;
     let kernel_stack = kernel_frames.top();
     let address_space = crate::paging::AddressSpace::new(&program)?;
-    let entry_point = crate::paging::USER_BASE;
+    let entry_point = program.layout.entry;
     let user_stack = crate::paging::USER_STACK_TOP - 4;
 
     let task = Task {

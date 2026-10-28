@@ -6,6 +6,7 @@ pub const KEY: u32 = 1;
 pub const POINTER: u32 = 2;
 pub const CLOSE: u32 = 3;
 pub const RESET: u32 = 4;
+pub const RESIZE: u32 = 5;
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct Event {
@@ -61,7 +62,7 @@ impl Draw {
         }
         let (w, h) = match self.kind {
             0 if self.pointer == 0 && self.length == 0 => (self.width, self.height),
-            1 if self.width == 0 && self.height == 0 && self.length <= 80 => (self.length * 8, 16),
+            1 if self.width == 0 && self.height == 0 && self.length <= 96 => (self.length * 8, 16),
             _ => return false,
         };
         self.x.checked_add(w).is_some_and(|end| end <= width)
@@ -71,8 +72,17 @@ impl Draw {
 const _: () = assert!(core::mem::size_of::<Event>() == 20 && core::mem::size_of::<Draw>() == 32);
 
 pub fn valid_size(width: u32, height: u32) -> bool {
-    (160..=WIDTH).contains(&width)
-        && (80..=HEIGHT).contains(&height)
+    (160..=768).contains(&width)
+        && (80..=528).contains(&height)
         && width % 8 == 0
         && height % 16 == 0
+}
+
+pub fn resize_limits(min: u32, max: u32, width: u32, height: u32) -> Option<(i32, i32, i32, i32)> {
+    let (a, b, c, d) = (min & 65535, min >> 16, max & 65535, max >> 16);
+    if !valid_size(a, b) || !valid_size(c, d) || a > width || b > height || c < width || d < height
+    {
+        return None;
+    }
+    Some((a as i32, b as i32, c as i32, d as i32))
 }

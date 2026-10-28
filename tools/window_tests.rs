@@ -38,8 +38,8 @@ fn at(s:&mut State,x:i32,y:i32,buttons:u8)->(bool,Option<Event>) {s.update(mouse
 }
 
 #[test] fn sized_surfaces_validate_and_drag_with_their_own_bounds() {
-    assert!(window_protocol::valid_size(320,144));
-    for (w,h) in [(0,144),(648,144),(320,401),(321,144),(320,143)] {assert!(!window_protocol::valid_size(w,h));}
+    assert!(window_protocol::valid_size(320,144));assert!(window_protocol::valid_size(656,400));
+    for (w,h) in [(0,144),(776,144),(320,529),(321,144),(320,143)] {assert!(!window_protocol::valid_size(w,h));}
     assert!(Draw::rect(319,143,1,1,0).valid_for(320,144));
     assert!(!Draw::rect(320,143,1,1,0).valid_for(320,144));
     assert!(!Draw::text(313,0,0,b"a").valid_for(320,144));
@@ -66,4 +66,37 @@ fn at(s:&mut State,x:i32,y:i32,buttons:u8)->(bool,Option<Event>) {s.update(mouse
 #[test]fn drag_allows_partial_windows_on_left_right_and_bottom(){
  let mut s=State::new(0);at(&mut s,500,103,1);at(&mut s,0,599,0);assert!(s.window.rect.x<0);assert_eq!(s.window.rect.y,568);
  s.restore();let r=s.window.rect;at(&mut s,r.x+20,r.y+15,1);at(&mut s,799,0,0);assert_eq!((s.window.rect.x,s.window.rect.y),(768,24));
+}
+
+#[test]fn resizing_previews_without_changing_client_and_emits_one_request(){let mut s=State::sized(0,640,400,0,24);s.limits=Some((640,400,768,528));at(&mut s,650,455,1);let(_,e)=at(&mut s,799,599,1);assert!(e.is_none());assert_eq!((s.client().w,s.client().h),(640,400));assert_eq!((s.preview().unwrap().w,s.preview().unwrap().h),(784,566));let(_,e)=at(&mut s,799,599,0);let e=e.unwrap();assert_eq!(e.kind,window_protocol::RESIZE);assert_eq!((e.x,e.y),(768,528));assert!(s.preview().is_none());}
+
+#[test]fn lost_mouse_input_cancels_resize_preview(){let mut s=State::sized(0,640,400,0,24);s.limits=Some((640,400,768,528));at(&mut s,650,455,1);at(&mut s,750,550,1);let(_,e)=s.update(mouse_packet::Event{lost:true,buttons:1,..mouse_packet::Event::default()});assert_eq!(e.unwrap().kind,window_protocol::RESET);assert!(s.preview().is_none());assert!(at(&mut s,750,550,0).1.is_none());}
+
+fn timed(s:&mut State,x:i32,y:i32,buttons:u8,tick:u32)->Option<Event>{s.update_at(mouse_packet::Event{dx:(x-s.x) as i16,dy:(y-s.y) as i16,buttons,lost:false},tick).1}
+fn maximize(s:&mut State)->Event{let r=s.maximize_button();timed(s,r.x+8,r.y+8,1,1);timed(s,r.x+8,r.y+8,0,2).unwrap()}
+#[test]fn maximize_defers_geometry_and_restores_exact_position_and_size(){
+ let mut s=State::sized(0,640,400,-200,150);s.limits=Some((640,400,768,528));s.minimizable=true;let old=s.window.rect;
+ let e=maximize(&mut s);assert_eq!((e.kind,e.x,e.y),(window_protocol::RESIZE,768,528));assert_eq!(maximize(&mut s),e);assert_eq!(s.window.rect,old);assert!(!s.is_maximized());
+ s.resized(e.x,e.y);assert_eq!(s.window.rect,desktop_ui::Rect{x:0,y:24,w:800,h:576});assert_eq!(s.client(),desktop_ui::Rect{x:16,y:58,w:768,h:528});
+ // Minimize/taskbar restore keeps the maximized placement and avoids invalid clamp bounds.
+ let m=s.minimize_button();at(&mut s,m.x+8,m.y+8,1);at(&mut s,m.x+8,m.y+8,0);assert!(!s.window.visible);s.restore();assert!(s.is_maximized());assert_eq!(s.window.rect.y,24);
+ let e=maximize(&mut s);assert_eq!((e.x,e.y),(640,400));assert!(s.is_maximized());s.resized(e.x,e.y);assert!(!s.is_maximized());assert_eq!(s.window.rect,old);
+}
+#[test]fn maximize_cancellation_preserves_placement_and_legacy_windows(){
+ let mut s=State::new(0);let r=s.maximize_button();at(&mut s,r.x+8,r.y+8,1);assert!(at(&mut s,r.x+8,r.y+8,0).1.is_none());
+ s.limits=Some((640,400,768,528));let old=s.window.rect;let r=s.maximize_button();at(&mut s,r.x+8,r.y+8,1);assert!(at(&mut s,300,400,0).1.is_none());
+ let e=maximize(&mut s);s.cancel_resize();assert_eq!(s.window.rect,old);assert!(!s.is_maximized());assert_eq!(maximize(&mut s),e);
+}
+#[test]fn title_double_click_uses_time_distance_and_drag_thresholds(){
+ let mut s=State::new(0);s.limits=Some((640,400,768,528));
+ timed(&mut s,110,103,1,u32::MAX-10);assert!(timed(&mut s,110,103,0,u32::MAX-9).is_none());
+ timed(&mut s,111,103,1,1);let e=timed(&mut s,111,103,0,2).unwrap();s.resized(e.x,e.y);assert!(s.is_maximized());
+ timed(&mut s,110,40,1,50);timed(&mut s,110,40,0,51);timed(&mut s,110,40,1,100);assert!(timed(&mut s,110,40,0,101).is_none());
+ timed(&mut s,130,40,1,102);assert!(timed(&mut s,130,40,0,103).is_none());
+ timed(&mut s,130,40,1,104);assert!(timed(&mut s,150,40,0,105).is_none());
+ timed(&mut s,150,40,1,106);assert!(timed(&mut s,150,40,0,107).is_none());
+}
+#[test]fn maximized_terminal_keeps_its_width_and_blocks_grip_and_title_drag(){
+ let mut s=State::sized(0,656,400,56,90);s.limits=Some((656,400,656,528));let e=maximize(&mut s);assert_eq!((e.x,e.y),(656,528));s.resized(e.x,e.y);let old=s.window.rect;
+ at(&mut s,100,40,1);at(&mut s,500,200,0);assert_eq!(s.window.rect,old);let g=s.grip();at(&mut s,g.x+2,g.y+2,1);assert!(at(&mut s,600,400,0).1.is_none_or(|e|e.kind!=window_protocol::RESIZE));assert!(s.preview().is_none());assert_eq!((s.client().x,s.client().w),(72,656));
 }

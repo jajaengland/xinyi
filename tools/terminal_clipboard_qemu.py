@@ -30,7 +30,7 @@ def main():
    def click(x,y):move(x,y);button(True);button(False)
    def task(slot):click(110+slot*148,11)
    def launch(name):
-    names=sorted(k.split('/')[-1][:-4] for k in inspect_tree(image,2048)[0] if k.startswith('APPS/') and k.count('/')==1 and k.endswith('.BIN'));offset=len(log());click(40,11);click(40,46+names.index(name)*24)
+    names=sorted(k.split('/')[-1][:-4] for k in inspect_tree(image,2048)[0] if k.startswith('APPS/') and k.count('/')==1 and k.endswith(('.BIN','.ELF')));offset=len(log());click(40,11);click(40,46+names.index(name)*24)
     until(lambda:re.search(r'Desktop: launch pid=(\d+) path=/APPS/'+name+r'\.BIN',log()[offset:]),'Launch '+name);pid=int(re.search(r'Desktop: launch pid=(\d+)',log()[offset:])[1]);until(lambda:f'Multiwindow: open pid={pid} ' in log()[offset:],'Window '+name);return pid
    def window(pid):
     m=re.search(r'Multiwindow: open pid='+str(pid)+r' handle=\d+ surface=([0-9a-f]+) client=(\d+)x(\d+) pos=(\d+),(\d+)',log());return int(m[1],16),int(m[2]),int(m[3]),int(m[4])+8,int(m[5])+34
@@ -48,7 +48,7 @@ def main():
    def terminal_screen(pid):
     font=memory(int(re.search(r'PTY: open .*font=([0-9a-f]+)',log())[1],16),4096);letters={bytes(bool(font[c*16+y]&(0x80>>x)) for y in range(16) for x in range(8)):chr(c) for c in range(32,127)}
     address,w,h,x,y=window(pid);data=array('I');data.frombytes(memory(address,w*h*4));return '\n'.join(''.join(letters.get(bytes(data[(row*16+dy)*w+col*8+dx]!=data[row*16*w+col*8] for dy in range(16) for dx in range(8)),'?') for col in range(80)) for row in range(25))
-   first=launch('NOTEPAD');g.key('ctrl-v');g.key('ctrl-v');g.key('ctrl-s');g.type('full.txt\n');until(lambda:file('FULL.TXT')==b'a'*1024,'Full clipboard paste or capacity refusal failed');g.key('ctrl-n');g.type('alpha beta\ngamma');until(lambda:'gamma' in screen(first,0),'Initial editor typing did not finish');surface,w,h,x,y=window(first)
+   first=launch('NOTEPAD');g.key('ctrl-v');g.key('ctrl-v');g.key('ctrl-s');g.type('full.txt\n');until(lambda:file('FULL.TXT')==b'a'*2048,'Full clipboard paste or capacity refusal failed');g.key('ctrl-n');g.type('alpha beta\ngamma');until(lambda:'gamma' in screen(first,0),'Initial editor typing did not finish');surface,w,h,x,y=window(first)
    move(x,y+40);button(True)
    # QEMU PS/2 may aggregate a rapid press+motion before the guest samples it.
    # Confirm the press placed the caret before injecting the drag trajectory.

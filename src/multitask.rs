@@ -34,6 +34,7 @@ struct Launch {
 static mut REQUEST: Option<Launch> = None;
 static mut RUNNING: usize = 0;
 static mut ROOTS: usize = 0;
+static mut DIRECTORIES:[Option<crate::fs_path::Path>;LIMIT]=[None;LIMIT];
 static mut KILLS: [u32; 8] = [0; 8];
 pub fn queue_kill(pid: u32) {
     unsafe {
@@ -266,24 +267,7 @@ struct Job {
 fn load(path: &str, arguments: &[u8]) -> Result<Job, &'static str> {
     let staging = Frames::new(16).ok_or("Not enough memory for the program loader.")?;
     let data = unsafe { core::slice::from_raw_parts_mut(staging.base() as *mut u8, 65536) };
-    let result = crate::diskfs::read_program(path, data);
-    let result = if matches!(result, Err(crate::fat16::Error::NotFound))
-        && !path.contains('/')
-        && !path.contains('\\')
-    {
-        let extension = if path.contains('.') { "" } else { ".BIN" };
-        let mut name = [0; 32];
-        let len = 6 + path.len() + extension.len();
-        if len > 32 {
-            return Err("Invalid program name.");
-        }
-        name[..6].copy_from_slice(b"/APPS/");
-        name[6..6 + path.len()].copy_from_slice(path.as_bytes());
-        name[6 + path.len()..len].copy_from_slice(extension.as_bytes());
-        crate::diskfs::read_program(core::str::from_utf8(&name[..len]).unwrap(), data)
-    } else {
-        result
-    };
+    let result=crate::diskfs::read_executable(path,data);
     let size = result.map_err(|e| e.message())?;
     if size == 0 {
         return Err("Program is empty.");
@@ -292,7 +276,7 @@ fn load(path: &str, arguments: &[u8]) -> Result<Job, &'static str> {
         return Err("Program arguments exceed 128 bytes.");
     }
     let mut program =
-        loader::load_binary(&data[..size]).ok_or("Not enough memory for program code/stack.")?;
+        loader::load(&data[..size]).map_err(|e|e.message())?;
     drop(staging);
     program.arguments[..arguments.len()].copy_from_slice(arguments);
     program.argument_length = arguments.len();
@@ -313,12 +297,13 @@ fn load(path: &str, arguments: &[u8]) -> Result<Job, &'static str> {
     let mut name = [0; 8];
     let name_length = stem.len().min(8);
     name[..name_length].copy_from_slice(&stem[..name_length]);
+    let entry=program.layout.entry;
     Ok(Job {
         pid,
         program,
         space,
         stack,
-        cpu: Cpu::new(),
+        cpu: {let mut cpu=Cpu::new();cpu.eip=entry;cpu},
         fpu: Fpu::fresh(),
         state: State::Ready,
         preemptions: 0,
@@ -413,6 +398,7 @@ fn root_slot(jobs: &[Option<Job>; LIMIT]) -> Option<usize> {
     (0..4).find(|&i| !jobs.iter().flatten().any(|j| j.task_slot == Some(i)))
 }
 fn sync_tasks(jobs: &[Option<Job>; LIMIT]) {
+    unsafe {DIRECTORIES=core::array::from_fn(|i|jobs[i].as_ref().map(|j|j.directory));}
     unsafe {
         RUNNING = jobs.iter().flatten().count();
         ROOTS = jobs
@@ -620,6 +606,7 @@ fn run(mut jobs: [Option<Job>; LIMIT], desktop: bool) {
         job.fpu.save();
         crate::pty::set_current(None);
         job.directory = crate::diskfs::directory();
+        unsafe {DIRECTORIES[index]=Some(job.directory);}
         crate::diskfs::set_directory(previous_directory);
         check_host_stack();
         assert!(
@@ -748,6 +735,7 @@ fn run(mut jobs: [Option<Job>; LIMIT], desktop: bool) {
         DESKTOP = false;
         REQUEST = None;
         RUNNING = 0;
+        DIRECTORIES=[None;LIMIT];
         PAUSE = None;
         SAVED = None;
     }
@@ -776,3 +764,7 @@ fn check_host_stack() {
         "supervisor stack overflow"
     );
 }
+
+pub fn directory_in_use(path:&crate::fs_path::Path)->bool {unsafe {(&*core::ptr::addr_of!(DIRECTORIES)).iter().flatten().any(|dir|path.contains(dir))}}
+
+const _:()=assert!(core::mem::size_of::<Job>()<=1024);

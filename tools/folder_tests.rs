@@ -180,3 +180,57 @@ fn folder_write_failures_preserve_files_and_readonly_folders_refuse_changes() {
     assert_eq!(fs.rmdir("locked"), Err(Error::ReadOnly));
     assert_eq!(*disk.bytes.borrow(), before);
 }
+#[test]
+fn rename_preserves_file_and_folder_contents_and_refuses_conflicts() {
+ let disk=Disk::new(false);let fs=Fat16::new(&disk).unwrap();fs.mkdir("docs").unwrap();fs.create("docs/a.txt").unwrap();fs.write("docs/a.txt",b"hello").unwrap();
+ let fat=disk.bytes.borrow()[512..65*512].to_vec();
+ fs.rename("docs/a.txt","docs/b.txt").unwrap();assert_eq!(fs.read("docs/a.txt",&mut [0;1024]),Err(Error::NotFound));
+ let mut out=[0;1024];assert_eq!(fs.read("docs/b.txt",&mut out),Ok(5));assert_eq!(&out[..5],b"hello");assert_eq!(&disk.bytes.borrow()[512..65*512],&fat);
+ fs.create("docs/c.txt").unwrap();let before=disk.bytes.borrow().clone();assert_eq!(fs.rename("docs/b.txt","docs/c.txt"),Err(Error::Exists));assert_eq!(*disk.bytes.borrow(),before);
+ fs.rename("docs","notes").unwrap();assert_eq!(fs.read("notes/b.txt",&mut out),Ok(5));assert!(fs.is_directory("docs").is_err());assert_eq!(fs.rename("notes/b.txt","other/b.txt"),Err(Error::NotFound));
+}
+#[test]
+fn file_copy_and_move_preserve_large_images_and_have_independent_chains() {
+ let disk=Disk::new(false);let fs=Fat16::new(&disk).unwrap();fs.mkdir("from").unwrap();fs.mkdir("to").unwrap();fs.create("from/a.bin").unwrap();let data:Vec<u8>=(0..65536).map(|x|(x%251) as u8).collect();fs.write_program("from/a.bin",&data).unwrap();let mut buffer=vec![0;65536];
+ fs.copy_file("from/a.bin","to/b.bin",&mut buffer).unwrap();assert_eq!(buffer,data);fs.delete("from/a.bin").unwrap();buffer.fill(0);assert_eq!(fs.read_program("to/b.bin",&mut buffer),Ok(65536));assert_eq!(buffer,data);
+ fs.move_file("to/b.bin","from/c.bin",&mut buffer).unwrap();assert_eq!(fs.read_program("to/b.bin",&mut buffer),Err(Error::NotFound));assert_eq!(fs.read_program("from/c.bin",&mut buffer),Ok(65536));assert_eq!(buffer,data);
+ fs.delete("from/c.bin").unwrap();fs.rmdir("from").unwrap();fs.rmdir("to").unwrap();assert!(disk.bytes.borrow()[512+4..33*512].iter().all(|&b|b==0));
+}
+#[test]
+fn transfers_refuse_existing_self_invalid_and_full_targets_without_losing_source() {
+ let disk=Disk::new(false);let fs=Fat16::new(&disk).unwrap();fs.create("a.txt").unwrap();fs.write("a.txt",b"original").unwrap();fs.create("b.txt").unwrap();fs.write("b.txt",b"keep").unwrap();let mut buffer=vec![0;65536];let before=disk.bytes.borrow().clone();
+ for target in ["a.txt","b.txt"] {assert_eq!(fs.copy_file("a.txt",target,&mut buffer),Err(Error::Exists));}assert_eq!(*disk.bytes.borrow(),before);
+ assert_eq!(fs.copy_file("a.txt","bad name.txt",&mut buffer),Err(Error::InvalidName));
+ // Fill every remaining data cluster. Copy must fail before publishing a target.
+ for c in 2..8192 {if fs::fat_unused(&disk,c) {disk.set_fat(c,0xffff);}}
+ assert_eq!(fs.copy_file("a.txt","new.txt",&mut buffer),Err(Error::Full));assert_eq!(fs.read("new.txt",&mut [0;1024]),Err(Error::NotFound));let mut out=[0;1024];assert_eq!(fs.read("a.txt",&mut out),Ok(8));assert_eq!(&out[..8],b"original");
+ // Renaming does not need free data clusters.
+ fs.move_file("a.txt","renamed.txt",&mut buffer).unwrap();assert_eq!(fs.read("renamed.txt",&mut out),Ok(8));
+}
+mod fs {pub fn fat_unused(d:&super::Disk,c:usize)->bool {let b=d.bytes.borrow();c*2+513<b.len()&&u16::from_le_bytes([b[512+c*2],b[513+c*2]])==0}}
+#[test]
+fn copy_failure_and_readonly_move_leave_source_untouched() {
+ let disk=Disk::new(false);let fs=Fat16::new(&disk).unwrap();fs.mkdir("dest").unwrap();fs.create("a.txt").unwrap();fs.write("a.txt",b"original").unwrap();let mut buffer=vec![0;65536];
+ disk.fail_after.set(Some(0));assert_eq!(fs.copy_file("a.txt","dest/new.txt",&mut buffer),Err(Error::Io));disk.fail_after.set(None);let mut out=[0;1024];assert_eq!(fs.read("a.txt",&mut out),Ok(8));assert_eq!(fs.read("dest/new.txt",&mut out),Err(Error::NotFound));
+ // The first regular file after DEST is read-only.
+ disk.bytes.borrow_mut()[65*512+32+11]|=1;
+ let before=disk.bytes.borrow().clone();assert_eq!(fs.move_file("a.txt","dest/new.txt",&mut buffer),Err(Error::ReadOnly));assert_eq!(*disk.bytes.borrow(),before);
+ fs.copy_file("a.txt","dest/ro.txt",&mut buffer).unwrap();assert_eq!(fs.write("dest/ro.txt",b"change"),Err(Error::ReadOnly));
+ assert_eq!(fs.copy_file("dest","folder",&mut buffer),Err(Error::NotFile));
+}
+#[test]
+fn recursive_transfers_preserve_subtrees_and_refuse_cycles_depth_and_readonly_moves() {
+ let disk=Disk::new(false);let fs=Fat16::new(&disk).unwrap();fs.mkdir("tree").unwrap();fs.mkdir("tree/sub").unwrap();fs.create("tree/sub/a.txt").unwrap();fs.write("tree/sub/a.txt",b"nested").unwrap();let mut data=vec![0;65536];
+ let before=disk.bytes.borrow().clone();assert_eq!(fs.transfer_tree("tree","tree/sub/copy",false,&mut data),Err(Error::InvalidName));assert_eq!(*disk.bytes.borrow(),before);
+ fs.transfer_tree("tree","copy",false,&mut data).unwrap();let mut out=[0;1024];assert_eq!(fs.read("copy/sub/a.txt",&mut out),Ok(6));assert_eq!(&out[..6],b"nested");
+ fs.mkdir("dest").unwrap();fs.transfer_tree("copy","dest/moved",true,&mut data).unwrap();assert!(fs.is_directory("copy").is_err());assert_eq!(fs.read("dest/moved/sub/a.txt",&mut out),Ok(6));assert_eq!(fs.read("tree/sub/a.txt",&mut out),Ok(6));
+ assert_eq!(fs.transfer_tree("tree","dest/moved",false,&mut data),Err(Error::Exists));
+ // Mark a nested leaf read-only; move must fail before creating a destination.
+ {let mut bytes=disk.bytes.borrow_mut();let at=(0..bytes.len()).step_by(32).find(|&i|bytes.get(i..i+11)==Some(b"A       TXT")).unwrap();bytes[at+11]|=1;}
+ let before=disk.bytes.borrow().clone();assert_eq!(fs.transfer_tree("tree","dest/denied",true,&mut data),Err(Error::ReadOnly));assert_eq!(*disk.bytes.borrow(),before);
+ fs.transfer_tree("tree","readonly",false,&mut data).unwrap();assert_eq!(fs.write("readonly/sub/a.txt",b"change"),Err(Error::ReadOnly));
+
+ fs.mkdir("a").unwrap();fs.mkdir("a/b").unwrap();fs.mkdir("a/b/c").unwrap();fs.mkdir("a/b/c/d").unwrap();fs.mkdir("a/b/c/d/e").unwrap();fs.mkdir("a/b/c/d/e/f").unwrap();fs.mkdir("a/b/c/d/e/f/g").unwrap();let before=disk.bytes.borrow().clone();assert_eq!(fs.transfer_tree("tree","a/b/c/d/e/f/g/t",false,&mut data),Err(Error::PathTooDeep));assert_eq!(*disk.bytes.borrow(),before);
+}
+
+#[test]fn large_saves_create_replace_and_preserve_files_on_errors(){let disk=Disk::new(false);let fs=Fat16::new(&disk).unwrap();let data:Vec<u8>=(0..65536).map(|i|(i%251) as u8).collect();disk.fail_after.set(Some(0));assert_eq!(fs.save_large("new.txt",&data),Err(Error::Io));disk.fail_after.set(None);assert_eq!(fs.file_size("new.txt"),Err(Error::NotFound));fs.save_large("big.txt",&data).unwrap();assert_eq!(fs.file_size("big.txt"),Ok(65536));let mut out=vec![0;65536];assert_eq!(fs.read_program("big.txt",&mut out),Ok(65536));assert_eq!(out,data);disk.fail_after.set(Some(0));assert_eq!(fs.save_large("big.txt",b"replacement"),Err(Error::Io));disk.fail_after.set(None);assert_eq!(fs.read_program("big.txt",&mut out),Ok(65536));assert_eq!(out,data);disk.bytes.borrow_mut()[65*512+11]|=1;assert_eq!(fs.save_large("big.txt",b"change"),Err(Error::ReadOnly));assert_eq!(fs.save_large("too.txt",&vec![0;65537]),Err(Error::ProgramTooLarge));assert_eq!(fs.file_size("too.txt"),Err(Error::NotFound));}

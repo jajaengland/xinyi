@@ -39,7 +39,7 @@ def main():
     move(x,y)
     for down in [True,False]:g.call('input-send-event',{'events':[{'type':'btn','data':{'button':'left','down':down}}]});time.sleep(.06)
    def select(name):
-    names=sorted(k.split('/')[-1][:-4] for k in inspect_tree(image,2048)[0] if k.startswith('APPS/') and k.count('/')==1 and k.endswith('.BIN'))
+    names=sorted(k.split('/')[-1][:-4] for k in inspect_tree(image,2048)[0] if k.startswith('APPS/') and k.count('/')==1 and k.endswith(('.BIN','.ELF')))
     offset=len(log());click(40,11);click(40,30+4+names.index(name)*24+12);return offset
    def launch(name,window=True):
     offset=select(name)

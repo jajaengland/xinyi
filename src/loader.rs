@@ -1,10 +1,10 @@
 // Owned physical backing for private user code/stack mappings.
-// Foreground and scheduled flat images; ELF parsing and writable globals are pending.
+// Foreground and scheduled flat/static ELF images with private writable data.
 use crate::phys;
 
 pub const FRAME_BYTES: usize = 4096;
 pub const STACK_PAGES: usize = 4;
-pub const KERNEL_STACK_PAGES:usize=16;
+pub const KERNEL_STACK_PAGES: usize = 16;
 pub const MAX_BINARY_BYTES: usize = 64 * 1024;
 pub const DEMO_BINARY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/demo.bin"));
 
@@ -46,6 +46,7 @@ impl Drop for Frames {
     }
 }
 pub struct LoadedProgram {
+    pub layout: crate::elf::Image,
     pub image: Frames,
     pub stack: Frames,
     pub size: u32,
@@ -53,19 +54,68 @@ pub struct LoadedProgram {
     pub argument_length: usize,
 }
 pub fn load_binary(data: &[u8]) -> Option<LoadedProgram> {
-    if data.is_empty() || data.len() > MAX_BINARY_BYTES {
-        return None;
+    load(data).ok()
+}
+#[derive(Debug)]
+pub enum LoadError {
+    Empty,
+    TooLarge,
+    InvalidElf(crate::elf::Error),
+    Memory,
+}
+impl LoadError {
+    pub fn message(&self) -> &'static str {
+        match self {
+            Self::Empty => "Program is empty.",
+            Self::TooLarge => "Program file exceeds 64 KiB.",
+            Self::InvalidElf(_) => "Invalid or unsupported ELF executable.",
+            Self::Memory => "Not enough memory for program code/stack.",
+        }
     }
-    let image = Frames::new(data.len().div_ceil(FRAME_BYTES))?;
-    let stack = Frames::new(STACK_PAGES)?;
-    unsafe {
-        core::ptr::copy_nonoverlapping(data.as_ptr(), image.base() as *mut u8, data.len());
+}
+pub fn load(data: &[u8]) -> Result<LoadedProgram, LoadError> {
+    if data.is_empty() {
+        return Err(LoadError::Empty);
     }
-    Some(LoadedProgram {
+    if data.len() > MAX_BINARY_BYTES {
+        return Err(LoadError::TooLarge);
+    }
+    let layout = if data.starts_with(b"\x7fELF") {
+        crate::elf::parse(data).map_err(LoadError::InvalidElf)?
+    } else {
+        let mut segments = [crate::elf::Segment::default(); crate::elf::MAX_SEGMENTS];
+        segments[0] = crate::elf::Segment {
+            address: crate::elf::BASE,
+            offset: 0,
+            file_size: data.len() as u32,
+            memory_size: data.len() as u32,
+            flags: 5,
+        };
+        crate::elf::Image {
+            segments,
+            count: 1,
+            entry: crate::elf::BASE,
+            span: data.len() as u32,
+        }
+    };
+    let image =
+        Frames::new((layout.span as usize).div_ceil(FRAME_BYTES)).ok_or(LoadError::Memory)?;
+    let stack = Frames::new(STACK_PAGES).ok_or(LoadError::Memory)?;
+    for s in &layout.segments[..layout.count] {
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                data.as_ptr().add(s.offset as usize),
+                (image.base() + s.address - crate::elf::BASE) as *mut u8,
+                s.file_size as usize,
+            );
+        }
+    }
+    Ok(LoadedProgram {
+        layout,
         image,
         stack,
-        size: data.len() as u32,
-        arguments: [0;128],
+        size: layout.span,
+        arguments: [0; 128],
         argument_length: 0,
     })
 }

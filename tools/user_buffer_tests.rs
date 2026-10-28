@@ -1,4 +1,17 @@
 #[path = "../src/user_buffer.rs"] mod user_buffer;
+
+#[test]
+fn large_fixed_requests_still_require_a_single_valid_user_range() {
+    use user_buffer::{readable, readable_range};
+    assert!(!readable(0x403fc000,3468,65536));
+    assert!(readable_range(0x403fc000,3468,65536));
+    assert!(readable_range(0x40000000,3468,3468));
+    assert!(!readable_range(0x40000000,3468,3467));
+    assert!(!readable_range(0x403ffff0,3468,65536));
+    assert!(!readable_range(0x4000fff0,3468,65536));
+    assert!(!readable_range(0xfffffff0,3468,65536));
+    assert!(!readable_range(0x100000,3468,65536));
+}
 #[test]
 fn file_outputs_accept_only_writable_stack_ranges() {
     use user_buffer::writable;

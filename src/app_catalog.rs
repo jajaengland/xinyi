@@ -30,7 +30,7 @@ impl Catalog {
     }
     pub fn add(&mut self, name: &[u8; 11], directory: bool) {
         if directory
-            || !name[8..].eq_ignore_ascii_case(b"BIN")
+            || !(name[8..].eq_ignore_ascii_case(b"BIN")||name[8..].eq_ignore_ascii_case(b"ELF"))
             || !name
                 .iter()
                 .all(|b| (32..=126).contains(b) && !b"/\\:".contains(b))
@@ -44,6 +44,7 @@ impl Catalog {
         if length == 0 {
             return;
         }
+        if let Some(i)=self.entries[..self.len].iter().position(|e|e.label_len==length&&e.label[..length]==name[..length]){if self.entries[i].path[..self.entries[i].path_len].ends_with(b"BIN")||name[8..].eq_ignore_ascii_case(b"ELF"){return;}let n=self.entries[i].path_len;self.entries[i].path[n-3..n].copy_from_slice(b"BIN");return;}
         if self.len == MAX_APPS {
             self.truncated = true;
             return;

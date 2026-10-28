@@ -53,20 +53,23 @@ def main():
                    cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/terminal_clipboard_qemu.py"),"--disk",str(image),"--vga","cirrus","--usb"],
                    cwd=ROOT,env=environment,check=True)
-    for suite in ("pty_qemu.py", "files_qemu.py", "window_lifecycle_qemu.py"):
+    for suite in ("pty_qemu.py", "files_qemu.py", "files_settings_qemu.py", "widgets_qemu.py", "elf_qemu.py", "large_files_qemu.py", "resize_qemu.py", "maximize_qemu.py", "window_lifecycle_qemu.py"):
         subprocess.run([sys.executable,str(ROOT/"tools"/suite),"--disk",str(image),"--vga","cirrus","--usb"],
                        cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/power_qemu.py"),"--disk",str(image),"--kernel",str(kernel)],cwd=ROOT,env=environment,check=True)
     shutil.copyfile(kernel,directory/"rust-os")
     shutil.copyfile(ROOT/"programs/apps.txt",directory/"applications.txt")
     (directory/"README.txt").write_text(
         "Xinyi BIOS-bootable release\n\nPrograms are ordinary files in /APPS, not embedded in the kernel.\n"
+        "ELF apps support writable globals, zeroed BSS and a private 1 MiB heap; run memdemo to try Vec/Box.\n"
         "The installed system drive mounts automatically. Type apps, run snake, run tetris, edit note.txt or notepad note.txt.\n"
+        "Notepad Open/Save As browses folders; Terminal has a draggable scrollbar beside its full 80-column text area.\n"
         "Editor: Ctrl+S save, Ctrl+Shift+S Save As, Ctrl+O open, Ctrl+N new, Ctrl+Z/Y undo/redo, Ctrl+Q quit.\n"
         "Notepad: drag or Shift+arrows to select, Ctrl+A select all, Ctrl+C/X/V shared clipboard.\n"
         "Type terminal (or use Apps) for a graphical command window: help, pwd/cd, ls, cat, file operations and run APP.\n"
         "Terminal uses the normal shell; text programs run inside its window. Ctrl+C interrupts; Ctrl+Shift+C copies; Ctrl+V pastes.\n"
         "Each desktop app has its own working directory; terminal-launched children inherit that terminal's directory.\n"
-        "Text files currently support ASCII and up to 1024 bytes. Save errors retain the document.\n"
+        "Notepad supports 64 KiB ASCII documents, a scrollbar and four undo steps. EDIT/shell text commands and clipboard retain a 1024-byte limit. Save errors retain the document.\n"
         "Use disks to list numbered drives, use NUMBER to switch, and install NUMBER to preview installation.\n"
         "Installation copies /APPS from the currently mounted source to the destination after confirmation.\n"
         "BIOS disk/USB boots mount the actual boot filesystem as drive 0; IDE destinations use install NUMBER.\n"
@@ -80,6 +83,10 @@ def main():
         "Ctrl+Alt+K stops the focused app; multitask hog verifies timer preemption of a CPU-bound app.\n"
         "Up to four apps run together. Close apps before Exit; Escape cancels menus or goes to the focused app.\n"
         "Choose FILES in Apps to browse folders, open files, create folders and confirm deletions.\n"
+        "Drag lower-right grips to resize Files/Notepad; Terminal grows vertically and keeps 80 columns. Maximize/restore with the title-bar button or double-click; normal placement is remembered.\n"
+        "shutdown flushes the disk and powers off or safely halts; in Desktop, save your work then shutdown confirm.\n"
+        "Files: Ctrl/Shift-click selects multiple items; right-click opens actions. Copy/Move/Paste works across Files windows and transfers folders.\n"
+        "Settings: choose desktop/title colours; Apply previews, Save writes /GUI.CFG for future boots.\n"
         "The mouse/windowtest tests and application windows use a simple built-in ASCII bitmap font.\n"
         "Notepad is /APPS/NOTEPAD.BIN: mouse toolbar, keyboard editing, Ctrl+S save, Ctrl+Q quit.\n"
         "USB access uses BIOS EDD for the boot drive only; no hotplug/native USB or UEFI support.\n"

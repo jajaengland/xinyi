@@ -1,5 +1,5 @@
 //! Minimal freestanding Rust interface for Xinyi's current flat-image ABI.
-#![allow(dead_code)]
+#![allow(dead_code,unexpected_cfgs)]
 use core::arch::asm;
 
 pub fn syscall(number: u32, first: u32, second: u32, third: u32) -> i32 {
@@ -145,7 +145,9 @@ mod window_protocol;
 pub mod window {
     use super::window_protocol as protocol;
     #[allow(unused_imports)]
-    pub use protocol::{Draw, Event, CLOSE, HEIGHT, KEY, POINTER, RESET, WIDTH, MAX_COMMANDS};
+    pub use protocol::{Draw, Event, CLOSE, HEIGHT, KEY, POINTER, RESET, RESIZE, WIDTH, MAX_COMMANDS};
+    pub fn resizable(handle:u32,min_width:u16,min_height:u16,max_width:u16,max_height:u16)->i32{super::syscall(85,handle,min_width as u32|((min_height as u32)<<16),max_width as u32|((max_height as u32)<<16))}
+    pub fn resize(handle:u32,event:Event)->i32{if event.kind!=RESIZE{return -22;}super::syscall(86,handle,event.x as u32|((event.y as u32)<<16),0)}
     pub fn open(title: &[u8]) -> i32 {
         super::syscall(60, title.as_ptr() as u32, title.len() as u32, 0)
     }
@@ -158,7 +160,7 @@ pub mod window {
         super::syscall(62, handle, commands.as_ptr() as u32, commands.len() as u32)
     }
     pub fn row(handle: u32, x: u32, y: u32, bg: u32, fg: u32, text: &[u8]) -> i32 {
-        if text.len()>80 {return -22;}
+        if text.len()>96 {return -22;}
         draw(
             handle,
             &[
@@ -187,6 +189,7 @@ pub fn working_directory(output:&mut [u8;105])->i32 {syscall(70,output.as_mut_pt
 pub fn launch(command:&[u8])->i32 {syscall(71,command.as_ptr() as u32,command.len() as u32,0)}
 
 pub mod pty {
+ pub fn viewport(handle:u32,rows:u32)->i32{super::syscall(72,8,handle,rows)}
  pub fn open()->i32 {super::syscall(72,0,0,0)}
  pub fn control(handle:u32,operation:u32)->i32 {super::syscall(72,operation,handle,0)}
  pub fn present(handle:u32,window:u32,scroll:u32)->i32 {super::syscall(73,handle,window,scroll)}
@@ -200,10 +203,57 @@ pub mod pty {
 #[path="../src/directory_protocol.rs"]
 mod directory_protocol;
 pub mod directory {
+ pub fn action_on(path:&[u8],operation:u16,volume:u32)->i32 {
+  if path.is_empty()||path.len()>105||operation>2{return -22;}
+  let mut r=super::directory_protocol::Transfer{source:[0;105],destination:[0;105],source_length:path.len() as u16,destination_length:0,operation:operation+3,volume};r.source[..path.len()].copy_from_slice(path);
+  super::syscall(81,&r as *const _ as u32,220,0)
+ }
+
+ /// 0 renames within a folder, 1 copies a file/tree, 2 moves a file/tree. No overwrites.
+ pub fn volume()->u32 {super::syscall(82,0,0,0) as u32}
+ pub fn transfer(source:&[u8],destination:&[u8],operation:u16)->i32 {transfer_on(source,destination,operation,volume())}
+ pub fn transfer_on(source:&[u8],destination:&[u8],operation:u16,volume:u32)->i32 {
+  if source.is_empty()||source.len()>105||destination.is_empty()||destination.len()>105||operation>2 {return -22;}
+  let mut r=super::directory_protocol::Transfer{source:[0;105],destination:[0;105],source_length:source.len() as u16,destination_length:destination.len() as u16,operation,volume};
+  r.source[..source.len()].copy_from_slice(source);r.destination[..destination.len()].copy_from_slice(destination);
+  super::syscall(81,&r as *const _ as u32,220,0)
+ }
+
  #[allow(unused_imports)]
  pub use super::directory_protocol::{Entry,Listing};
  pub fn list(path:&[u8],offset:u16,out:&mut Listing)->i32 {super::syscall(78,path.as_ptr() as u32,path.len() as u32|((offset as u32)<<16),out as *mut _ as u32)}
  pub fn cd(path:&[u8])->i32 {super::syscall(79,path.as_ptr() as u32,path.len() as u32,0)}
  /// 0 creates a directory, 1 deletes a file, 2 removes an empty directory.
  pub fn action(path:&[u8],operation:u32)->i32 {super::syscall(80,path.as_ptr() as u32,path.len() as u32,operation)}
+}
+
+pub mod file_clipboard {
+ pub use super::directory_protocol::FileClipboard as Selection;
+ pub fn get(out:&mut Selection)->i32 {super::syscall(83,1,out as *mut _ as u32,3468)}
+ pub fn set(selection:&Selection)->i32 {super::syscall(83,0,selection as *const _ as u32,3468)}
+ pub fn update(selection:&Selection)->i32 {super::syscall(83,2,selection as *const _ as u32,3468)}
+}
+#[path="../src/theme_model.rs"]mod theme_model;
+pub mod appearance {
+ #[allow(unused_imports)]
+ pub use super::theme_model::{Theme,hex};
+ pub fn get(out:&mut Theme)->i32 {super::syscall(84,0,out as *mut _ as u32,8)}
+ pub fn apply(theme:&Theme,save:bool)->i32 {super::syscall(84,if save{2}else{1},theme as *const _ as u32,8)}
+}
+
+#[path="widgets.rs"]pub mod widgets;
+#[path="gui.rs"]pub mod gui;
+#[path="file_dialog.rs"]pub mod file_dialog;
+
+#[cfg(xinyi_elf)]
+#[path="heap.rs"]pub mod heap;
+
+pub mod files {
+ #[repr(C)]struct Request{path:u32,path_length:u32,data:u32,length:u32,volume:u32}
+ fn call(number:u32,path:&[u8],data:u32,length:usize,volume:u32)->i32 {if path.is_empty()||path.len()>105||length>65536{return -22;}let request=Request{path:path.as_ptr() as u32,path_length:path.len() as u32,data,length:length as u32,volume};super::syscall(number,&request as *const _ as u32,20,0)}
+ pub fn read(path:&[u8],output:&mut[u8])->i32{read_on(path,output,super::directory::volume())}
+ pub fn read_on(path:&[u8],output:&mut[u8],volume:u32)->i32{call(88,path,output.as_mut_ptr() as u32,output.len(),volume)}
+ pub fn save(path:&[u8],data:&[u8])->i32{save_on(path,data,super::directory::volume())}
+ pub fn save_on(path:&[u8],data:&[u8],volume:u32)->i32{call(89,path,data.as_ptr() as u32,data.len(),volume)}
+ pub fn size_on(path:&[u8],volume:u32)->i32{call(90,path,0,0,volume)}
 }

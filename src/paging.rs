@@ -117,6 +117,7 @@ pub fn init() -> Result<(), &'static str> {
 pub struct AddressSpace {
     directory: crate::loader::Frames,
     _table: crate::loader::Frames,
+    state: crate::loader::Frames,
 }
 pub fn isolation_available() -> bool {
     let state = status();
@@ -129,11 +130,21 @@ impl AddressSpace {
         }
         let image_pages = (program.image.top() - program.image.base()) / 4096;
         let stack_pages = (program.stack.top() - program.stack.base()) / 4096;
-        if image_pages == 0 || image_pages > 16 || stack_pages != 4 {
+        if image_pages == 0 || image_pages > 256 || stack_pages != 4 {
             return None;
         }
         let directory = crate::loader::Frames::new(1)?;
         let table = crate::loader::Frames::new(1)?;
+        let state = crate::loader::Frames::new(1)?;
+        unsafe {
+            (state.base() as *mut MemoryState).write(MemoryState {
+                layout: program.layout,
+                heap: core::cell::UnsafeCell::new(Heap {
+                    end: crate::elf::HEAP_BASE,
+                    pages: [const { None }; 256],
+                }),
+            });
+        }
         unsafe {
             let entries = directory.base() as *mut u32;
             core::ptr::copy_nonoverlapping(
@@ -145,10 +156,17 @@ impl AddressSpace {
                 .add((USER_BASE / PAGE_SIZE) as usize)
                 .write(table.base() | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER);
             let pages = table.base() as *mut u32;
-            for index in 0..image_pages {
-                pages
-                    .add(index as usize)
-                    .write((program.image.base() + index * 4096) | PAGE_PRESENT | PAGE_USER);
+            for s in &program.layout.segments[..program.layout.count] {
+                let first = (s.address - USER_BASE) / 4096;
+                let end = (s.address + s.memory_size - USER_BASE + 4095) / 4096;
+                for index in first..end {
+                    pages.add(index as usize).write(
+                        (program.image.base() + index * 4096)
+                            | PAGE_PRESENT
+                            | PAGE_USER
+                            | if s.flags & 2 != 0 { PAGE_WRITABLE } else { 0 },
+                    );
+                }
             }
             for index in 0..stack_pages {
                 pages.add((1024 - stack_pages + index) as usize).write(
@@ -162,6 +180,7 @@ impl AddressSpace {
         Some(Self {
             directory,
             _table: table,
+            state,
         })
     }
     pub fn directory(&self) -> u32 {
@@ -174,5 +193,78 @@ impl Drop for AddressSpace {
             read_cr3() != self.directory(),
             "cannot free active page tables"
         );
+        unsafe {
+            core::ptr::drop_in_place(self.state.base() as *mut MemoryState);
+        }
     }
 }
+
+struct MemoryState {
+    layout: crate::elf::Image,
+    heap: core::cell::UnsafeCell<Heap>,
+}
+const _: () = assert!(core::mem::size_of::<MemoryState>() <= 4096);
+struct Heap {
+    end: u32,
+    pages: [Option<crate::loader::Frames>; 256],
+}
+impl AddressSpace {
+    pub fn permits(&self, pointer: u32, length: u32, write: bool) -> bool {
+        {
+            let state = unsafe { &*(self.state.base() as *const MemoryState) };
+            state
+                .layout
+                .permits(pointer, length, write, unsafe { (&*state.heap.get()).end })
+        }
+    }
+    pub fn heap_break(&self, end: u32) -> Result<u32, i32> {
+        let state = unsafe { &*(self.state.base() as *const MemoryState) };
+        let h = unsafe { &mut *state.heap.get() };
+        if end == 0 {
+            return Ok(h.end);
+        }
+        if !(crate::elf::HEAP_BASE..=crate::elf::HEAP_END).contains(&end) {
+            return Err(-22);
+        }
+        let old = (h.end - crate::elf::HEAP_BASE).div_ceil(4096) as usize;
+        let new = (end - crate::elf::HEAP_BASE).div_ceil(4096) as usize;
+        for i in old..new {
+            let Some(frame) = crate::loader::Frames::new(1) else {
+                for j in old..i {
+                    h.pages[j] = None;
+                }
+                return Err(-12);
+            };
+            h.pages[i] = Some(frame);
+        }
+        let table = self._table.base() as *mut u32;
+        for i in old..new {
+            unsafe {
+                table.add(256 + i).write(
+                    h.pages[i].as_ref().unwrap().base() | PAGE_PRESENT | PAGE_USER | PAGE_WRITABLE,
+                );
+            }
+        }
+        for i in new..old {
+            unsafe {
+                table.add(256 + i).write(0);
+            }
+        }
+        if read_cr3() == self.directory() {
+            for i in new.min(old)..new.max(old) {
+                let address = crate::elf::HEAP_BASE + i as u32 * 4096;
+                unsafe {
+                    asm!("invlpg [{0:e}]",in(reg)address,options(nostack,preserves_flags));
+                }
+            }
+        }
+        for i in new..old {
+            h.pages[i] = None;
+        }
+        h.end = end;
+        Ok(end)
+    }
+}
+
+// Heap bookkeeping stays in owned kernel pages, never in scheduler stack records.
+const _:()=assert!(core::mem::size_of::<AddressSpace>()<=32);

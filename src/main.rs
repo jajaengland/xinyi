@@ -2,6 +2,8 @@
 #![no_main]
 
 mod debug;
+mod power;
+mod acpi_sleep;
 mod gdt;
 mod interrupts;
 mod syscall_frame;
@@ -13,10 +15,15 @@ mod rtc;
 mod task;
 mod usermode;
 mod user_buffer;
+mod user_memory;
+mod elf;
 mod terminal;
 mod speaker;
 mod files_api;
 mod clipboard;
+mod file_clipboard;
+mod theme;
+mod theme_model;
 mod terminal_service;
 mod directory_api;
 mod directory_protocol;
@@ -82,6 +89,7 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("help", "help", "Show available commands"),
     ("multitask", "multitask [hog|fault|check|wait]", "Run two isolated counter programs concurrently"),
     ("files", "files", "Open the file manager"),
+    ("settings", "settings", "Open appearance settings"),
     ("terminal", "terminal", "Open a graphical terminal window"),
     ("desktop", "desktop", "Open the multitasking desktop and Apps menu"),
     ("windowtest", "windowtest", "Run the legacy window/launcher diagnostic"),
@@ -137,6 +145,7 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("disk", "disk [scan|select]", "Test, scan, or explicitly select an IDE disk"),
     ("install", "install [NUMBER]", "Preview installation and copying /APPS to a drive"),
     ("reboot", "reboot", "Reboot the machine"),
+    ("shutdown", "shutdown [confirm]", "Flush disks and power off or halt"),
 ];
 
 #[macro_export]
@@ -163,24 +172,10 @@ fn launch_program(name:&str,arguments:&str)->bool {
     if arguments.len()>128 {println!("Program arguments exceed 128 bytes.");return false;}
     let Some(staging)=loader::Frames::new(loader::MAX_BINARY_BYTES/4096) else {println!("Out of memory");return false;};
     let data=unsafe {core::slice::from_raw_parts_mut(staging.base() as *mut u8,loader::MAX_BINARY_BYTES)};
-    let explicit=name.contains('/')||name.contains('\\');
-    let mut path=[0u8;32];
-    let result=if explicit {diskfs::read_program(name,data)} else {
-        match diskfs::read_program(name,data) {
-            Err(fat16::Error::NotFound)=>{
-                let extension=if name.contains('.') {""}else{".bin"};
-                let length=6+name.len()+extension.len();
-                if length>path.len() {println!("Invalid program name.");return false;}
-                path[..6].copy_from_slice(b"/APPS/");path[6..6+name.len()].copy_from_slice(name.as_bytes());
-                path[6+name.len()..length].copy_from_slice(extension.as_bytes());
-                diskfs::read_program(core::str::from_utf8(&path[..length]).unwrap(),data)
-            }
-            result=>result,
-        }
-    };
+    let result=diskfs::read_executable(name,data);
     let size=match result {Ok(0)=>{println!("Program is empty.");return false;},Ok(size)=>size,
         Err(error)=>{println!("Program: {}",error.message());return false;}};
-    let Some(mut program)=loader::load_binary(&data[..size]) else {println!("Out of memory");return false;};
+    let mut program=match loader::load(&data[..size]){Ok(p)=>p,Err(e)=>{println!("{}",e.message());return false;}};
     drop(staging);
     program.arguments[..arguments.len()].copy_from_slice(arguments.as_bytes());program.argument_length=arguments.len();
     if let Some(pid)=task::create_task(program) {println!("Running process {}...",pid);task::execute(pid);true}
@@ -484,6 +479,7 @@ fn run_command(input: &str) {
         "edit" => {launch_program("edit", argument);},
         "notepad" => {launch_program("notepad", argument);},
         "files" => {launch_program("files", argument);},
+        "settings" => {launch_program("settings", argument);},
         "terminal" => {launch_program("terminal", argument);},
         "disks" => diskfs::list_drives(),
         "use" => match argument.parse::<usize>() {
@@ -729,6 +725,7 @@ fn run_command(input: &str) {
             }
         }
 
+        "shutdown" => {if !argument.is_empty()&&argument!="confirm"{println!("Usage: shutdown [confirm]");}else if multitask::active()&&argument!="confirm"{println!("Shutdown closes running applications. Save your work, then shutdown confirm.");}else{power::shutdown();}}
         "reboot" => {
             println!("Rebooting...");
 
@@ -835,6 +832,8 @@ pub extern "C" fn rust_main(magic: u32, info_addr: u32) -> ! {
     println!("32-bit Rust kernel");
     println!("Type 'help' to see commands.");
     diskfs::startup_mount();
+    theme::load();
+    power::init();
     println!();
 
     shell::Shell::physical()
