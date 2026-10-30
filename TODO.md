@@ -2,7 +2,7 @@
 
 ## Selected major milestones (in order)
 
-1. [x] Initial audio system: AC97 PCM output, media permissions and WAV/test-sound Player.
+1. [x] Initial audio system: AC97 PCM output, media permissions and WAV Player with bundled dndt recording.
    - [x] Voice system sounds, shared info/notification clip, volume/mute/preview, saved settings and playback debounce.
 2. [x] Graphics and fonts foundation: shared pixel metrics, proportional UI text, wrapping/clipping, faster glyph drawing and Fonts demo.
 3. [x] Desktop shell redesign: bottom taskbar, searchable launcher, desktop shortcuts, clock, sound popup and new window chrome.
@@ -13,6 +13,14 @@
    - [ ] App manager for install/update/remove, default-app selection and permission controls.
 
 ## Next priorities
+
+Networking development is deferred; it remains off by default behind the developer command. Native USB input and broader laptop audio support are also deferred.
+
+- [ ] Desktop icon rearrangement, multiple selection and context menus.
+- [ ] Recycle bin and restore before permanent deletion.
+- [ ] Files icon/compact views, sorting and clearer transfer progress.
+- [ ] Safe app updates/recovery and launcher pagination beyond 16 apps.
+- [ ] Further app isolation and kernel hardening before downloadable apps.
 
 - [x] Alt+Tab / Shift+Alt+Tab window switching, Alt+F4 close requests and Ctrl+Esc Apps keyboard navigation.
 - [x] Queued desktop application file operations with a block-bounded worker and visible I/O activity.
@@ -65,4 +73,3 @@ Keep generated artifacts out of Git. Update the relevant docs and run checks app
 
 - [x] Desktop Files drag/drop: multi-selection, folder targets, Copy/Shift-move, feedback, cancellation and clipboard independence.
 - [x] Persistent wallpaper file/folder icons, Files/wallpaper transfers, and drops into Notepad/Player.
-- [ ] Desktop icon rearrangement, multiple selection and context menus.
