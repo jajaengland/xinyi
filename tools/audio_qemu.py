@@ -68,20 +68,21 @@ def main():
                 m=re.search(r'Multiwindow: open pid='+str(pid)+r' handle=\d+ surface=([0-9a-f]+) client=(\d+)x(\d+)',log());return int(m[1],16),int(m[2]),int(m[3])
             def memory(p,n):
                 f=d/'memory.bin';g.call('human-monitor-command',{'command-line':f'pmemsave {p:#x} {n} "{f.as_posix()}"'});return f.read_bytes()
-            counter=launch('COUNTER');player=launch('PLAYER');g.key('t');until(lambda:f'Audio: open pid={player} stream=1' in log(),'test sound did not start')
+            counter=launch('COUNTER');player=launch('PLAYER');g.key('t');until(lambda:f'Audio: open pid={player} stream=1' in log(),'bundled dndt.wav did not start')
             pointer,w,_=window(counter);before=memory(pointer+w*92*4,w*18*4);terminal=launch('TERMINAL')
-            g.type('run --media audcheck busy\n');until(lambda:'Desktop: terminal launch pid=' in log(),'busy probe launch')
+            # Restart the short bundled clip just before submitting the ownership probe.
+            g.type('run --media audcheck busy');g.key('alt-shift-tab');g.key('t');g.key('alt-tab');g.key('ret');until(lambda:'Desktop: terminal launch pid=' in log(),'busy probe launch')
             probe=int(re.findall(r'Desktop: terminal launch pid=(\d+) ',log())[-1]);until(lambda:f'Scheduler: exit pid={probe} code=0' in log(),'foreign stream control not refused')
             assert memory(pointer+w*92*4,w*18*4)!=before,'Counter froze during audio'
             # Alt+Tab cycles stable root order Counter -> Player -> Terminal.
             g.key('alt-shift-tab');start=len(log());g.key('ctrl-o');g.type('/apps/demo.wav\n')
-            until(lambda:f'Audio: open pid={player} stream=2' in log()[start:],'WAV did not start')
-            until(lambda:f'Audio: closed pid={player} stream=2' in log()[start:],'WAV failed to drain')
+            until(lambda:f'Audio: open pid={player} stream=3' in log()[start:],'WAV did not start')
+            until(lambda:f'Audio: closed pid={player} stream=3' in log()[start:],'WAV failed to drain')
             g.call('screendump',{'filename':str(out/'audio-player.png'),'format':'png'})
-            start=len(log());g.key('t');until(lambda:f'Audio: open pid={player} stream=3' in log()[start:],'restart sound')
+            start=len(log());g.key('t');until(lambda:f'Audio: open pid={player} stream=4' in log()[start:],'restart sound')
             g.key('ctrl-alt-k');until(lambda:f'Audio: owner {player} closed' in log()[start:],'forced termination left PCM running')
             until(lambda:f'Scheduler: forced exit pid={player}' in log(),'player did not exit')
-            g.type('run --media audcheck\n');start=len(log());until(lambda:re.search(r'Desktop: terminal launch pid=(\d+)',log()[start:]),'new audio owner')
+            start=len(log());g.type('run --media audcheck\n');until(lambda:re.search(r'Desktop: terminal launch pid=(\d+)',log()[start:]),'new audio owner')
             probe=int(re.search(r'Desktop: terminal launch pid=(\d+)',log()[start:])[1]);until(lambda:f'Scheduler: exit pid={probe} code=0' in log(),'audio stream not reclaimed')
             g.key('alt-f4');until(lambda:f'Scheduler: exit pid={terminal} code=0' in log(),'terminal close')
             g.key('alt-f4');until(lambda:f'Scheduler: exit pid={counter} code=0' in log(),'counter close');time.sleep(.3)
@@ -93,7 +94,7 @@ def main():
             data=array('h');data.frombytes(f.readframes(f.getnframes()));assert sum(v*v for v in data)>1000000,'Player produced no audio'
         left=data[::2];window=4800
         cosine=[math.cos(2*math.pi*880*i/48000) for i in range(window)];sine=[math.sin(2*math.pi*880*i/48000) for i in range(window)]
-        # Find the resampled 880 Hz WAV, rather than accepting only the built-in tone.
+        # Find the resampled 880 Hz WAV, rather than accepting only the bundled recording.
         detected=False
         for start in range(0,len(left)-window,window//2):
             c=sum(left[start+i]*cosine[i] for i in range(window));s=sum(left[start+i]*sine[i] for i in range(window))

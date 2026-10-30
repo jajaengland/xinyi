@@ -1,0 +1,1 @@
+Player embeds `dndt.wav` directly in its ELF executable. The user-supplied recording is preserved unchanged: 44,100 Hz, stereo, 16-bit PCM, 68,507 frames (about 1.55 seconds), 274,072 bytes. No conversion tools or external audio file are required at build/runtime. Player converts it to 48,000 Hz stereo using the same PCM path as opened WAV files.

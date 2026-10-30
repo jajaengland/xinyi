@@ -49,35 +49,37 @@ fn number(out: &mut [u8], mut value: u32) {
         value /= 10;
     }
 }
-fn triangle(frame: u32, hz: u32) -> i32 {
-    let p = (frame * hz) % 48000;
-    (if p < 24000 {
-        p as i32
-    } else {
-        48000 - p as i32
-    }) * 2
-        - 24000
+static BUILTIN_WAV: &[u8] = include_bytes!("../../assets/player/dndt.wav");
+fn builtin_format() -> wav::Format {
+    wav::parse(BUILTIN_WAV.len() as u32, |offset,out| {
+        let start=offset as usize;
+        let Some(data)=BUILTIN_WAV.get(start..start+out.len()) else{return false;};
+        out.copy_from_slice(data);true
+    }).expect("invalid built-in dndt.wav")
+}
+fn output_frames(f:wav::Format)->u32 {
+    ((f.bytes as u64/f.align as u64*48000+f.rate as u64-1)/f.rate as u64) as u32
 }
 impl Player {
     fn new() -> Self {
         let mut name = [0; 105];
-        let label = b"Built-in test sound";
+        let label = b"dndt.wav";
         name[..label.len()].copy_from_slice(label);
         let mut output = Vec::new();
         output.resize(audio::FRAMES * 2, 0);
         Self {
             data: Vec::new(),
             output,
-            format: None,
+            format: Some(builtin_format()),
             source: 1,
             handle: None,
             position: 0,
-            total: 192000,
+            total: output_frames(builtin_format()),
             volume: 70,
             queued: 0,
             name,
             name_len: label.len(),
-            message: b"T plays a test sound. Ctrl+O opens a PCM WAV (up to 512 KiB).",
+            message: b"T plays dndt.wav. Ctrl+O opens a PCM WAV (up to 512 KiB).",
             loading: None,
             dialog: None,
             buttons: [
@@ -101,7 +103,7 @@ impl Player {
     fn start(&mut self) {
         self.stop();
         if self.source == 0 {
-            self.message = b"Choose a WAV or test sound first.";
+            self.message = b"Choose a WAV or dndt.wav first.";
             return;
         }
         let h = audio::open();
@@ -121,12 +123,12 @@ impl Player {
         self.queued = 0;
         self.message = b"Playing. S stops; +/- changes volume.";
     }
-    fn tone(&mut self) {
+    fn demo(&mut self) {
         self.stop();
         self.source = 1;
-        self.format = None;
-        self.total = 192000;
-        let label = b"Built-in test sound";
+        self.format = Some(builtin_format());
+        self.total = output_frames(self.format.unwrap());
+        let label = b"dndt.wav";
         self.name[..label.len()].copy_from_slice(label);
         self.name_len = label.len();
         self.start();
@@ -211,21 +213,13 @@ impl Player {
             let n = (self.total - self.position).min(audio::FRAMES as u32) as usize;
             for i in 0..n {
                 let at = self.position + i as u32;
-                let (l, r) = if self.source == 1 {
-                    let hz = [262, 330, 392, 523][(at / 48000).min(3) as usize];
-                    let fade = at.min(self.total - at).min(2400) as i32;
-                    let s =
-                        ((triangle(at, hz) + triangle(at, hz * 3 / 2)) / 6 * fade / 2400) as i16;
-                    (s, s)
-                } else {
-                    let f = self.format.unwrap();
-                    let source = (at as u64 * f.rate as u64 / 48000)
-                        .min((f.bytes / f.align as u32 - 1) as u64)
-                        as usize;
-                    let p = f.data as usize + source * f.align as usize;
-                    let frame = &self.data[p..p + f.align as usize];
-                    (wav::sample(f, frame, 0), wav::sample(f, frame, 1))
-                };
+                let f = self.format.unwrap();
+                let source = (at as u64 * f.rate as u64 / 48000)
+                    .min((f.bytes / f.align as u32 - 1) as u64) as usize;
+                let p = f.data as usize + source * f.align as usize;
+                let data=if self.source==1 {BUILTIN_WAV}else{&self.data};
+                let frame = &data[p..p + f.align as usize];
+                let (l,r)=(wav::sample(f,frame,0),wav::sample(f,frame,1));
                 self.output[i * 2] = l;
                 self.output[i * 2 + 1] = r;
             }
@@ -262,13 +256,13 @@ impl Player {
                     16,
                     104,
                     0,
-                    b"48,000 Hz stereo output | PCM WAV or built-in test sound",
+                    b"48,000 Hz stereo output | PCM WAV or built-in dndt.wav",
                 ),
             ],
         );
         for (b, label) in self.buttons.iter().zip([
             b"Open WAV" as &[u8],
-            b"Test sound",
+            b"dndt.wav",
             b"Play",
             b"Stop",
             b"-",
@@ -301,7 +295,7 @@ impl Player {
             272,
             0xeeeeee,
             0,
-            b"Ctrl+O: open | T: test sound | Space: play | S: stop",
+            b"Ctrl+O: open | T: dndt.wav | Space: play | S: stop",
         );
         window::row(
             w,
@@ -323,7 +317,7 @@ impl Player {
                 self.stop();
                 self.dialog = Some(file_dialog::Dialog::new(false));
             }
-            1 => self.tone(),
+            1 => self.demo(),
             2 => self.start(),
             3 => self.stop(),
             _ => {
