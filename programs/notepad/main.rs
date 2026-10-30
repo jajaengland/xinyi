@@ -26,6 +26,7 @@ enum Action {
     Quit,
     New,
     Open,
+    Dropped([u8;105],usize,u32),
 }
 #[derive(Clone, Copy)]
 enum Mode {
@@ -156,6 +157,7 @@ impl Editor {
         }
         if n == 0 {
             self.message = b"Clipboard is empty";
+            xinyi::sounds::play(xinyi::sounds::Event::Empty);
             return;
         }
         let Some(text) = model::normalize(&raw[..n as usize]) else {
@@ -178,6 +180,7 @@ impl Editor {
                 self.message = b"New file";
                 self.mode = Mode::Edit;
             }
+            Action::Dropped(path,len,volume)=>{self.open_checked(path,len,Some(volume));},
             Action::Open => {
                 self.begin_name(false);
                 self.prompt_len = 0;
@@ -190,6 +193,7 @@ impl Editor {
         if self.doc.dirty() {
             self.mode = Mode::Confirm(action);
             self.message = b"Unsaved changes: S save, D discard, C cancel";
+            xinyi::sounds::play(xinyi::sounds::Event::Warning);
             false
         } else {
             self.action(action)
@@ -209,6 +213,7 @@ impl Editor {
         };
         let result = xinyi::files::save_on(&name[..length], &self.doc.data, volume);
         if result < 0 {
+            xinyi::sounds::play(xinyi::sounds::Event::Error);
             self.message = match result {
                 -13 => b"Save failed: file is read-only",
                 -28 => b"Save failed: disk full",
@@ -232,6 +237,7 @@ impl Editor {
             return false;
         }
         self.message = b"Saved to disk";
+        xinyi::sounds::play(xinyi::sounds::Event::Complete);
         self.mode = Mode::Edit;
         if let Some(action) = self.after_save.take() {
             self.action(action)
@@ -239,7 +245,10 @@ impl Editor {
             false
         }
     }
-    fn open(&mut self, name: [u8; 105], length: usize) -> bool {
+    fn open(&mut self,name:[u8;105],length:usize)->bool {self.open_checked(name,length,None)}
+    fn open_checked(&mut self, name: [u8; 105], length: usize, expected:Option<u32>) -> bool {
+        if expected.is_some_and(|v|v!=xinyi::directory::volume()) {self.message=b"Drive changed; dropped file was not opened";return false;}
+
         let mut data = Vec::new();
         if data.try_reserve_exact(model::LIMIT).is_err() {
             self.message = b"Cannot open: not enough memory; document retained";
@@ -255,6 +264,7 @@ impl Editor {
                 return false;
             }
         } else if result == -2 {
+            if expected.is_some() {self.message=b"Dropped file no longer exists; document retained";return false;}
             self.doc.clear();
             self.doc_volume = xinyi::directory::volume();
             self.follow = true;
@@ -832,12 +842,18 @@ fn main() -> u32 {
     if !editor.draw(handle as u32) {
         return 1;
     }
+    xinyi::drag_drop::register_open();
     loop {
         let mut event = window::Event::default();
         if window::event(handle as u32, &mut event, true) < 0 {
             return 1;
         }
         let (quit, redraw) = match event.kind {
+            window::DROP=>{
+                if !matches!(editor.mode,Mode::Edit)||editor.dialog.is_some() {xinyi::drag_drop::finish();editor.message=b"Finish the current dialog before dropping a file";}
+                else {match xinyi::drag_drop::open_file(event) {Ok((path,len,volume))=>{editor.request(Action::Dropped(path,len,volume));},Err(_)=>editor.message=b"Drop one file from the current drive"}}
+                (false,true)
+            },
             window::RESIZE => {
                 editor.resize(handle as u32, event);
                 (false, true)

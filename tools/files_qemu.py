@@ -1,4 +1,5 @@
 """Exercise Files navigation, creation, deletion and opening actual filesystem apps."""
+from desktop_controls import APPS_BUTTON,SHELL_BUTTON,app_card,task_button
 import argparse,json,re,shutil,subprocess,sys,tempfile,time
 from seed_apps import seed_apps
 from pathlib import Path
@@ -41,8 +42,8 @@ def main():
     move(x,y)
     for down in [True,False]:g.call('input-send-event',{'events':[{'type':'btn','data':{'button':'left','down':down}}]});time.sleep(.07)
    def launch(name):
-    names=sorted(k.split('/')[-1][:-4] for k in inspect_tree(image,2048)[0] if k.startswith('APPS/') and k.count('/')==1 and k.endswith(('.BIN','.ELF')));start=len(log());click(40,11);click(40,46+names.index(name)*24)
-    until(lambda:re.search(r'Desktop: launch pid=(\d+) path=/APPS/'+name+r'\.BIN',log()[start:]),'Launch '+name);pid=int(re.search(r'Desktop: launch pid=(\d+)',log()[start:])[1]);until(lambda:f'Multiwindow: open pid={pid} ' in log()[start:],'Window '+name);return pid
+    names=sorted(k.split('/')[-1][:-4] for k in inspect_tree(image,2048)[0] if k.startswith('APPS/') and k.count('/') in (1,2) and k.endswith(('.BIN','.ELF')));start=len(log());click(*APPS_BUTTON);click(*app_card(names.index(name)))
+    until(lambda:re.search(r'Desktop: launch pid=(\d+) path=/APPS/(?:[A-Z0-9_]+/)?'+name+r'\.BIN',log()[start:]),'Launch '+name);pid=int(re.search(r'Desktop: launch pid=(\d+)',log()[start:])[1]);until(lambda:f'Multiwindow: open pid={pid} ' in log()[start:],'Window '+name);return pid
    def window(pid):
     m=re.search(r'Multiwindow: open pid='+str(pid)+r' handle=\d+ surface=([0-9a-f]+) client=(\d+)x(\d+) pos=(\d+),(\d+)',log());return int(m[1],16),int(m[2]),int(m[3])
    def status(pid):
@@ -62,30 +63,30 @@ def main():
    g.key('f5');until(lambda:not selected(files),'Refresh reselected a file');click(x+32,y+88);until(lambda:selected(files),'Could not reselect');click(x+636,y+88);until(lambda:not selected(files),'Gutter click did not clear selection');g.key('down');until(lambda:selected(files),'Keyboard did not restore selection');click(x+500,y+300);until(lambda:not selected(files),'Second blank click did not clear')
    tool(3);g.type('docs\n');until(lambda:'DOCS' in inspect_tree(image,2048)[1],'Create folder')
    # A folder used by another Files process must not be renamed underneath it.
-   other=launch('FILES');ox,oy=coords(other);click(ox+32,oy+104);g.key('ret');until(lambda:'Folder opened.' in status(other),'Second Files folder');click(110,11);click(x+32,y+104);g.key('f2');g.type('busy\n');until(lambda:'Folder is in use' in status(files),'Busy folder rename refusal')
+   other=launch('FILES');ox,oy=coords(other);click(ox+32,oy+104);g.key('ret');until(lambda:'Folder opened.' in status(other),'Second Files folder');click(*task_button(0));click(x+32,y+104);g.key('f2');g.type('busy\n');until(lambda:'Folder is in use' in status(files),'Busy folder rename refusal')
    assert 'DOCS' in inspect_tree(image,2048)[1] and 'BUSY' not in inspect_tree(image,2048)[1],'Renamed an active folder'
-   click(258,11);g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={other}' in log(),'Close second Files')
-   click(110,11);g.key('f2');g.type('notes\n');until(lambda:'NOTES' in inspect_tree(image,2048)[1],'Rename folder');g.key('f2');g.type('docs\n');until(lambda:'DOCS' in inspect_tree(image,2048)[1],'Rename folder back')
+   click(*task_button(1));g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={other}' in log(),'Close second Files')
+   click(*task_button(0));g.key('f2');g.type('notes\n');until(lambda:'NOTES' in inspect_tree(image,2048)[1],'Rename folder');g.key('f2');g.type('docs\n');until(lambda:'DOCS' in inspect_tree(image,2048)[1],'Rename folder back')
    # Root contains APPS and DOCS; select DOCS and enter.
    g.key('ret');time.sleep(.2)
    tool(2);g.type('note.txt\n');until(lambda:'Desktop: terminal launch' in log(),'New file launch');until(lambda:log().count('Multiwindow: open')==3,'Notepad window')
    note=int(re.findall(r'Multiwindow: open pid=(\d+)',log())[-1]);g.type('from files');g.key('ctrl-s');until(lambda:tree().get('DOCS/NOTE.TXT')==b'from files','Notepad save/cwd');g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={note}' in log(),'Notepad close')
-   click(110,11);g.key('f5');time.sleep(.2);click(x+32,y+88);tool(1);until(lambda:log().count('Multiwindow: open')==4,'Reopen text file');note=int(re.findall(r'Multiwindow: open pid=(\d+)',log())[-1]);g.key('ctrl-end');g.type('!');g.key('ctrl-s');until(lambda:tree().get('DOCS/NOTE.TXT')==b'from files!','Reopen content');g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={note}' in log(),'Second Notepad close')
+   click(*task_button(0));g.key('f5');time.sleep(.2);click(x+32,y+88);tool(1);until(lambda:log().count('Multiwindow: open')==4,'Reopen text file');note=int(re.findall(r'Multiwindow: open pid=(\d+)',log())[-1]);g.key('ctrl-end');g.type('!');g.key('ctrl-s');until(lambda:tree().get('DOCS/NOTE.TXT')==b'from files!','Reopen content');g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={note}' in log(),'Second Notepad close')
    # Rename, duplicate with Paste As, then move the duplicate into the parent.
-   click(110,11);g.key('f2');g.key('esc');assert tree().get('DOCS/NOTE.TXT')==b'from files!'
+   click(*task_button(0));g.key('f2');g.key('esc');assert tree().get('DOCS/NOTE.TXT')==b'from files!'
    g.key('f2');g.type('new.txt\n');until(lambda:tree().get('DOCS/NEW.TXT')==b'from files!' and 'DOCS/NOTE.TXT' not in tree(),'Rename file')
    g.key('ctrl-c');g.key('ctrl-v');g.type('copy.txt\n');until(lambda:tree().get('DOCS/COPY.TXT')==b'from files!','Paste As copy')
    click(x+32,y+104);g.key('ctrl-x');g.key('backspace');g.key('ctrl-v');until(lambda:tree().get('COPY.TXT')==b'from files!' and 'DOCS/COPY.TXT' not in tree(),'Move to parent')
    click(x+32,y+104);g.key('ret');time.sleep(.2);click(x+32,y+88);g.key('f2');g.type('note.txt\n');until(lambda:tree().get('DOCS/NOTE.TXT')==b'from files!','Rename back')
-   click(110,11);tool(4);g.key('n');assert tree().get('DOCS/NOTE.TXT')==b'from files!';tool(4);g.key('y');until(lambda:'DOCS/NOTE.TXT' not in tree(),'Delete file');tool(0);time.sleep(.2);click(x+32,y+104);tool(4);g.key('y');until(lambda:'DOCS' not in inspect_tree(image,2048)[1],'Remove folder')
+   click(*task_button(0));tool(4);g.key('n');assert tree().get('DOCS/NOTE.TXT')==b'from files!';tool(4);g.key('y');until(lambda:'DOCS/NOTE.TXT' not in tree(),'Delete file');tool(0);time.sleep(.2);click(x+32,y+104);tool(4);g.key('y');until(lambda:'DOCS' not in inspect_tree(image,2048)[1],'Remove folder')
    # Opening an executable starts a terminal, which hosts the text program.
    click(x+32,y+88);g.key('ret');time.sleep(.2)
-   names=[k.split('/')[-1] for k in tree() if k.startswith('APPS/') and k.count('/')==1];index=names.index('HELLO.BIN');click(x+32,y+80+index*16+8);tool(1)
-   until(lambda:'PTY: open' in log(),'Executable terminal');until(lambda:re.search(r'Desktop: terminal launch pid=\d+ name=HELLO.BIN',log()),'Executable child');until(lambda:log().count('Scheduler: exit')>=3,'Hello return');terminal=int(re.findall(r'Multiwindow: open pid=(\d+)',log())[-1]);time.sleep(.2);g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={terminal}' in log(),'Terminal close');click(110,11)
+   click(x+32,y+88);g.key('ret');time.sleep(.2);click(x+32,y+88);tool(1)
+   until(lambda:'PTY: open' in log(),'Executable terminal');until(lambda:re.search(r'Desktop: terminal launch pid=\d+ name=HELLO.BIN',log()),'Executable child');until(lambda:log().count('Scheduler: exit')>=3,'Hello return');terminal=int(re.findall(r'Multiwindow: open pid=(\d+)',log())[-1]);time.sleep(.2);g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={terminal}' in log(),'Terminal close');click(*task_button(0))
    # Drag the title bar right up to the taskbar; it must stop at y=24.
    move(x+180,y-18)
    g.call('input-send-event',{'events':[{'type':'btn','data':{'button':'left','down':True}}]});time.sleep(.15);move(x+180,0);g.call('input-send-event',{'events':[{'type':'btn','data':{'button':'left','down':False}}]});time.sleep(.2)
-   g.call('screendump',{'filename':str(out/'files.png'),'format':'png'});g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={files} code=0' in log(),'Files close');click(768,11);g.wait_for('Desktop finished.');assert frames()==baseline,'Files frame leak';print('PASS Files: folders, create/open/save, rename/copy/move, empty-space deselection, confirmed delete, executable terminal and frame balance')
+   g.call('screendump',{'filename':str(out/'files.png'),'format':'png'});g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={files} code=0' in log(),'Files close');click(*SHELL_BUTTON);g.wait_for('Desktop finished.');assert frames()==baseline,'Files frame leak';print('PASS Files: folders, create/open/save, rename/copy/move, empty-space deselection, confirmed delete, executable terminal and frame balance')
   finally:
    g.call('screendump',{'filename':str(out/'files-last.png'),'format':'png'});g.close();shutil.copyfile(d/'debug.log',out/'files-debug.log')
   g=Guest(r'C:\Program Files\qemu\qemu-system-i386.exe',None,d,disk=image,attach_disk=not a.usb,extra_args=extra)

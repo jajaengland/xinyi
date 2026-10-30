@@ -1,4 +1,5 @@
 """Check bounded file APIs and heap-backed Notepad against a disposable disk."""
+from desktop_controls import APPS_BUTTON,SHELL_BUTTON,app_card,task_button
 import argparse,json,re,shutil,subprocess,sys,tempfile,time
 from pathlib import Path
 from smoke import Guest,ROOT
@@ -40,7 +41,7 @@ def main():
     move(x,y)
     for down in [True,False]:g.call('input-send-event',{'events':[{'type':'btn','data':{'button':'left','down':down}}]});time.sleep(.08)
    def launch():
-    names=sorted(k.split('/')[-1][:-4] for k in tree() if k.startswith('APPS/') and k.count('/')==1 and k.endswith(('.BIN','.ELF')));start=len(log());click(40,11);click(40,46+names.index('NOTEPAD')*24)
+    names=sorted(k.split('/')[-1][:-4] for k in tree() if k.startswith('APPS/') and k.count('/') in (1,2) and k.endswith(('.BIN','.ELF')));start=len(log());click(*APPS_BUTTON);click(*app_card(names.index('NOTEPAD')))
     until(lambda:re.search(r'Multiwindow: open pid=(\d+) ',log()[start:]),'Notepad open')
     m=re.search(r'Multiwindow: open pid=(\d+) handle=\d+ surface=([0-9a-f]+) client=(\d+)x(\d+) pos=(\d+),(\d+)',log()[start:]);return int(m[1]),int(m[2],16),int(m[3]),int(m[5])+8,int(m[6])+34
    pid,addr,w,x,y=launch()
@@ -65,7 +66,7 @@ def main():
    open_file('tabs.txt');save();assert tree()['COPY.TXT']==original[:-1]+b'z','Expanded oversized open discarded document'
    open_file('empty.txt');g.type('abc');g.key('ctrl-z');g.key('ctrl-z');g.key('ctrl-y');save();until(lambda:tree()['EMPTY.TXT']==b'ab','Empty file/edit history')
    g.call('screendump',{'filename':str(out/'large-notepad.png'),'format':'png'});g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={pid} code=0' in log(),'Notepad exit')
-   click(768,11);g.wait_for('Desktop finished.');assert frames()==baseline,'Notepad heap/surface frame leak'
+   click(*SHELL_BUTTON);g.wait_for('Desktop finished.');assert frames()==baseline,'Notepad heap/surface frame leak'
    expected=tree()['COPY.TXT']
   finally:
    g.close();shutil.copyfile(d/'debug.log',out/'large-files-debug.log')

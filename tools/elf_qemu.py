@@ -1,4 +1,5 @@
 """Exercise ELF loading, private globals/heaps, faults and legacy compatibility."""
+from desktop_controls import APPS_BUTTON,SHELL_BUTTON,app_card,task_button
 import argparse,json,re,shutil,tempfile,time
 from seed_apps import seed_apps
 from pathlib import Path
@@ -50,15 +51,15 @@ def main():
     move(x,y)
     for down in [True,False]:g.call('input-send-event',{'events':[{'type':'btn','data':{'button':'left','down':down}}]});time.sleep(.07)
    def launch(name):
-    names=sorted(k.split('/')[-1][:-4] for k in inspect_tree(image,2048)[0] if k.startswith('APPS/') and k.count('/')==1 and k.endswith(('.BIN','.ELF')));start=len(log());click(40,11);click(40,46+names.index(name)*24)
-    until(lambda:re.search(r'Desktop: launch pid=(\d+) path=/APPS/'+name+r'\.(?:BIN|ELF)',log()[start:]),'Launch '+name);pid=int(re.search(r'Desktop: launch pid=(\d+)',log()[start:])[1]);until(lambda:f'Multiwindow: open pid={pid} ' in log()[start:],'Window '+name);return pid
+    names=sorted(k.split('/')[-1][:-4] for k in inspect_tree(image,2048)[0] if k.startswith('APPS/') and k.count('/') in (1,2) and k.endswith(('.BIN','.ELF')));start=len(log());click(*APPS_BUTTON);click(*app_card(names.index(name)))
+    until(lambda:re.search(r'Desktop: launch pid=(\d+) path=/APPS/(?:[A-Z0-9_]+/)?'+name+r'\.(?:BIN|ELF)',log()[start:]),'Launch '+name);pid=int(re.search(r'Desktop: launch pid=(\d+)',log()[start:])[1]);until(lambda:f'Multiwindow: open pid={pid} ' in log()[start:],'Window '+name);return pid
    def tree():return inspect_tree(image,2048)[0]
    first=launch('CHECK');second=launch('CHECK')
    until(lambda:f'Scheduler: exit pid={first} code=0' in log() and f'Scheduler: exit pid={second} code=0' in log(),'Concurrent ELF globals/heaps corrupted or stalled')
    assert 'Scheduler: fault' not in log(),'Unexpected ELF fault'
-   names=sorted(k.split('/')[-1][:-4] for k in tree() if k.startswith('APPS/') and k.count('/')==1 and k.endswith(('.BIN','.ELF')));start=len(log());click(40,11);click(40,46+names.index('MEMDEMO')*24);until(lambda:re.search(r'Desktop: launch pid=(\d+) path=/APPS/MEMDEMO.ELF',log()[start:]),'Launch MEMDEMO');demo=int(re.search(r'Desktop: launch pid=(\d+)',log()[start:])[1]);until(lambda:'Desktop: text terminal' in log()[start:],'ELF console handoff');until(lambda:f'Scheduler: exit pid={demo} code=0' in log(),'ELF text app lost globals/heap during terminal handoff')
+   names=sorted(k.split('/')[-1][:-4] for k in tree() if k.startswith('APPS/') and k.count('/') in (1,2) and k.endswith(('.BIN','.ELF')));start=len(log());click(*APPS_BUTTON);click(*app_card(names.index('MEMDEMO')));until(lambda:re.search(r'Desktop: launch pid=(\d+) path=/APPS/MEMDEMO/MEMDEMO.ELF',log()[start:]),'Launch MEMDEMO');demo=int(re.search(r'Desktop: launch pid=(\d+)',log()[start:])[1]);until(lambda:'Desktop: text terminal' in log()[start:],'ELF console handoff');until(lambda:f'Scheduler: exit pid={demo} code=0' in log(),'ELF text app lost globals/heap during terminal handoff')
    terminal=int(re.findall(r'Multiwindow: open pid=(\d+)',log())[-1]);g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={terminal} code=0' in log(),'ELF terminal close')
-   click(768,11);g.wait_for('Desktop finished.');assert frames()==baseline,'Concurrent ELF/handoff frame leak'
+   click(*SHELL_BUTTON);g.wait_for('Desktop finished.');assert frames()==baseline,'Concurrent ELF/handoff frame leak'
    print('PASS ELF: data/BSS, Vec/Box/alignment/reuse, global/heap syscall buffers, heap cap, non-base entry, malformed rejection, real page faults, concurrent isolation, text handoff and frame balance',flush=True)
   finally:
    g.close();shutil.copyfile(d/'debug.log',out/'elf-debug.log')

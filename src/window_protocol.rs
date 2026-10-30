@@ -1,4 +1,4 @@
-// Ring-3 window ABI v1: fixed 640x400 client, 8x16 text cells, RGB24 colours.
+// Ring-3 window ABI: legacy 8x16 cells plus clipped proportional text boxes, RGB24.
 pub const WIDTH: u32 = 640;
 pub const HEIGHT: u32 = 400;
 pub const MAX_COMMANDS: usize = 16;
@@ -7,6 +7,9 @@ pub const POINTER: u32 = 2;
 pub const CLOSE: u32 = 3;
 pub const RESET: u32 = 4;
 pub const RESIZE: u32 = 5;
+pub const DRAG_OVER:u32=6;
+pub const DROP:u32=7;
+pub const DRAG_END:u32=8;
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct Event {
@@ -56,6 +59,30 @@ impl Draw {
     pub fn valid(&self) -> bool {
         self.valid_for(WIDTH, HEIGHT)
     }
+    pub fn label(x: u32, y: u32, width: u32, color: u32, text: &[u8]) -> Self {
+        Self {
+            kind: 2,
+            x,
+            y,
+            width,
+            height: 16,
+            color,
+            pointer: text.as_ptr() as u32,
+            length: text.len() as u32,
+        }
+    }
+    pub fn paragraph(x: u32, y: u32, width: u32, height: u32, color: u32, text: &[u8]) -> Self {
+        Self {
+            kind: 3,
+            x,
+            y,
+            width,
+            height,
+            color,
+            pointer: text.as_ptr() as u32,
+            length: text.len() as u32,
+        }
+    }
     pub fn valid_for(&self, width: u32, height: u32) -> bool {
         if self.color > 0xffffff {
             return false;
@@ -63,6 +90,8 @@ impl Draw {
         let (w, h) = match self.kind {
             0 if self.pointer == 0 && self.length == 0 => (self.width, self.height),
             1 if self.width == 0 && self.height == 0 && self.length <= 96 => (self.length * 8, 16),
+            2 if self.height == 16 && self.length <= 96 => (self.width, self.height),
+            3 if self.length <= 96 => (self.width, self.height),
             _ => return false,
         };
         self.x.checked_add(w).is_some_and(|end| end <= width)

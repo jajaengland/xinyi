@@ -875,3 +875,8 @@ fn limited_capacity_allows_existing_accessible_partitions_and_preserving_install
 
 #[path = "fsck_tests.rs"]
 mod fsck_tests;
+
+#[path = "../src/stream_protocol.rs"]
+mod stream_protocol;
+#[path = "stream_tests.rs"]
+mod stream_tests;

@@ -16,7 +16,8 @@ struct Settings {
     draft: Theme,
     target: u8,
     hex: TextInput<6>,
-    buttons: [Button; 4],
+    buttons: [Button; 8],
+    volume: u32,
     editing: bool,
     status: &'static [u8],
 }
@@ -40,22 +41,37 @@ impl Settings {
     }
     fn apply(&mut self, save: bool) {
         let n = appearance::apply(&self.draft, save);
+        if n == 0 && save {
+            let mut data = [0; 8];
+            data[..4].copy_from_slice(b"SND1");
+            data[4..].copy_from_slice(&self.volume.to_le_bytes());
+            if xinyi::files::save(b"/SOUND.CFG", &data) < 0 {
+                self.status = b"Colours saved; sound volume could not be saved.";
+                xinyi::sounds::play(xinyi::sounds::Event::Error);
+                return;
+            }
+        }
         self.status = match n {
-            0 if save => b"Saved /GUI.CFG on the current drive.",
+            0 if save => b"Saved colours and system sound volume.",
             0 => b"Applied for this session. Save to keep after reboot.",
             -13 => b"GUI.CFG is read-only. Changes were not saved.",
             -19 => b"No mounted drive. Apply works without saving.",
             _ => b"Could not save settings. Current colours retained.",
         };
+        xinyi::sounds::play(if n == 0 {
+            xinyi::sounds::Event::Complete
+        } else {
+            xinyi::sounds::Event::Error
+        });
     }
     fn paint(&self, w: u32) {
         window::draw(
             w,
             &[
-                Draw::rect(0, 0, 480, 320, 0xf4f4f4),
-                Draw::text(16, 12, 0, b"Appearance"),
-                Draw::text(16, 42, 0, b"Desktop background"),
-                Draw::text(16, 78, 0, b"Active title bar"),
+                Draw::rect(0, 0, 480, 416, 0xf4f4f4),
+                Draw::label(16, 12, 448, 0, b"Appearance and sound"),
+                Draw::label(16, 42, 252, 0, b"Desktop background"),
+                Draw::label(16, 78, 252, 0, b"Active title bar"),
             ],
         );
         for (i, color) in [self.draft.desktop, self.draft.title].iter().enumerate() {
@@ -118,9 +134,29 @@ impl Settings {
             if self.editing { &self.hex } else { &display },
             self.editing,
         );
-        for (i, label) in [b"Apply" as &[u8], b"Save", b"Defaults", b"Close"]
-            .iter()
-            .enumerate()
+        let mut volume = *b"System sounds: 000%";
+        volume[15] = b'0' + (self.volume / 100) as u8;
+        volume[16] = b'0' + (self.volume / 10 % 10) as u8;
+        volume[17] = b'0' + (self.volume % 10) as u8;
+        window::draw(
+            w,
+            &[
+                Draw::label(16, 246, 448, 0, &volume),
+                Draw::label(16, 320, 448, 0, b"Sound volume applies now; Save keeps it."),
+            ],
+        );
+        for (i, label) in [
+            b"Apply" as &[u8],
+            b"Save",
+            b"Defaults",
+            b"Close",
+            b"-",
+            b"+",
+            if self.volume == 0 { b"Unmute" } else { b"Mute" },
+            b"Test voice",
+        ]
+        .iter()
+        .enumerate()
         {
             gui::button(w, &self.buttons[i], label, false);
         }
@@ -128,7 +164,7 @@ impl Settings {
             w,
             &[Draw::text(
                 16,
-                296,
+                392,
                 0,
                 &self.status[..self.status.len().min(56)],
             )],
@@ -137,7 +173,7 @@ impl Settings {
     }
 }
 fn main() -> u32 {
-    let w = window::open_sized(b"Settings", 480, 320);
+    let w = window::open_sized(b"Settings", 480, 416);
     if w < 0 {
         return 1;
     }
@@ -147,12 +183,17 @@ fn main() -> u32 {
     let mut s = Settings {
         draft: theme,
         target: 0,
+        volume: xinyi::sounds::volume().clamp(0, 100) as u32,
         hex: TextInput::new(),
         buttons: [
-            Button::new(Rect::new(16, 252, 96, 28)),
-            Button::new(Rect::new(128, 252, 96, 28)),
-            Button::new(Rect::new(240, 252, 96, 28)),
-            Button::new(Rect::new(352, 252, 96, 28)),
+            Button::new(Rect::new(16, 344, 96, 28)),
+            Button::new(Rect::new(128, 344, 96, 28)),
+            Button::new(Rect::new(240, 344, 96, 28)),
+            Button::new(Rect::new(352, 344, 96, 28)),
+            Button::new(Rect::new(16, 282, 80, 28)),
+            Button::new(Rect::new(104, 282, 80, 28)),
+            Button::new(Rect::new(192, 282, 112, 28)),
+            Button::new(Rect::new(312, 282, 136, 28)),
         ],
         editing: false,
         status: b"Choose a colour target, then a swatch or RGB value.",
@@ -228,10 +269,27 @@ fn main() -> u32 {
                         1 => s.apply(true),
                         2 => {
                             s.draft = Theme::DEFAULT;
+                            s.volume = 60;
+                            xinyi::sounds::set_volume(s.volume);
                             s.editing = false;
                             s.status = b"Defaults selected. Apply or Save to use them.";
                         }
                         3 => return 0,
+                        4 => {
+                            s.volume = s.volume.saturating_sub(10);
+                            xinyi::sounds::set_volume(s.volume);
+                        }
+                        5 => {
+                            s.volume = (s.volume + 10).min(100);
+                            xinyi::sounds::set_volume(s.volume);
+                        }
+                        6 => {
+                            s.volume = if s.volume == 0 { 60 } else { 0 };
+                            xinyi::sounds::set_volume(s.volume);
+                        }
+                        7 => {
+                            xinyi::sounds::notification();
+                        }
                         _ => (),
                     }
                 }

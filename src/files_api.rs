@@ -3,10 +3,54 @@ use crate::{
     fat16::{Error, MAX_FILE_SIZE},
     user_memory as user_buffer, usermode,
 };
+pub fn stream(cs: u32, number: u32, pointer: u32, size: u32, reserved: u32) -> u32 {
+    use crate::stream_protocol::{Request, MAX_CHUNK, MAX_FILE};
+    let Some(image) = usermode::active_image(cs) else { return u32::MAX; };
+    if size != core::mem::size_of::<Request>() as u32 || reserved != 0 { return (-22i32) as u32; }
+    if !user_buffer::readable(pointer, size, image) { return (-14i32) as u32; }
+    let r = unsafe {core::ptr::read_unaligned(pointer as *const Request)};
+    if !r.valid(number) { return (-22i32) as u32; }
+    if !diskfs::is_mounted() { return (-19i32) as u32; }
+    if r.volume != diskfs::volume_epoch() { return (-116i32) as u32; }
+    if !user_buffer::readable(r.path, r.path_length, image) { return (-14i32) as u32; }
+    let mut path = [0u8;105];
+    unsafe {core::ptr::copy_nonoverlapping(r.path as *const u8,path.as_mut_ptr(),r.path_length as usize);}
+    let path = &path[..r.path_length as usize];
+    if !path.iter().all(|b| (32..=126).contains(b)) { return (-22i32) as u32; }
+    let path = core::str::from_utf8(path).unwrap();
+    if r.length != 0 && matches!(number,91|92) && !(if number == 91 {
+        user_buffer::writable(r.data,r.length)
+    } else {user_buffer::readable_range(r.data,r.length,image)}) { return (-14i32) as u32; }
+    // Bounded scratch instead of pinning a whole-file buffer in the process.
+    let Some(frames) = crate::loader::Frames::new(MAX_CHUNK/4096) else { return (-12i32) as u32; };
+    let buffer = unsafe {core::slice::from_raw_parts_mut(frames.base() as *mut u8,MAX_CHUNK)};
+    if number == 92 && r.length != 0 {
+        unsafe {core::ptr::copy_nonoverlapping(r.data as *const u8,buffer.as_mut_ptr(),r.length as usize);}
+    }
+    unsafe {core::arch::asm!("sti",options(nostack));}
+    let result = match number {
+        91 => diskfs::read_at(path,r.offset,&mut buffer[..r.length as usize]),
+        92 => diskfs::write_at(path,r.offset,&buffer[..r.length as usize]).map(|_|r.length as usize),
+        93 => diskfs::file_size(path).and_then(|n| if n<=MAX_FILE {Ok(n)} else {Err(Error::ProgramTooLarge)}),
+        94 => diskfs::resize_file(path,r.length).map(|_|0),
+        _ => unreachable!(),
+    };
+    unsafe {core::arch::asm!("cli",options(nostack));}
+    match result {
+        Ok(n) => {
+            if number == 91 && n != 0 {
+                unsafe {core::ptr::copy_nonoverlapping(buffer.as_ptr(),r.data as *mut u8,n);}
+            }
+            n as u32
+        }
+        Err(e) => error(e),
+    }
+}
 pub(crate) fn error(error: Error) -> u32 {
     (match error {
         Error::OutOfMemory => -12,
-        Error::ProgramTooLarge => -27,
+        Error::Cancelled => -125,
+        Error::ProgramTooLarge | Error::ImageTooLarge => -27,
         Error::NotFound => -2,
         Error::ReadOnly => -13,
         Error::TooLarge => -27,
@@ -16,6 +60,7 @@ pub(crate) fn error(error: Error) -> u32 {
         Error::DirectoryNotEmpty => -39,
         Error::DirectoryBusy => -16,
         Error::Full => -28,
+        Error::InvalidApplication => -8,
         Error::InvalidName | Error::PathTooDeep => -22,
         _ => -5i32,
     }) as u32

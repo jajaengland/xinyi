@@ -59,7 +59,7 @@ pub fn use_drive(number:usize,mount_it:bool)->Result<()> {
         if !crate::bios_disk::BOOT.init() {return Err(Error::Io);}
         Fat16::new(&crate::bios_disk::BOOT)?;unmount()?;
         unsafe {BOOT_SELECTED=true;}
-        mount()?;println!("Drive 0 ready: BIOS boot filesystem (persistent).");return Ok(());
+        mount()?;println!("Drive 0 ready: BIOS boot filesystem (persistent).");crate::system_sounds::play(crate::system_sounds::Event::Connect);return Ok(());
     }
     discover();
     let drive=number.checked_sub(1).and_then(|i|unsafe {(*core::ptr::addr_of!(DRIVES)).get(i).copied().flatten()}).ok_or(Error::NotFound)?;
@@ -70,7 +70,7 @@ pub fn use_drive(number:usize,mount_it:bool)->Result<()> {
     unmount()?;
     unsafe {SELECTED=Some(drive.target);BOOT_SELECTED=false;}
     DISK.adopt(&candidate);
-    if mount_it {mount()?;println!("Drive {} ready. Files are persistent.",number);}
+    if mount_it {mount()?;println!("Drive {} ready. Files are persistent.",number);crate::system_sounds::play(crate::system_sounds::Event::Connect);}
     else {println!("Selected drive {}.",number);}
     Ok(())
 }
@@ -504,9 +504,45 @@ pub fn transfer(source:&str,destination:&str,operation:u32)->Result<()> {
     };
     finish(result)
 }
+pub fn directory_exists(name:&str)->Result<()> {
+    let mut bytes=[0;crate::fs_path::MAX_PATH];let n=absolute(name,&mut bytes)?;
+    let result=match unsafe{&*core::ptr::addr_of!(MOUNTED)} {Some(fs)=>fs.is_directory(core::str::from_utf8(&bytes[..n]).unwrap()),None=>Err(Error::InvalidVolume)};finish(result)
+}
+pub fn save_image(name:&str,data:&[u8])->Result<()> {
+    let mut bytes=[0;crate::fs_path::MAX_PATH];let n=absolute(name,&mut bytes)?;
+    let result=match unsafe{&*core::ptr::addr_of!(MOUNTED)} {Some(fs)=>fs.save_image(core::str::from_utf8(&bytes[..n]).unwrap(),data),None=>Err(Error::InvalidVolume)};finish(result)
+}
 
 /// Exact cwd paths take precedence; bare names then search /APPS, .BIN before .ELF.
-pub fn read_executable(name:&str,output:&mut[u8])->Result<usize>{let result=read_program(name,output);if !matches!(result,Err(Error::NotFound))||name.contains('/')||name.contains('\\'){return result;}let mut path=[0u8;105];for ext in [".BIN",".ELF",""]{if name.contains('.')&&!ext.is_empty(){continue;}let n=6+name.len()+ext.len();if n>path.len(){return Err(Error::InvalidName);}path[..6].copy_from_slice(b"/APPS/");path[6..6+name.len()].copy_from_slice(name.as_bytes());path[6+name.len()..n].copy_from_slice(ext.as_bytes());let result=read_program(core::str::from_utf8(&path[..n]).unwrap(),output);if !matches!(result,Err(Error::NotFound)){return result;}}Err(Error::NotFound)}
+pub fn read_executable(name:&str,output:&mut[u8])->Result<usize> {let mut resolved=[0;105];read_executable_resolved(name,output,&mut resolved).map(|(size,_)|size)}
+pub fn read_executable_resolved(name:&str,output:&mut[u8],resolved:&mut[u8;105])->Result<(usize,usize)> {
+    fn candidate(path:&str,output:&mut[u8],resolved:&mut[u8;105])->Result<(usize,usize)> {
+        match read_image(path,output) {
+            Ok(size)=>{let n=absolute(path,resolved)?;Ok((size,n))},
+            Err(Error::NotFound) if path.len()>6 && path[..6].eq_ignore_ascii_case("/APPS/") && !path[6..].contains('/')=>{
+                let leaf=&path[6..];let stem=leaf.split('.').next().unwrap();
+                if !crate::app_install::valid_id(stem.as_bytes()) {return Err(Error::NotFound);}
+                let mut nested=[0;105];let n=6+stem.len()+1+leaf.len();
+                nested[..6].copy_from_slice(b"/APPS/");nested[6..6+stem.len()].copy_from_slice(stem.as_bytes());nested[6+stem.len()]=b'/';nested[7+stem.len()..n].copy_from_slice(leaf.as_bytes());
+                let nested=core::str::from_utf8(&nested[..n]).unwrap();let size=read_image(nested,output)?;
+                let n=absolute(nested,resolved)?;Ok((size,n))
+            },
+            Err(e)=>Err(e),
+        }
+    }
+    let result=candidate(name,output,resolved);
+    if !matches!(result,Err(Error::NotFound))||name.contains('/')||name.contains('\\') {return result;}
+    let mut path=[0u8;105];
+    for ext in [".BIN",".ELF",""] {
+        if name.contains('.')&&!ext.is_empty() {continue;}
+        let n=6+name.len()+ext.len();if n>path.len() {return Err(Error::InvalidName);}
+        path[..6].copy_from_slice(b"/APPS/");path[6..6+name.len()].copy_from_slice(name.as_bytes());path[6+name.len()..n].copy_from_slice(ext.as_bytes());
+        let result=candidate(core::str::from_utf8(&path[..n]).unwrap(),output,resolved);
+        if !matches!(result,Err(Error::NotFound)) {return result;}
+    }
+    Err(Error::NotFound)
+}
+
 
 pub fn file_size(name:&str)->Result<usize>{let mut bytes=[0;crate::fs_path::MAX_PATH];let n=absolute(name,&mut bytes)?;let name=core::str::from_utf8(&bytes[..n]).unwrap();let result=match unsafe{&*core::ptr::addr_of!(MOUNTED)}{Some(fs)=>fs.file_size(name),None=>Err(Error::InvalidVolume)};finish(result)}
 pub fn save_large(name:&str,data:&[u8])->Result<()>{let mut bytes=[0;crate::fs_path::MAX_PATH];let n=absolute(name,&mut bytes)?;let name=core::str::from_utf8(&bytes[..n]).unwrap();let result=match unsafe{&*core::ptr::addr_of!(MOUNTED)}{Some(fs)=>fs.save_large(name,data),None=>Err(Error::InvalidVolume)};finish(result)}
@@ -597,4 +633,36 @@ fn check_selected(argument: &str) -> Result<()> {
         unsafe {REPAIR_PENDING=Some(RepairPreview{report,epoch:volume_epoch(),boot:boot_selected(),target:SELECTED});}
     }
     Ok(())
+}
+
+/// Positional file operations share normal path resolution, error detachment and volume checks.
+pub fn read_at(path:&str,offset:u32,output:&mut[u8])->Result<usize> {
+    let mut name=[0;crate::fs_path::MAX_PATH];let n=absolute(path,&mut name)?;
+    let path=core::str::from_utf8(&name[..n]).unwrap();
+    let result=match unsafe {&*core::ptr::addr_of!(MOUNTED)} {Some(fs)=>fs.read_at(path,offset,output),None=>Err(Error::InvalidVolume)};
+    finish(result)
+}
+pub fn write_at(path:&str,offset:u32,input:&[u8])->Result<()> {
+    let mut name=[0;crate::fs_path::MAX_PATH];let n=absolute(path,&mut name)?;
+    let path=core::str::from_utf8(&name[..n]).unwrap();
+    let result=match unsafe {&*core::ptr::addr_of!(MOUNTED)} {Some(fs)=>fs.write_at(path,offset,input),None=>Err(Error::InvalidVolume)};
+    finish(result)
+}
+pub fn resize_file(path:&str,length:u32)->Result<()> {
+    let mut name=[0;crate::fs_path::MAX_PATH];let n=absolute(path,&mut name)?;
+    let path=core::str::from_utf8(&name[..n]).unwrap();
+    let result=match unsafe {&*core::ptr::addr_of!(MOUNTED)} {Some(fs)=>fs.resize_file(path,length),None=>Err(Error::InvalidVolume)};
+    finish(result)
+}
+
+/// Kernel-only whole-image reader. The userspace whole-file ABI is unchanged.
+pub fn read_image(name:&str,output:&mut[u8])->Result<usize> {
+    let mut path=[0;crate::fs_path::MAX_PATH];let n=absolute(name,&mut path)?;
+    let path=core::str::from_utf8(&path[..n]).unwrap();
+    let result=match unsafe {&*core::ptr::addr_of!(MOUNTED)} {
+        Some(fs)=>fs.read_image(path,output),
+        None=>match output.get_mut(..MAX_FILE_SIZE) {
+            Some(bytes)=>vfs::read(path,bytes.try_into().unwrap()),None=>Err(Error::TooLarge),
+        },
+    };finish(result)
 }

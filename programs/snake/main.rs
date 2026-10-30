@@ -20,7 +20,7 @@ fn render(game:&Game,paused:bool,previous:&mut [[u8;WIDTH];HEIGHT]) {
         if frame[y]==previous[y] {continue;}
         let mut cells=[Cell{character:b' ',color:0x07};WIDTH*2];
         for x in 0..WIDTH {
-            let (text,color)=match frame[y][x] {1=>(*b"[]",0x2a),2=>(*b"@@",0x2e),3=>(*b"()",0x0c),_=>(*b"  ",0x07)};
+            let (text,color)=match frame[y][x] {1=>(*b"[]",0x2a),2=>(*b"[]",0x2e),3=>(*b"()",0x0c),_=>(*b"  ",0x07)};
             cells[x*2]=Cell{character:text[0],color};cells[x*2+1]=Cell{character:text[1],color};
         }
         xinyi::draw_cells(16,y as u8+2,&cells);

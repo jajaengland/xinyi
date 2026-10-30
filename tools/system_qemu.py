@@ -57,7 +57,9 @@ def main():
             try:
                 # Native disk boot auto-mounts before the prompt. No mount command.
                 screen=command(guest,"apps","EDIT.BIN")
-                for name in expected:assert name.split('/')[-1] in screen,screen
+                for name in expected:
+                    if not name.endswith(('.BIN','.ELF')):continue
+                    assert name.split('/')[-1] in screen,screen
                 command(guest,"run hello","User program exited with code 0.")
                 command(guest,"run apitest probe","File API checks passed!")
                 command(guest,"delete /apps/apitest.bin","Deleted:")
@@ -94,7 +96,7 @@ def main():
                 guest.type("unnamed.txt\n");guest.wait_for("User program exited with code 0.")
                 command(guest,"cat unnamed.txt","save on quit")
                 # Removing the executable really removes the app; no kernel fallback.
-                command(guest,"delete /apps/snake.bin","Deleted:")
+                command(guest,"delete /apps/snake/snake.bin","Deleted:")
                 command(guest,"run snake","Program: file not found")
             finally:guest.close()
             files,_=inspect_tree(image,2048)

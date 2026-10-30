@@ -213,6 +213,7 @@ pub extern "C" fn xinyi_irq_handler(vector: u32) {
             TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
         }
         let _ = crate::monotonic::ticks();
+        crate::audio::tick();
     } else if vector == 33 || vector == 44 {
         crate::keyboard::handle_irq();
     }
@@ -240,6 +241,7 @@ pub extern "C" fn xinyi_irq_handler(vector: u32) {
 
 #[no_mangle]
 pub extern "C" fn xinyi_syscall_handler(frame: &crate::syscall_frame::SyscallFrame) -> u32 {
+    crate::network::poll();
     let syscall_num = frame.eax;
     let (arg1, arg2, arg3) = (frame.ebx, frame.ecx, frame.edx);
     debug::write_fmt(format_args!(
@@ -247,6 +249,10 @@ pub extern "C" fn xinyi_syscall_handler(frame: &crate::syscall_frame::SyscallFra
         syscall_num, arg1, arg2, arg3, frame.cs
     ));
 
+    if frame.cs & 3 == 3 && !crate::usermode::profile().allows(syscall_num,arg1) {
+        debug::write_fmt(format_args!("Permission denied: pid={} nr={} access={}\n",crate::usermode::getpid(),syscall_num,crate::usermode::profile().label()));
+        return (-13i32) as u32;
+    }
     if let Some(result)=crate::multitask::syscall(syscall_num,arg1,arg2,arg3) {return result;}
     if crate::window_api::active()&&matches!(syscall_num,4|50|53..=55) {return (-16i32) as u32;}
     match syscall_num {
@@ -266,6 +272,13 @@ pub extern "C" fn xinyi_syscall_handler(frame: &crate::syscall_frame::SyscallFra
         60..=65|85..=86 => if crate::multitask::active() {crate::multi_window::syscall(frame.cs,syscall_num,arg1,arg2,arg3)}else{crate::window_api::syscall(frame.cs,syscall_num,arg1,arg2,arg3)},
         67..=68=>crate::clipboard::syscall(frame.cs,syscall_num,arg1,arg2,arg3),
         72..=77=>crate::pty::syscall(frame.cs,syscall_num,arg1,arg2,arg3),
+        96..=99=>crate::audio::syscall(frame.cs,syscall_num,arg1,arg2,arg3),
+        100=>crate::system_sounds::syscall(arg1,arg2,arg3),
+        101=>crate::terminal_service::syscall(frame.cs,syscall_num,arg1,arg2,arg3),
+        103=>crate::multi_window::drag_syscall(frame.cs,arg1,arg2,arg3),
+        102=>crate::app_install::syscall(frame.cs,arg1,arg2,arg3),
+        95=>if arg1|arg2|arg3!=0 {(-22i32) as u32} else if crate::usermode::active_image(frame.cs).is_some() {crate::usermode::profile().mask()} else {u32::MAX},
+        91..=94=>crate::files_api::stream(frame.cs,syscall_num,arg1,arg2,arg3),
         88..=90=>crate::files_api::large(frame.cs,syscall_num,arg1,arg2,arg3),
         87=>crate::user_memory::heap(frame.cs,arg1,arg2,arg3),
         83=>crate::file_clipboard::syscall(frame.cs,arg1,arg2,arg3),

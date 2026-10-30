@@ -95,7 +95,7 @@ fn main() -> u32 {
     assert_eq!(xinyi::syscall(83,1,0x40000000,3468),-14);
     assert_eq!(xinyi::syscall(83,0,0x100000,3468),-14);
     assert_eq!(xinyi::syscall(83,0,0,3467),-22);
-    let mut clip=xinyi::file_clipboard::Selection::new();clip.volume=directory::volume();clip.count=1;clip.paths[0][..15].copy_from_slice(b"/APPS/HELLO.BIN");clip.lengths[0]=15;
+    let mut clip=xinyi::file_clipboard::Selection::new();clip.volume=directory::volume();clip.count=1;clip.paths[0][..21].copy_from_slice(b"/APPS/HELLO/HELLO.BIN");clip.lengths[0]=21;
     let version=xinyi::file_clipboard::set(&clip);assert!(version>0);assert_eq!(xinyi::file_clipboard::get(&mut clip),0);assert_eq!(clip.count,1);clip.version=0;assert_eq!(xinyi::file_clipboard::update(&clip),-116);
     clip.count=0;assert!(xinyi::file_clipboard::set(&clip)>0);
     let mut theme=xinyi::appearance::Theme::DEFAULT;assert_eq!(xinyi::appearance::get(&mut theme),0);theme.title=0x1000000;assert_eq!(xinyi::appearance::apply(&theme,false),-22);assert_eq!(xinyi::syscall(84,0,0x40000000,8),-14);

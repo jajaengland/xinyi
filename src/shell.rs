@@ -194,6 +194,7 @@ impl Shell {
         let mut shell = Self::new();
         shell.prompt();
         loop {
+            crate::network::poll();
             if let Some(event) = keyboard::poll_event() {
                 if let Some((line, n)) = shell.key(event) {
                     crate::run_command(core::str::from_utf8(&line[..n]).unwrap_or(""));

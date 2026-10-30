@@ -18,11 +18,14 @@ impl Queue {
         self.len != 0
     }
     pub fn push(&mut self, event: api::Event, motion: bool) {
-        let motion = motion && event.kind == api::POINTER;
+        let motion = motion && matches!(event.kind, api::POINTER | api::DRAG_OVER);
         if motion && self.last_motion && self.len != 0 {
             let index = (self.head + self.len - 1) % 32;
             let previous = self.events[index];
-            if previous.kind == api::POINTER && previous.buttons == event.buttons && previous.code==event.code {
+            if previous.kind == event.kind
+                && previous.buttons == event.buttons
+                && previous.code == event.code
+            {
                 self.events[index] = event;
                 return;
             }
@@ -53,6 +56,42 @@ impl Queue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn drag_hover_coalesces_without_losing_drop_or_end() {
+        let mut q = Queue::new();
+        for x in 0..200 {
+            q.push(
+                api::Event {
+                    kind: api::DRAG_OVER,
+                    x,
+                    buttons: 1,
+                    ..api::Event::default()
+                },
+                true,
+            );
+        }
+        q.push(
+            api::Event {
+                kind: api::DROP,
+                code: 42,
+                ..api::Event::default()
+            },
+            false,
+        );
+        q.push(
+            api::Event {
+                kind: api::DRAG_END,
+                ..api::Event::default()
+            },
+            false,
+        );
+        assert_eq!(q.pop().unwrap().x, 199);
+        let drop = q.pop().unwrap();
+        assert_eq!(drop.kind, api::DROP);
+        assert_eq!(drop.code, 42);
+        assert_eq!(q.pop().unwrap().kind, api::DRAG_END);
+        assert!(!q.pending());
+    }
     fn pointer(x: i32, buttons: u32) -> api::Event {
         api::Event {
             kind: api::POINTER,
@@ -88,14 +127,18 @@ mod tests {
     #[test]
     fn modifier_transitions_are_not_coalesced_away() {
         let mut q = Queue::new();
-        q.push(pointer(1,0),true);
-        let mut shifted=pointer(2,0);shifted.code=1<<16;
-        q.push(shifted,true);
-        shifted.x=3;q.push(shifted,true);
-        q.push(pointer(4,0),true);
-        assert_eq!(q.pop().unwrap().x,1);
-        let e=q.pop().unwrap();assert_eq!(e.x,3);assert_eq!(e.code,1<<16);
-        assert_eq!(q.pop().unwrap().x,4);
+        q.push(pointer(1, 0), true);
+        let mut shifted = pointer(2, 0);
+        shifted.code = 1 << 16;
+        q.push(shifted, true);
+        shifted.x = 3;
+        q.push(shifted, true);
+        q.push(pointer(4, 0), true);
+        assert_eq!(q.pop().unwrap().x, 1);
+        let e = q.pop().unwrap();
+        assert_eq!(e.x, 3);
+        assert_eq!(e.code, 1 << 16);
+        assert_eq!(q.pop().unwrap().x, 4);
         assert!(!q.pending());
     }
     #[test]

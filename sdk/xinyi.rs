@@ -1,5 +1,7 @@
 //! Minimal freestanding Rust interface for Xinyi's current flat-image ABI.
-#![allow(dead_code,unexpected_cfgs)]
+#![allow(dead_code, unexpected_cfgs)]
+#[path = "../src/text_layout.rs"]
+pub mod text;
 use core::arch::asm;
 
 pub fn syscall(number: u32, first: u32, second: u32, third: u32) -> i32 {
@@ -145,13 +147,40 @@ mod window_protocol;
 pub mod window {
     use super::window_protocol as protocol;
     #[allow(unused_imports)]
-    pub use protocol::{Draw, Event, CLOSE, HEIGHT, KEY, POINTER, RESET, RESIZE, WIDTH, MAX_COMMANDS};
-    pub fn resizable(handle:u32,min_width:u16,min_height:u16,max_width:u16,max_height:u16)->i32{super::syscall(85,handle,min_width as u32|((min_height as u32)<<16),max_width as u32|((max_height as u32)<<16))}
-    pub fn resize(handle:u32,event:Event)->i32{if event.kind!=RESIZE{return -22;}super::syscall(86,handle,event.x as u32|((event.y as u32)<<16),0)}
+    pub use protocol::{
+        Draw, Event, CLOSE, HEIGHT, KEY, MAX_COMMANDS, POINTER, RESET, RESIZE, WIDTH, DRAG_OVER, DROP, DRAG_END,
+    };
+    pub fn resizable(
+        handle: u32,
+        min_width: u16,
+        min_height: u16,
+        max_width: u16,
+        max_height: u16,
+    ) -> i32 {
+        super::syscall(
+            85,
+            handle,
+            min_width as u32 | ((min_height as u32) << 16),
+            max_width as u32 | ((max_height as u32) << 16),
+        )
+    }
+    pub fn resize(handle: u32, event: Event) -> i32 {
+        if event.kind != RESIZE {
+            return -22;
+        }
+        super::syscall(86, handle, event.x as u32 | ((event.y as u32) << 16), 0)
+    }
     pub fn open(title: &[u8]) -> i32 {
         super::syscall(60, title.as_ptr() as u32, title.len() as u32, 0)
     }
-    pub fn open_sized(title:&[u8],width:u16,height:u16)->i32 {super::syscall(65,title.as_ptr() as u32,title.len() as u32,width as u32|((height as u32)<<16))}
+    pub fn open_sized(title: &[u8], width: u16, height: u16) -> i32 {
+        super::syscall(
+            65,
+            title.as_ptr() as u32,
+            title.len() as u32,
+            width as u32 | ((height as u32) << 16),
+        )
+    }
     pub fn event(handle: u32, event: &mut Event, wait: bool) -> i32 {
         super::syscall(61, handle, event as *mut _ as u32, wait as u32)
     }
@@ -160,7 +189,9 @@ pub mod window {
         super::syscall(62, handle, commands.as_ptr() as u32, commands.len() as u32)
     }
     pub fn row(handle: u32, x: u32, y: u32, bg: u32, fg: u32, text: &[u8]) -> i32 {
-        if text.len()>96 {return -22;}
+        if text.len() > 96 {
+            return -22;
+        }
         draw(
             handle,
             &[
@@ -178,82 +209,361 @@ pub mod window {
 }
 
 /// Yield the current scheduled quantum; a no-op for a foreground program.
-pub fn yield_now() -> i32 { syscall(66, 0, 0, 0) }
+pub fn yield_now() -> i32 {
+    syscall(66, 0, 0, 0)
+}
 
 /// Shared ASCII clipboard; at most 1024 bytes. An empty slice clears it.
-pub fn clipboard_set(text:&[u8])->i32 {syscall(67,text.as_ptr() as u32,text.len() as u32,0)}
+pub fn clipboard_set(text: &[u8]) -> i32 {
+    syscall(67, text.as_ptr() as u32, text.len() as u32, 0)
+}
 /// Copy the whole clipboard; a zero-capacity slice queries its byte length.
-pub fn clipboard_get(output:&mut [u8])->i32 {syscall(68,output.as_mut_ptr() as u32,output.len() as u32,0)}
-pub fn working_directory(output:&mut [u8;105])->i32 {syscall(70,output.as_mut_ptr() as u32,105,0)}
+pub fn clipboard_get(output: &mut [u8]) -> i32 {
+    syscall(68, output.as_mut_ptr() as u32, output.len() as u32, 0)
+}
+pub fn working_directory(output: &mut [u8; 105]) -> i32 {
+    syscall(70, output.as_mut_ptr() as u32, 105, 0)
+}
 /// Queue a desktop app launch, using this process's working directory.
-pub fn launch(command:&[u8])->i32 {syscall(71,command.as_ptr() as u32,command.len() as u32,0)}
+pub fn launch(command: &[u8]) -> i32 {
+    syscall(71, command.as_ptr() as u32, command.len() as u32, 0)
+}
+/// Queue a launch only if the selected filesystem is still the expected volume.
+pub fn launch_on(command:&[u8],volume:u32)->i32 {syscall(101,command.as_ptr() as u32,command.len() as u32,volume)}
+#[path="../src/app_manifest.rs"]
+pub mod app_manifest;
+#[path="associations.rs"]
+pub mod associations;
 
 pub mod pty {
- pub fn viewport(handle:u32,rows:u32)->i32{super::syscall(72,8,handle,rows)}
- pub fn open()->i32 {super::syscall(72,0,0,0)}
- pub fn control(handle:u32,operation:u32)->i32 {super::syscall(72,operation,handle,0)}
- pub fn present(handle:u32,window:u32,scroll:u32)->i32 {super::syscall(73,handle,window,scroll)}
- pub fn key(handle:u32,event:u32)->i32 {super::syscall(74,handle,event,0)}
- pub fn paste(handle:u32,text:&[u8])->i32 {super::syscall(75,handle,text.as_ptr() as u32,text.len() as u32)}
- pub fn select(handle:u32,start:u32,end:u32)->i32 {super::syscall(76,handle,start,end)}
- pub fn copy(handle:u32)->i32 {super::syscall(77,handle,0,0)}
- pub fn clear_selection(handle:u32)->i32 {super::syscall(77,handle,1,0)}
+    pub fn viewport(handle: u32, rows: u32) -> i32 {
+        super::syscall(72, 8, handle, rows)
+    }
+    pub fn open() -> i32 {
+        super::syscall(72, 0, 0, 0)
+    }
+    pub fn control(handle: u32, operation: u32) -> i32 {
+        super::syscall(72, operation, handle, 0)
+    }
+    pub fn present(handle: u32, window: u32, scroll: u32) -> i32 {
+        super::syscall(73, handle, window, scroll)
+    }
+    pub fn key(handle: u32, event: u32) -> i32 {
+        super::syscall(74, handle, event, 0)
+    }
+    pub fn paste(handle: u32, text: &[u8]) -> i32 {
+        super::syscall(75, handle, text.as_ptr() as u32, text.len() as u32)
+    }
+    pub fn select(handle: u32, start: u32, end: u32) -> i32 {
+        super::syscall(76, handle, start, end)
+    }
+    pub fn copy(handle: u32) -> i32 {
+        super::syscall(77, handle, 0, 0)
+    }
+    pub fn clear_selection(handle: u32) -> i32 {
+        super::syscall(77, handle, 1, 0)
+    }
 }
 
-#[path="../src/directory_protocol.rs"]
+#[path = "../src/directory_protocol.rs"]
 mod directory_protocol;
 pub mod directory {
- pub fn action_on(path:&[u8],operation:u16,volume:u32)->i32 {
-  if path.is_empty()||path.len()>105||operation>2{return -22;}
-  let mut r=super::directory_protocol::Transfer{source:[0;105],destination:[0;105],source_length:path.len() as u16,destination_length:0,operation:operation+3,volume};r.source[..path.len()].copy_from_slice(path);
-  super::syscall(81,&r as *const _ as u32,220,0)
- }
+    pub fn action_on(path: &[u8], operation: u16, volume: u32) -> i32 {
+        if path.is_empty() || path.len() > 105 || operation > 2 {
+            return -22;
+        }
+        let mut r = super::directory_protocol::Transfer {
+            source: [0; 105],
+            destination: [0; 105],
+            source_length: path.len() as u16,
+            destination_length: 0,
+            operation: operation + 3,
+            volume,
+        };
+        r.source[..path.len()].copy_from_slice(path);
+        super::syscall(81, &r as *const _ as u32, 220, 0)
+    }
 
- /// 0 renames within a folder, 1 copies a file/tree, 2 moves a file/tree. No overwrites.
- pub fn volume()->u32 {super::syscall(82,0,0,0) as u32}
- pub fn transfer(source:&[u8],destination:&[u8],operation:u16)->i32 {transfer_on(source,destination,operation,volume())}
- pub fn transfer_on(source:&[u8],destination:&[u8],operation:u16,volume:u32)->i32 {
-  if source.is_empty()||source.len()>105||destination.is_empty()||destination.len()>105||operation>2 {return -22;}
-  let mut r=super::directory_protocol::Transfer{source:[0;105],destination:[0;105],source_length:source.len() as u16,destination_length:destination.len() as u16,operation,volume};
-  r.source[..source.len()].copy_from_slice(source);r.destination[..destination.len()].copy_from_slice(destination);
-  super::syscall(81,&r as *const _ as u32,220,0)
- }
+    /// 0 renames within a folder, 1 copies a file/tree, 2 moves a file/tree. No overwrites.
+    pub fn volume() -> u32 {
+        super::syscall(82, 0, 0, 0) as u32
+    }
+    pub fn transfer(source: &[u8], destination: &[u8], operation: u16) -> i32 {
+        transfer_on(source, destination, operation, volume())
+    }
+    /// Install a selected bundle (0), or remove an installed bundle (1).
+    pub fn app_action(path:&[u8],operation:u16,volume:u32)->i32 {
+        if path.is_empty()||path.len()>105||operation>1 {return -22;}
+        let mut r=super::directory_protocol::Transfer{source:[0;105],destination:[0;105],source_length:path.len() as u16,destination_length:0,operation,volume};
+        r.source[..path.len()].copy_from_slice(path);
+        super::syscall(102,&r as *const _ as u32,220,0)
+    }
+    pub fn transfer_on(source: &[u8], destination: &[u8], operation: u16, volume: u32) -> i32 {
+        if source.is_empty()
+            || source.len() > 105
+            || destination.is_empty()
+            || destination.len() > 105
+            || operation > 2
+        {
+            return -22;
+        }
+        let mut r = super::directory_protocol::Transfer {
+            source: [0; 105],
+            destination: [0; 105],
+            source_length: source.len() as u16,
+            destination_length: destination.len() as u16,
+            operation,
+            volume,
+        };
+        r.source[..source.len()].copy_from_slice(source);
+        r.destination[..destination.len()].copy_from_slice(destination);
+        super::syscall(81, &r as *const _ as u32, 220, 0)
+    }
 
- #[allow(unused_imports)]
- pub use super::directory_protocol::{Entry,Listing};
- pub fn list(path:&[u8],offset:u16,out:&mut Listing)->i32 {super::syscall(78,path.as_ptr() as u32,path.len() as u32|((offset as u32)<<16),out as *mut _ as u32)}
- pub fn cd(path:&[u8])->i32 {super::syscall(79,path.as_ptr() as u32,path.len() as u32,0)}
- /// 0 creates a directory, 1 deletes a file, 2 removes an empty directory.
- pub fn action(path:&[u8],operation:u32)->i32 {super::syscall(80,path.as_ptr() as u32,path.len() as u32,operation)}
+    #[allow(unused_imports)]
+    pub use super::directory_protocol::{Entry, Listing};
+    pub fn list(path: &[u8], offset: u16, out: &mut Listing) -> i32 {
+        super::syscall(
+            78,
+            path.as_ptr() as u32,
+            path.len() as u32 | ((offset as u32) << 16),
+            out as *mut _ as u32,
+        )
+    }
+    pub fn cd(path: &[u8]) -> i32 {
+        super::syscall(79, path.as_ptr() as u32, path.len() as u32, 0)
+    }
+    /// 0 creates a directory, 1 deletes a file, 2 removes an empty directory.
+    pub fn action(path: &[u8], operation: u32) -> i32 {
+        super::syscall(80, path.as_ptr() as u32, path.len() as u32, operation)
+    }
 }
 
+pub mod drag_drop {
+    pub fn register_open()->i32 {super::syscall(103,4,0,0)}
+    pub fn open_file(event:super::window::Event)->Result<([u8;105],usize,u32),i32> {
+        let mut payload=FileClipboard::new();payload.version=event.code;
+        let result=take(&mut payload);finish();if result<0 {return Err(result);}
+        if payload.count!=1||payload.flags[0]!=0 {return Err(-22);}
+        if payload.volume!=super::directory::volume() {return Err(-116);}
+        Ok((payload.paths[0],payload.lengths[0] as usize,payload.volume))
+    }
+
+    use super::directory_protocol::FileClipboard;
+    pub fn register()->i32 {super::syscall(103,0,0,0)}
+    pub fn begin(selection:&FileClipboard)->i32 {super::syscall(103,1,selection as *const _ as u32,3468)}
+    pub fn take(selection:&mut FileClipboard)->i32 {super::syscall(103,2,selection as *mut _ as u32,3468)}
+    pub fn finish()->i32 {super::syscall(103,3,0,0)}
+}
 pub mod file_clipboard {
- pub use super::directory_protocol::FileClipboard as Selection;
- pub fn get(out:&mut Selection)->i32 {super::syscall(83,1,out as *mut _ as u32,3468)}
- pub fn set(selection:&Selection)->i32 {super::syscall(83,0,selection as *const _ as u32,3468)}
- pub fn update(selection:&Selection)->i32 {super::syscall(83,2,selection as *const _ as u32,3468)}
+    pub use super::directory_protocol::FileClipboard as Selection;
+    pub fn get(out: &mut Selection) -> i32 {
+        super::syscall(83, 1, out as *mut _ as u32, 3468)
+    }
+    pub fn set(selection: &Selection) -> i32 {
+        super::syscall(83, 0, selection as *const _ as u32, 3468)
+    }
+    pub fn update(selection: &Selection) -> i32 {
+        super::syscall(83, 2, selection as *const _ as u32, 3468)
+    }
 }
-#[path="../src/theme_model.rs"]mod theme_model;
+#[path = "../src/theme_model.rs"]
+mod theme_model;
 pub mod appearance {
- #[allow(unused_imports)]
- pub use super::theme_model::{Theme,hex};
- pub fn get(out:&mut Theme)->i32 {super::syscall(84,0,out as *mut _ as u32,8)}
- pub fn apply(theme:&Theme,save:bool)->i32 {super::syscall(84,if save{2}else{1},theme as *const _ as u32,8)}
+    #[allow(unused_imports)]
+    pub use super::theme_model::{hex, Theme};
+    pub fn get(out: &mut Theme) -> i32 {
+        super::syscall(84, 0, out as *mut _ as u32, 8)
+    }
+    pub fn apply(theme: &Theme, save: bool) -> i32 {
+        super::syscall(84, if save { 2 } else { 1 }, theme as *const _ as u32, 8)
+    }
 }
 
-#[path="widgets.rs"]pub mod widgets;
-#[path="gui.rs"]pub mod gui;
-#[path="file_dialog.rs"]pub mod file_dialog;
+#[path = "file_dialog.rs"]
+pub mod file_dialog;
+#[path = "gui.rs"]
+pub mod gui;
+#[path = "widgets.rs"]
+pub mod widgets;
 
 #[cfg(xinyi_elf)]
-#[path="heap.rs"]pub mod heap;
+#[path = "heap.rs"]
+pub mod heap;
 
+#[path = "../src/stream_protocol.rs"]
+mod stream_protocol;
 pub mod files {
- #[repr(C)]struct Request{path:u32,path_length:u32,data:u32,length:u32,volume:u32}
- fn call(number:u32,path:&[u8],data:u32,length:usize,volume:u32)->i32 {if path.is_empty()||path.len()>105||length>65536{return -22;}let request=Request{path:path.as_ptr() as u32,path_length:path.len() as u32,data,length:length as u32,volume};super::syscall(number,&request as *const _ as u32,20,0)}
- pub fn read(path:&[u8],output:&mut[u8])->i32{read_on(path,output,super::directory::volume())}
- pub fn read_on(path:&[u8],output:&mut[u8],volume:u32)->i32{call(88,path,output.as_mut_ptr() as u32,output.len(),volume)}
- pub fn save(path:&[u8],data:&[u8])->i32{save_on(path,data,super::directory::volume())}
- pub fn save_on(path:&[u8],data:&[u8],volume:u32)->i32{call(89,path,data.as_ptr() as u32,data.len(),volume)}
- pub fn size_on(path:&[u8],volume:u32)->i32{call(90,path,0,0,volume)}
+    #[repr(C)]
+    struct Request {
+        path: u32,
+        path_length: u32,
+        data: u32,
+        length: u32,
+        volume: u32,
+    }
+    fn call(number: u32, path: &[u8], data: u32, length: usize, volume: u32) -> i32 {
+        if path.is_empty() || path.len() > 105 || length > 65536 {
+            return -22;
+        }
+        let request = Request {
+            path: path.as_ptr() as u32,
+            path_length: path.len() as u32,
+            data,
+            length: length as u32,
+            volume,
+        };
+        super::syscall(number, &request as *const _ as u32, 20, 0)
+    }
+    pub fn read(path: &[u8], output: &mut [u8]) -> i32 {
+        read_on(path, output, super::directory::volume())
+    }
+    pub fn read_on(path: &[u8], output: &mut [u8], volume: u32) -> i32 {
+        call(88, path, output.as_mut_ptr() as u32, output.len(), volume)
+    }
+    pub fn save(path: &[u8], data: &[u8]) -> i32 {
+        save_on(path, data, super::directory::volume())
+    }
+    pub fn save_on(path: &[u8], data: &[u8], volume: u32) -> i32 {
+        call(89, path, data.as_ptr() as u32, data.len(), volume)
+    }
+    pub fn size_on(path: &[u8], volume: u32) -> i32 {
+        call(90, path, 0, 0, volume)
+    }
+    use super::stream_protocol as protocol;
+    pub const MAX_CHUNK: usize = protocol::MAX_CHUNK;
+    pub const MAX_STREAM_FILE: usize = protocol::MAX_FILE;
+    fn range_call(
+        number: u32,
+        path: &[u8],
+        offset: u32,
+        data: u32,
+        length: usize,
+        volume: u32,
+    ) -> i32 {
+        let r = protocol::Request {
+            path: path.as_ptr() as u32,
+            path_length: path.len() as u32,
+            data,
+            length: length as u32,
+            volume,
+            offset,
+        };
+        if path.len() > 105 || length > u32::MAX as usize || !r.valid(number) {
+            return -22;
+        }
+        super::syscall(
+            number,
+            &r as *const _ as u32,
+            core::mem::size_of::<protocol::Request>() as u32,
+            0,
+        )
+    }
+    /// Returns bytes read (zero at EOF). Each call observes the current file, not a snapshot.
+    pub fn read_at_on(path: &[u8], offset: u32, output: &mut [u8], volume: u32) -> i32 {
+        range_call(
+            91,
+            path,
+            offset,
+            output.as_mut_ptr() as u32,
+            output.len(),
+            volume,
+        )
+    }
+    pub fn read_at(path: &[u8], offset: u32, output: &mut [u8]) -> i32 {
+        read_at_on(path, offset, output, super::directory::volume())
+    }
+    /// Copy-on-write range replacement; preserves other bytes and zero-fills gaps.
+    pub fn write_at_on(path: &[u8], offset: u32, data: &[u8], volume: u32) -> i32 {
+        range_call(92, path, offset, data.as_ptr() as u32, data.len(), volume)
+    }
+    pub fn write_at(path: &[u8], offset: u32, data: &[u8]) -> i32 {
+        write_at_on(path, offset, data, super::directory::volume())
+    }
+    pub fn stream_size_on(path: &[u8], volume: u32) -> i32 {
+        range_call(93, path, 0, 0, 0, volume)
+    }
+    pub fn stream_size(path: &[u8]) -> i32 {
+        stream_size_on(path, super::directory::volume())
+    }
+    /// Creates missing files. Growth is zero-filled; shrinking discards trailing bytes.
+    pub fn resize_on(path: &[u8], length: usize, volume: u32) -> i32 {
+        range_call(94, path, 0, 0, length, volume)
+    }
+    pub fn resize(path: &[u8], length: usize) -> i32 {
+        resize_on(path, length, super::directory::volume())
+    }
+}
+
+/// Kernel-owned launch capabilities. Query only; apps cannot grant themselves access.
+pub mod permissions {
+    pub const FILE_READ: u32 = 1;
+    pub const FILE_WRITE: u32 = 2;
+    pub const LAUNCH: u32 = 4;
+    pub const SHARED: u32 = 8;
+    pub const SHELL: u32 = 16;
+    pub const AUDIO: u32 = 32;
+    pub fn current() -> i32 {
+        super::syscall(95, 0, 0, 0)
+    }
+}
+
+/// One exclusive PCM stream, fixed 48 kHz stereo signed i16. Calls never wait for playback.
+pub mod audio {
+    pub const FRAMES: usize = 2048;
+    pub fn device_rate() -> i32 {
+        super::syscall(96, 0, 0, 0)
+    }
+    pub fn open() -> i32 {
+        super::syscall(97, 0, 0, 0)
+    }
+    pub fn write(handle: u32, stereo: &[i16]) -> i32 {
+        if stereo.is_empty() || stereo.len() % 2 != 0 || stereo.len() > FRAMES * 2 {
+            return -22;
+        }
+        super::syscall(
+            98,
+            handle,
+            stereo.as_ptr() as u32,
+            (stereo.len() / 2) as u32,
+        )
+    }
+    pub fn queued(handle: u32) -> i32 {
+        super::syscall(99, handle, 1, 0)
+    }
+    pub fn volume(handle: u32, percent: u32) -> i32 {
+        super::syscall(99, handle, 2, percent)
+    }
+    pub fn close(handle: u32) -> i32 {
+        super::syscall(99, handle, 0, 0)
+    }
+}
+
+/// Best-effort, nonblocking system voice sounds. Notification reuses Info.
+pub mod sounds {
+    #[derive(Clone, Copy)]
+    #[repr(u32)]
+    pub enum Event {
+        Startup,
+        Shutdown,
+        Error,
+        Warning,
+        Info,
+        Complete,
+        Connect,
+        Disconnect,
+        Empty,
+    }
+    pub fn play(event: Event) -> i32 {
+        super::syscall(100, 0, event as u32, 0)
+    }
+    pub fn notification() -> i32 {
+        play(Event::Info)
+    }
+    pub fn volume() -> i32 {
+        super::syscall(100, 1, 0, 0)
+    }
+    pub fn set_volume(percent: u32) -> i32 {
+        super::syscall(100, 2, percent, 0)
+    }
 }

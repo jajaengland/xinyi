@@ -9,3 +9,7 @@ terminal|programs/terminal_gui/main.rs|Graphical command terminal with shared cl
 files|programs/files/main.rs|Browse folders and open files
 settings|programs/settings/main.rs|Desktop appearance settings
 memdemo|programs/memdemo/main.rs|ELF writable globals and heap demonstration|elf
+viewer|programs/viewer/main.rs|Read-only hex viewer for files up to 1 MiB
+bigdemo|programs/bigdemo/main.rs|Large ELF app with a 128 KiB palette asset|elf
+player|programs/player/main.rs|WAV and sampled audio player|elf
+fonts|programs/fonts/main.rs|Font metrics, wrapping and clipping demo|elf

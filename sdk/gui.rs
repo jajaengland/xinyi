@@ -6,14 +6,14 @@ use super::{
 };
 pub fn frame(w: u32, r: Rect, sunken: bool) {
     let (a, b) = if sunken {
-        (0x404040, 0xffffff)
+        (0x8199ad, 0xffffff)
     } else {
-        (0xffffff, 0x404040)
+        (0xffffff, 0x8199ad)
     };
     window::draw(
         w,
         &[
-            Draw::rect(r.x as u32, r.y as u32, r.w as u32, r.h as u32, 0xc4c4c4),
+            Draw::rect(r.x as u32, r.y as u32, r.w as u32, r.h as u32, 0xe4ecf3),
             Draw::rect(r.x as u32, r.y as u32, r.w as u32, 1, a),
             Draw::rect(r.x as u32, r.y as u32, 1, r.h as u32, a),
             Draw::rect(r.x as u32, (r.y + r.h - 1) as u32, r.w as u32, 1, b),
@@ -26,11 +26,13 @@ pub fn button(w: u32, b: &Button, label: &[u8], focused: bool) {
     frame(w, b.rect, pressed);
     let d = i32::from(pressed);
     let r = b.rect;
+    let width = super::text::width(label, super::text::Font::Ui).min((r.w - 16).max(0) as u32);
     window::draw(
         w,
-        &[Draw::text(
-            (r.x + 8 + d) as u32,
+        &[Draw::label(
+            (r.x + (r.w - width as i32) / 2 + d) as u32,
             (r.y + (r.h - 16) / 2 + d) as u32,
+            width,
             0,
             label,
         )],

@@ -37,23 +37,38 @@ pub fn syscall(cs: u32, op: u32, pointer: u32, size: u32) -> u32 {
     {
         return (-116i32) as u32;
     }
+    if let Err(e) = validate(&mut request) {
+        return e;
+    }
+    unsafe {
+        if NEXT > i32::MAX as u32 {
+            return (-24i32) as u32;
+        }
+        request.version = NEXT;
+        NEXT += 1;
+        CLIP = request;
+        request.version
+    }
+}
+
+pub(crate) fn validate(request: &mut FileClipboard) -> Result<(), u32> {
     for i in 0..request.count as usize {
         if request.flags[i] > 1 {
-            return (-22i32) as u32;
+            return Err((-22i32) as u32);
         }
         let n = request.lengths[i] as usize;
         if n == 0 || n > 105 {
-            return (-22i32) as u32;
+            return Err((-22i32) as u32);
         }
         let text = &request.paths[i][..n];
         if text[0] != b'/' || !text.iter().all(|b| (32..=126).contains(b)) {
-            return (-22i32) as u32;
+            return Err((-22i32) as u32);
         }
         let Ok(path) = Path::parse(core::str::from_utf8(text).unwrap(), &Path::ROOT) else {
-            return (-22i32) as u32;
+            return Err((-22i32) as u32);
         };
         if path.depth == 0 {
-            return (-22i32) as u32;
+            return Err((-22i32) as u32);
         }
         let mut encoded = [0; 105];
         let len = path.encode(&mut encoded);
@@ -66,7 +81,7 @@ pub fn syscall(cs: u32, op: u32, pointer: u32, size: u32) -> u32 {
             )
             .unwrap();
             if path.contains(&other) || other.contains(&path) {
-                return (-22i32) as u32;
+                return Err((-22i32) as u32);
             }
         }
     }
@@ -75,13 +90,5 @@ pub fn syscall(cs: u32, op: u32, pointer: u32, size: u32) -> u32 {
         request.lengths[i] = 0;
         request.flags[i] = 0;
     }
-    unsafe {
-        if NEXT > i32::MAX as u32 {
-            return (-24i32) as u32;
-        }
-        request.version = NEXT;
-        NEXT += 1;
-        CLIP = request;
-        request.version
-    }
+    Ok(())
 }

@@ -1,4 +1,5 @@
 """Exercise shared multi-selection transfers, context menus, folders and appearance persistence."""
+from desktop_controls import APPS_BUTTON,SHELL_BUTTON,app_card,task_button
 import argparse,json,re,shutil,tempfile,time
 from seed_apps import seed_apps
 from pathlib import Path
@@ -47,8 +48,8 @@ def main():
     move(x,y)
     for down in [True,False]:g.call('input-send-event',{'events':[{'type':'btn','data':{'button':'left','down':down}}]});time.sleep(.07)
    def launch(name):
-    names=sorted(k.split('/')[-1][:-4] for k in inspect_tree(image,2048)[0] if k.startswith('APPS/') and k.count('/')==1 and k.endswith(('.BIN','.ELF')));start=len(log());click(40,11);click(40,46+names.index(name)*24)
-    until(lambda:re.search(r'Desktop: launch pid=(\d+) path=/APPS/'+name+r'\.BIN',log()[start:]),'Launch '+name);pid=int(re.search(r'Desktop: launch pid=(\d+)',log()[start:])[1]);until(lambda:f'Multiwindow: open pid={pid} ' in log()[start:],'Window '+name);return pid
+    names=sorted(k.split('/')[-1][:-4] for k in inspect_tree(image,2048)[0] if k.startswith('APPS/') and k.count('/') in (1,2) and k.endswith(('.BIN','.ELF')));start=len(log());click(*APPS_BUTTON);click(*app_card(names.index(name)))
+    until(lambda:re.search(r'Desktop: launch pid=(\d+) path=/APPS/(?:[A-Z0-9_]+/)?'+name+r'\.BIN',log()[start:]),'Launch '+name);pid=int(re.search(r'Desktop: launch pid=(\d+)',log()[start:])[1]);until(lambda:f'Multiwindow: open pid={pid} ' in log()[start:],'Window '+name);return pid
    def window(pid):
     m=re.search(r'Multiwindow: open pid='+str(pid)+r' handle=\d+ surface=([0-9a-f]+) client=(\d+)x(\d+) pos=(\d+),(\d+)',log());return int(m[1],16),int(m[2]),int(m[3])
    def rect(pid):
@@ -97,7 +98,7 @@ def main():
    until(lambda:re.search(r'Scheduler: exit pid=\d+ code=0',log()[start:]),'Output fixture did not finish');g.type('echo live\n');time.sleep(.2)
    g.call('screendump',{'filename':str(out/'widgets-terminal.png'),'format':'png'});g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={term} code=0' in log(),'Terminal close')
    settings=launch('SETTINGS');sx,sy=coords(settings);click(sx+120,sy+218);g.type('112233');g.key('ctrl-a');g.type('294f9c\n');click(sx+160,sy+264);until(lambda:tree().get('GUI.CFG')==b'294F9C 153E8E\n','Shared Settings field/Save');g.call('screendump',{'filename':str(out/'widgets-settings.png'),'format':'png'});click(sx+400,sy+264);until(lambda:f'Scheduler: exit pid={settings}' in log(),'Settings close')
-   click(768,11);g.wait_for('Desktop finished.');assert frames()==baseline,'Widget application frame leak'
+   click(*SHELL_BUTTON);g.wait_for('Desktop finished.');assert frames()==baseline,'Widget application frame leak'
    print('PASS GUI controls: file browsing/save/open/cancel/overwrite, private cwd, field selection, terminal scrollbar and 80 columns, Settings and frame balance',flush=True)
   finally:
    g.call('screendump',{'filename':str(out/'widgets-last.png'),'format':'png'});g.close();shutil.copyfile(d/'debug.log',out/'widgets-debug.log')

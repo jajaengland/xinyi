@@ -7,6 +7,8 @@ use crate::{
 use core::arch::asm;
 const N: usize = 4;
 struct Window {
+    drop_target:bool,
+    open_drop:bool,
     owner: u32,
     id: u32,
     ui: State,
@@ -40,7 +42,8 @@ static mut NEXT: u32 = 1;
 static mut STOP: bool = false;
 static mut KILL: Option<u32> = None;
 static mut SHELL: Option<crate::desktop_shell::Shell> = None;
-static mut LAUNCH: Option<crate::app_catalog::Entry> = None;
+static mut LAUNCH: Option<(crate::app_catalog::Entry,u32,[u8;128],usize,u32)> = None;
+static mut LAST_CLOCK:u32=u32::MAX;
 pub fn has_window(pid: u32) -> bool {
     unsafe {
         (&*core::ptr::addr_of!(WINDOWS))
@@ -52,30 +55,49 @@ pub fn has_window(pid: u32) -> bool {
 pub fn desktop_mode() -> bool {
     unsafe { (&*core::ptr::addr_of!(SHELL)).is_some() }
 }
-pub fn take_launch() -> Option<crate::app_catalog::Entry> {
+pub fn take_launch() -> Option<(crate::app_catalog::Entry,u32,[u8;128],usize,u32)> {
     unsafe { (*core::ptr::addr_of_mut!(LAUNCH)).take() }
 }
 pub fn status(text: &[u8]) {
     unsafe {
         if let Some(shell) = &mut *core::ptr::addr_of_mut!(SHELL) {
             shell.status(text);
-            damage(Rect {
-                x: 24,
-                y: 64,
-                w: 752,
-                h: 16,
-            });
+            if shell.open {let r=shell.menu();damage(Rect{x:r.x+16,y:r.y+r.h-20,w:r.w-32,h:16});}
         }
     }
+}
+pub fn collect_catalog(catalog:&mut crate::app_catalog::Catalog)->crate::fat16::Result<()> {
+    let mut folders=[[0;11];64];let mut count=0;let mut overflow=false;
+    crate::diskfs::list("/APPS", |name,_,directory| {
+        if directory {if count<folders.len() {folders[count]=*name;count+=1;}else{overflow=true;}}else{catalog.add(name,false);}
+    })?;
+    if overflow {return Err(crate::fat16::Error::TooLarge);}
+    for name in &folders[..count] {
+        let mut id=[0;12];let n=crate::fat16::display_name(name,&mut id);
+        if !crate::app_install::valid_id(&id[..n]) {continue;}
+        let mut path=crate::fs_path::Path::parse("/APPS",&crate::fs_path::Path::ROOT)?;path.names[1]=*name;path.depth=2;
+        if let Ok((executable,n))=crate::app_install::executable(path) {
+            let text=core::str::from_utf8(&executable[..n]).unwrap();
+            if let Ok(Some(_))=crate::app_metadata::load(text) {
+                let mut short=*name;short[8..].copy_from_slice(&executable[n-3..n]);catalog.add_bundle(&short);
+            }
+        }
+    }
+    catalog.sort();
+    Ok(())
 }
 pub fn refresh_catalog() {
     if crate::disk_io::busy() { return; }
     let mut catalog = crate::app_catalog::Catalog::new();
-    let result = crate::diskfs::list("/APPS", |name, _, directory| catalog.add(name, directory));
-    catalog.sort();
+    let result=collect_catalog(&mut catalog);
+    for entry in &mut catalog.entries[..catalog.len] {
+        let path=core::str::from_utf8(&entry.path[..entry.path_len]).unwrap();
+        if let Ok(Some(metadata))=crate::app_metadata::load(path) {entry.metadata(metadata.title(),metadata.description(),metadata.icon);}
+    }
     unsafe {
         if let Some(shell) = &mut *core::ptr::addr_of_mut!(SHELL) {
             shell.catalog = catalog;
+            shell.catalog_changed();
         }
     }
     if result.is_err() {
@@ -109,12 +131,7 @@ pub fn set_tasks(tasks: [Option<crate::desktop_shell::Task>; 4]) {
             {
                 shell.focused = FOCUS.and_then(|i| WINDOWS[i].as_ref().map(|w| w.owner));
             }
-            damage(Rect {
-                x: 0,
-                y: 0,
-                w: 800,
-                h: 24,
-            });
+            damage(crate::desktop_shell::Shell::bar());
         }
     }
 }
@@ -122,9 +139,11 @@ pub fn begin_desktop() -> Result<(), &'static str> {
     begin()?;
     unsafe {
         SHELL = Some(crate::desktop_shell::Shell::new());
+        (*core::ptr::addr_of_mut!(SHELL)).as_mut().unwrap().volume=crate::audio::system_volume(None);
     }
-    status(b"Ctrl+Esc: Apps | Alt+Tab: switch | Alt+F4: close | Close apps before Exit.");
     refresh_catalog();
+    if crate::diskfs::is_mounted()&&!crate::disk_io::busy() {let _=crate::diskfs::mkdir("/DESKTOP");}
+    refresh_desktop();
     unsafe {
         damage(Rect {
             x: 0,
@@ -187,16 +206,25 @@ unsafe fn chrome(x: i32, y: i32, buttons: u8, lost: bool) -> bool {
         shell.reset(buttons);
         return false;
     }
+    if !lost&&buttons&1!=0&&DRAG.is_none() {
+        if let Some(crate::desktop_shell::Hit::Desktop(i))=shell.capture {
+            if (x-shell.press.0).abs().max((y-shell.press.1).abs())>=5&&shell.file_volume==crate::diskfs::volume_epoch() {
+                let e=shell.files[i];let mut payload=crate::directory_protocol::FileClipboard::new();
+                payload.paths[0][..9].copy_from_slice(b"/DESKTOP/");payload.paths[0][9..9+e.length].copy_from_slice(&e.name[..e.length]);payload.lengths[0]=(9+e.length) as u16;payload.flags[0]=e.folder as u8;payload.count=1;payload.volume=shell.file_volume;
+                let token=DRAG_TOKEN;DRAG_TOKEN=DRAG_TOKEN.wrapping_add(1).max(1);payload.version=token;
+                shell.reset(buttons);DRAG=Some(Drag{source:0,target:0,token,active:true,taken:false,payload});damage(Rect{x:0,y:0,w:800,h:544});crate::debug::write_fmt(format_args!("Drag: begin desktop\n"));return true;
+            }
+        }
+    }
     let old_open = shell.open;
+    let old_sound=shell.sound_open;
     let old_menu = shell.menu();
+    shell.background=!(&*core::ptr::addr_of!(WINDOWS)).iter().flatten().any(|w|w.ui.window.visible&&w.ui.window.rect.contains(x,y));
     let (consumed, action, changed) = shell.input(x, y, buttons, lost);
     if changed {
-        damage(Rect {
-            x: 0,
-            y: 0,
-            w: 800,
-            h: 24,
-        });
+        damage(Rect{x:12,y:16,w:548,h:528});
+        if old_sound||shell.sound_open {damage(crate::desktop_shell::Shell::sound_panel());}
+        damage(crate::desktop_shell::Shell::bar());
         if old_open {
             damage(Rect {
                 w: old_menu.w + 6,
@@ -216,8 +244,13 @@ unsafe fn chrome(x: i32, y: i32, buttons: u8, lost: bool) -> bool {
     let opened = shell.open && !old_open;
     match action {
         Some(crate::desktop_shell::Action::Launch(i)) => {
-            if core::ptr::addr_of!(LAUNCH).read().is_none() { LAUNCH = Some(shell.catalog.entries[i]); }
+            if core::ptr::addr_of!(LAUNCH).read().is_none() { LAUNCH = Some((shell.catalog.entries[i],crate::diskfs::volume_epoch(),[0;128],0,0));
+                crate::debug::write_fmt(format_args!("App load: queued path={} volume={}\n",core::str::from_utf8(&shell.catalog.entries[i].path[..shell.catalog.entries[i].path_len]).unwrap(),crate::diskfs::volume_epoch())); }
             else { status(b"An app launch is already queued. Please wait."); }
+        }
+        Some(crate::desktop_shell::Action::OpenDesktop(i)) => {
+            if i==20 {queue_desktop(b"/DESKTOP",crate::diskfs::volume_epoch(),true);return consumed;}
+            let e=shell.files[i];let volume=shell.file_volume;let mut path=[0;128];path[..9].copy_from_slice(b"/DESKTOP/");path[9..9+e.length].copy_from_slice(&e.name[..e.length]);queue_desktop(&path[..9+e.length],volume,e.folder);
         }
         Some(crate::desktop_shell::Action::Focus(pid)) => {
             activate(pid);
@@ -227,8 +260,10 @@ unsafe fn chrome(x: i32, y: i32, buttons: u8, lost: bool) -> bool {
                 STOP = true;
             } else {
                 status(b"Close running apps before leaving. Ctrl+Alt+K stops a stuck focused app.");
+                crate::system_sounds::play(crate::system_sounds::Event::Warning);
             }
         }
+        Some(crate::desktop_shell::Action::Volume(value))=>{crate::audio::system_volume(Some(value));}
         None => (),
     }
     if opened {
@@ -249,12 +284,13 @@ unsafe fn damage(rect: Rect) {
 }
 unsafe fn dismiss_menu() {
     if let Some(shell) = &mut *core::ptr::addr_of_mut!(SHELL) {
+        if shell.sound_open {damage(crate::desktop_shell::Shell::sound_panel());}
         if shell.open {
             let rect = shell.menu();
             damage(Rect { w: rect.w + 6, h: rect.h + 6, ..rect });
         }
         shell.reset(BUTTONS);
-        damage(Rect { x: 0, y: 0, w: 800, h: 24 });
+        damage(crate::desktop_shell::Shell::bar());
     }
 }
 unsafe fn activate(pid: u32) {
@@ -285,12 +321,7 @@ unsafe fn focus(index: Option<usize>) {
     FOCUS = index;
     if let Some(shell) = &mut *core::ptr::addr_of_mut!(SHELL) {
         shell.focused = index.and_then(|i| WINDOWS[i].as_ref().map(|w| w.owner));
-        damage(Rect {
-            x: 0,
-            y: 0,
-            w: 800,
-            h: 24,
-        });
+        damage(crate::desktop_shell::Shell::bar());
     }
     if let Some(index) = index {
         // Raising changes occlusion across the whole window, even when no
@@ -327,6 +358,7 @@ pub fn begin() -> Result<(), &'static str> {
     let _ = crate::mouse::init();
     graphics::start()?;
     unsafe {
+        DRAG=None;DESKTOP_DROP=false;
         WINDOWS = [const { None }; N];
         ORDER = [0, 1, 2, 3];
         FOCUS = None;
@@ -351,6 +383,7 @@ pub fn begin() -> Result<(), &'static str> {
 }
 pub fn finish() {
     unsafe {
+        DRAG=None;DESKTOP_DROP=false;
         WINDOWS = [const { None }; N];
         SHELL = None;
         LAUNCH = None;
@@ -373,6 +406,7 @@ pub fn take_kill() -> Option<u32> {
     unsafe { (*core::ptr::addr_of_mut!(KILL)).take() }
 }
 pub fn remove(pid: u32) {
+    unsafe {if DRAG.as_ref().is_some_and(|d|d.source==pid||d.target==pid) {cancel_drag();}}
     unsafe {
         for i in 0..N {
             if WINDOWS[i].as_ref().is_some_and(|w| w.owner == pid) {
@@ -425,6 +459,20 @@ fn flush() {
     }
 }
 pub fn pump() -> bool {
+    unsafe {
+        if let Some(d)=DRAG.as_mut().filter(|d|d.active) {let cut=((crate::keyboard::modifiers()&(1<<16))!=0) as u16;if cut!=d.payload.cut {d.payload.cut=cut;damage(Rect{x:(POINTER.0+16).min(680),y:(POINTER.1+18).min(516),w:116,h:24});}}
+        let seconds=crate::interrupts::uptime_seconds();
+        if seconds!=LAST_CLOCK {
+            LAST_CLOCK=seconds;
+            refresh_desktop();
+            if let Some(shell)=(&mut *core::ptr::addr_of_mut!(SHELL)).as_mut() {
+                let old=(shell.clock,shell.volume);
+                if let Some(now)=crate::rtc::try_read() {shell.clock=[b'0'+now.hour/10,b'0'+now.hour%10,b':',b'0'+now.minute/10,b'0'+now.minute%10];}
+                shell.volume=crate::audio::system_volume(None);
+                if old!=(shell.clock,shell.volume) {damage(crate::desktop_shell::Shell::bar());if shell.sound_open {damage(crate::desktop_shell::Shell::sound_panel());}}
+            }
+        }
+    }
     for _ in 0..256 {
         let key = crate::keyboard::next_order();
         let mouse = crate::mouse::next_order();
@@ -442,6 +490,14 @@ pub fn pump() -> bool {
                 continue;
             };
             unsafe {
+                if DRAG.as_ref().is_some_and(|d|d.active) {
+                    if code as u16==27 {cancel_drag();continue;}
+                    if code as u16==0x123&&code&(1<<18)!=0 || matches!(code as u16,75|107)&&code&((1<<17)|(1<<18))==((1<<17)|(1<<18)) {cancel_drag();}else{continue;}
+                }
+                if code as u16==27 && code & ((1<<17)|(1<<18)) == ((1<<17)|(1<<18)) {
+                    if crate::disk_io::cancel_load() {status(b"Cancelling app load. Existing apps keep running.");}
+                    continue;
+                }
                 if code as u16 == 9 && code & (1 << 18) != 0 && code & (1 << 17) == 0 {
                     if let Some(shell) = &*core::ptr::addr_of!(SHELL) {
                         let next = shell.next_task(code & (1 << 16) != 0);
@@ -480,9 +536,10 @@ pub fn pump() -> bool {
                     let (consumed, action) = shell.key(code);
                     if consumed {
                         damage(Rect { w: menu.w + 6, h: menu.h + 6, ..menu });
-                        damage(Rect { x: 0, y: 0, w: 800, h: 24 });
+                        damage(crate::desktop_shell::Shell::bar());
                         if let Some(crate::desktop_shell::Action::Launch(index)) = action {
-                            if core::ptr::addr_of!(LAUNCH).read().is_none() { LAUNCH = Some(shell.catalog.entries[index]); }
+                            if core::ptr::addr_of!(LAUNCH).read().is_none() { LAUNCH = Some((shell.catalog.entries[index],crate::diskfs::volume_epoch(),[0;128],0,0));
+                                crate::debug::write_fmt(format_args!("App load: queued path={} volume={}\n",core::str::from_utf8(&shell.catalog.entries[index].path[..shell.catalog.entries[index].path_len]).unwrap(),crate::diskfs::volume_epoch())); }
                             else { status(b"An app launch is already queued. Please wait."); }
                         }
                         continue;
@@ -498,12 +555,7 @@ pub fn pump() -> bool {
                                 h: r.h + 6,
                                 ..r
                             });
-                            damage(Rect {
-                                x: 0,
-                                y: 0,
-                                w: 800,
-                                h: 24,
-                            });
+                            damage(crate::desktop_shell::Shell::bar());
                             continue;
                         }
                         if shell.tasks.iter().all(Option::is_none) && !crate::disk_io::busy() {
@@ -536,6 +588,7 @@ pub fn pump() -> bool {
                 (old.0 + event.dx as i32).clamp(0, 799),
                 (old.1 + event.dy as i32).clamp(0, 599),
             );
+            if DRAG.as_ref().is_some_and(|d|d.active) {drag_pointer(event.buttons,event.lost,old);BUTTONS=event.buttons;continue;}
             if chrome(POINTER.0, POINTER.1, event.buttons, event.lost) {
                 BUTTONS = event.buttons;
                 continue;
@@ -655,6 +708,7 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
                 return (-16i32) as u32;
             }
         }
+        let title_length=crate::usermode::profile().title(&mut title,second as usize);
         let Some(index) = (unsafe {
             (&*core::ptr::addr_of!(WINDOWS))
                 .iter()
@@ -677,6 +731,7 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
             let x = (56 + index as i32 * 352).min(800 - width as i32 - 22);
             let y = (124 + index as i32 * 96).min(530 - height as i32);
             let mut ui = State::sized(BUTTONS, width as i32, height as i32, x, y.max(24));
+            if desktop_mode() {ui.work_area=crate::desktop_shell::Shell::work_area();ui.window.rect.y=ui.window.rect.y.min((crate::desktop_shell::TASKBAR_Y-ui.window.rect.h-8).max(8));}
             ui.x = POINTER.0;
             ui.y = POINTER.1;
             crate::debug::write_fmt(format_args!(
@@ -687,15 +742,16 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
                 width,
                 height,
                 x,
-                y.max(24)
+                ui.window.rect.y
             ));
             ui.minimizable=desktop_mode();
             WINDOWS[index] = Some(Window {
+                drop_target:false,open_drop:false,
                 owner,
                 id,
                 ui,
                 title,
-                length: second as usize,
+                length: title_length,
                 surface,
                 requested:None,
                 width,
@@ -789,7 +845,7 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
                 if !c.valid_for(w.width, w.height) {
                     return (-22i32) as u32;
                 }
-                if c.kind == 1 {
+                if c.kind != 0 {
                     if !user_buffer::readable(c.pointer, c.length, image) {
                         return (-14i32) as u32;
                     }
@@ -804,7 +860,7 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
                     }
                     if !texts[i][..c.length as usize]
                         .iter()
-                        .all(|b| (32..=126).contains(b))
+                        .all(|b| (32..=126).contains(b) || c.kind==3 && *b==b'\n')
                     {
                         return (-22i32) as u32;
                     }
@@ -836,6 +892,12 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
                         cmd.color,
                     );
                     (cmd.width, cmd.height)
+                } else if cmd.kind==2 {
+                    c.label(cmd.x as i32,cmd.y as i32,cmd.width,cmd.color,&texts[i][..cmd.length as usize]);
+                    (cmd.width,cmd.height)
+                } else if cmd.kind==3 {
+                    c.paragraph(cmd.x as i32,cmd.y as i32,cmd.width,cmd.height,cmd.color,&texts[i][..cmd.length as usize]);
+                    (cmd.width,cmd.height)
                 } else {
                     c.text(
                         cmd.x as i32,
@@ -906,3 +968,101 @@ pub fn terminal_present(owner:u32,handle:u32,cells:&[crate::pty_model::Cell;2720
 }
 
 pub fn redraw(){unsafe {damage(Rect{x:0,y:0,w:800,h:600});}flush();}
+
+struct Drag {source:u32,target:u32,token:u32,active:bool,taken:bool,payload:crate::directory_protocol::FileClipboard}
+static mut DRAG:Option<Drag>=None;
+static mut DRAG_TOKEN:u32=1;
+static mut DESKTOP_DROP:bool=false;
+pub fn desktop_loaded(pid:Option<u32>,token:u32) {unsafe {
+    if token!=0&&DESKTOP_DROP&&DRAG.as_ref().is_some_and(|d|d.token==token&&!d.active) {
+        DESKTOP_DROP=false;if let Some(pid)=pid {DRAG.as_mut().unwrap().target=pid;}else{cancel_drag();}
+    }
+}}
+
+unsafe fn cancel_drag() {
+    if let Some(d)=DRAG.take() {for w in WINDOWS.iter_mut().flatten() {if w.owner==d.source||w.owner==d.target {w.push(api::Event{kind:api::DRAG_END,..api::Event::default()});}}}
+    DESKTOP_DROP=false;
+    CAPTURE=None;for w in WINDOWS.iter_mut().flatten(){w.ui.update(crate::mouse_packet::Event{lost:true,buttons:BUTTONS,..crate::mouse_packet::Event::default()});}
+    damage(Rect{x:0,y:0,w:800,h:544});
+}
+unsafe fn drop_hit()->Option<usize> {
+    ORDER.iter().rev().copied().find(|&i|WINDOWS[i].as_ref().is_some_and(|w|w.ui.window.visible&&w.ui.window.rect.contains(POINTER.0,POINTER.1)))
+        .filter(|&i|WINDOWS[i].as_ref().is_some_and(|w|w.drop_target&&{let c=w.ui.client();(if w.open_drop {c}else{Rect{x:c.x+8,y:c.y+80,w:c.w-16,h:c.h-112}}).contains(POINTER.0,POINTER.1)}))
+}
+unsafe fn drag_pointer(buttons:u8,lost:bool,previous:(i32,i32)) {
+    if lost {cancel_drag();return;}
+    let desktop=wallpaper_hit();let target=drop_hit();let Some(d)=DRAG.as_mut() else{return;};
+    let old=d.target;d.target=target.and_then(|i|WINDOWS[i].as_ref().map(|w|w.owner)).unwrap_or(0);
+    d.payload.cut=((crate::keyboard::modifiers()&(1<<16))!=0) as u16;
+    if old!=d.target {for w in WINDOWS.iter_mut().flatten(){if w.owner==old {w.push(api::Event{kind:api::DRAG_OVER,x:-1,y:-1,..api::Event::default()});}}}
+    if buttons&1==0 {
+        if let Some(i)=target {
+            d.active=false;let w=WINDOWS[i].as_mut().unwrap();let c=w.ui.client();w.push(api::Event{kind:api::DROP,code:d.token,x:POINTER.0-c.x,y:POINTER.1-c.y,buttons:0});
+            for w in WINDOWS.iter_mut().flatten(){w.ui.update(crate::mouse_packet::Event{lost:true,buttons:0,..crate::mouse_packet::Event::default()});}
+            CAPTURE=None;focus(Some(i));
+            crate::debug::write_fmt(format_args!("Drag: drop target={}\n",DRAG.as_ref().unwrap().target));
+        }else if desktop {
+            let mut destination=[0;128];destination[..8].copy_from_slice(b"/DESKTOP");let mut n=8;
+            if let Some(shell)=SHELL.as_ref() {for i in 0..shell.file_count {let e=shell.files[i];if e.folder&&crate::desktop_shell::Shell::desktop_file(i).contains(POINTER.0,POINTER.1) {destination[8]=b'/';destination[9..9+e.length].copy_from_slice(&e.name[..e.length]);n=9+e.length;break;}}}
+            if queue_desktop(&destination[..n],d.payload.volume,true) {LAUNCH.as_mut().unwrap().4=d.token;d.active=false;DESKTOP_DROP=true;CAPTURE=None;if let Some(s)=SHELL.as_mut(){s.reset(0);}crate::debug::write_fmt(format_args!("Drag: queued desktop transfer\n"));}else{cancel_drag();}
+        }else {cancel_drag();}
+    }else if let Some(i)=target {let w=WINDOWS[i].as_mut().unwrap();let c=w.ui.client();w.events.push(api::Event{kind:api::DRAG_OVER,code:d.payload.cut as u32,x:POINTER.0-c.x,y:POINTER.1-c.y,buttons:buttons as u32},true);}
+    if buttons&1==0||DRAG.as_ref().is_none_or(|d|d.target!=old) {damage(Rect{x:0,y:0,w:800,h:544});}
+    else {let badge=|p:(i32,i32)|Rect{x:(p.0+16).min(680),y:(p.1+18).min(516),w:116,h:24};damage(badge(previous).union(badge(POINTER)));}
+}
+pub fn paint_drag(canvas:&mut crate::canvas::Canvas<'_>) {
+    unsafe {let Some(d)=DRAG.as_ref().filter(|d|d.active) else{return;};
+        let color=if let Some(i)=drop_hit(){let c=WINDOWS[i].as_ref().unwrap().ui.client();let r=if WINDOWS[i].as_ref().unwrap().open_drop {c}else{Rect{x:c.x+8,y:c.y+80,w:c.w-16,h:c.h-112}};for (x,y,w,h) in [(r.x,r.y,r.w,2),(r.x,r.y+r.h-2,r.w,2),(r.x,r.y,2,r.h),(r.x+r.w-2,r.y,2,r.h)] {canvas.rect(x,y,w,h,0x238a60);}0x238a60}else if wallpaper_hit(){0x238a60}else{0x606c78};
+        let x=(POINTER.0+16).min(680);let y=(POINTER.1+18).min(516);canvas.rect(x,y,116,24,color);canvas.text(x+6,y+4,0xffffff,if drop_hit().is_some_and(|i|WINDOWS[i].as_ref().unwrap().open_drop) {b"Open file"}else if d.payload.cut==0 {b"Copy files"}else{b"Move files"},&crate::ui_font::FONT);
+    }
+}
+pub fn drag_syscall(cs:u32,op:u32,pointer:u32,size:u32)->u32 {
+    let Some(image)=usermode::active_image(cs) else{return u32::MAX;};let owner=usermode::getpid();
+    unsafe {
+        let Some(index)=WINDOWS.iter().position(|w|w.as_ref().is_some_and(|w|w.owner==owner)) else{return (-9i32) as u32;};
+        if matches!(op,0|4) {if pointer|size!=0{return (-22i32) as u32;}let w=WINDOWS[index].as_mut().unwrap();w.drop_target=true;w.open_drop=op==4;if op==0 {if let Some(d)=DRAG.as_ref().filter(|d|!d.active&&d.target==owner&&!d.taken){w.push(api::Event{kind:api::DROP,code:d.token,x:8,y:0,..api::Event::default()});}}return 0;}
+        if op==3 {if pointer|size!=0{return (-22i32) as u32;}if DRAG.as_ref().is_some_and(|d|d.target==owner&&!d.active){cancel_drag();return 0;}return (-9i32) as u32;}
+        if size!=3468||!matches!(op,1|2) {return (-22i32) as u32;}
+        if op==1 {
+            if DRAG.is_some()||CAPTURE!=Some(index)||BUTTONS&1==0||!WINDOWS[index].as_ref().unwrap().drop_target||WINDOWS[index].as_ref().unwrap().open_drop {return (-16i32) as u32;}
+            if !user_buffer::readable_range(pointer,size,image){return (-14i32) as u32;}
+            let mut payload=core::ptr::read_unaligned(pointer as *const crate::directory_protocol::FileClipboard);
+            if payload.count==0||payload.count>32||payload.cut>1{return (-22i32) as u32;}
+            if !crate::diskfs::is_mounted(){return (-19i32) as u32;}
+            if payload.volume!=crate::diskfs::volume_epoch(){return (-116i32) as u32;}
+            if let Err(e)=crate::file_clipboard::validate(&mut payload){return e;}
+            let token=DRAG_TOKEN;DRAG_TOKEN=DRAG_TOKEN.wrapping_add(1).max(1);payload.version=token;
+            DRAG=Some(Drag{source:owner,target:0,token,active:true,taken:false,payload});damage(Rect{x:0,y:0,w:800,h:544});
+            crate::debug::write_fmt(format_args!("Drag: begin source={} count={}\n",owner,payload.count));return 0;
+        }
+        if !user_buffer::writable(pointer,size){return (-14i32) as u32;}
+        let Some(d)=DRAG.as_mut().filter(|d|!d.active&&!d.taken&&d.target==owner) else{return (-9i32) as u32;};
+        let expected=core::ptr::read_unaligned(pointer as *const crate::directory_protocol::FileClipboard).version;
+        if expected!=d.token||d.payload.volume!=crate::diskfs::volume_epoch(){return (-116i32) as u32;}
+        core::ptr::copy_nonoverlapping(&d.payload as *const _ as *const u8,pointer as *mut u8,3468);d.taken=true;0
+    }
+}
+
+fn refresh_desktop() {
+    unsafe {
+        let Some(shell)=SHELL.as_mut() else{return;};
+        let volume=crate::diskfs::volume_epoch();
+        if shell.file_volume!=volume {shell.file_count=0;shell.selected=None;shell.file_volume=volume;damage(Rect{x:132,y:24,w:416,h:520});}
+        if crate::disk_io::busy()||DRAG.is_some()||shell.capture.is_some(){return;}
+        let mut files=[crate::desktop_shell::DesktopEntry::EMPTY;20];let mut count=0;
+        let _=crate::diskfs::list("/DESKTOP",|name,_,folder| {if count<20 {let mut label=[0;12];let n=crate::fat16::display_name(name,&mut label);files[count]=crate::desktop_shell::DesktopEntry{name:label,length:n,folder};count+=1;}});
+        files[..count].sort_unstable_by(|a,b|b.folder.cmp(&a.folder).then(a.name.cmp(&b.name)));
+        if files!=shell.files||count!=shell.file_count {shell.files=files;shell.file_count=count;shell.selected=None;damage(Rect{x:132,y:24,w:416,h:520});}
+    }
+}
+unsafe fn queue_desktop(path:&[u8],volume:u32,folder:bool)->bool {
+    let Some(shell)=SHELL.as_ref() else{return false;};
+    if LAUNCH.is_some()||shell.tasks.iter().all(Option::is_some) {status(b"Close a window before opening a desktop item.");crate::system_sounds::play(crate::system_sounds::Event::Warning);return false;}
+    let Some(i)=shell.find(b"FILES") else{return false;};
+    let mut args=[0;128];let prefix=if folder {b"--folder " as &[u8]}else{b""};args[..prefix.len()].copy_from_slice(prefix);args[prefix.len()..prefix.len()+path.len()].copy_from_slice(path);
+    LAUNCH=Some((shell.catalog.entries[i],volume,args,prefix.len()+path.len(),0));true
+}
+unsafe fn wallpaper_hit()->bool {
+    SHELL.as_ref().is_some_and(|s|!s.open&&!s.sound_open)&&POINTER.1<544&&
+    !WINDOWS.iter().flatten().any(|w|w.ui.window.visible&&w.ui.window.rect.contains(POINTER.0,POINTER.1))
+}

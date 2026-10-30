@@ -1,4 +1,5 @@
 """Verify desktop keyboard navigation, focus routing and retained window state."""
+from desktop_controls import APPS_BUTTON,SHELL_BUTTON,app_card,task_button
 import argparse
 import re
 import shutil
@@ -56,7 +57,7 @@ def main():
             guest.key('alt-tab')
             guest.key('alt-shift-tab')
             names = sorted(path.split('/')[-1][:-4] for path in tree()
-                           if path.startswith('APPS/') and path.count('/') == 1
+                           if path.startswith('APPS/') and path.count('/') in (1,2)
                            and path.endswith(('.BIN', '.ELF')))
 
             def launch(name):
@@ -123,12 +124,12 @@ def main():
             match = re.search(r'Multiwindow: open pid=' + str(pad) + r' .*pos=(\d+),(\d+)', log())
             click(int(match[1]) + 614, int(match[2]) + 15)
             until(lambda: re.search(r'Multiwindow: resized pid=' + str(pad) +
-                                   r' .*client=792x544 .*maximized=true', log()), 'Maximize editor')
+                                   r' .*client=792x512 .*maximized=true', log()), 'Maximize editor')
             changes = log().count(f'Multiwindow: resized pid={pad} ')
-            click(734, 39)
+            click(734, 15)
             until(lambda: f'Multiwindow: minimized pid={pad}' in log(), 'Minimize editor')
             switch(pad, reverse=True)
-            assert f'Multiwindow: restored pid={pad} pos=0,24' in log(), 'Maximized placement lost'
+            assert f'Multiwindow: restored pid={pad} pos=0,0' in log(), 'Maximized placement lost'
             assert log().count(f'Multiwindow: resized pid={pad} ') == changes, 'Restore resized the editor'
             # Opening/canceling Apps consumes its navigation keys, preserving app data.
             guest.key('ctrl-esc')
@@ -153,7 +154,7 @@ def main():
             time.sleep(.2)  # Let the final synchronous catalog refresh finish.
             guest.key('alt-tab')
             time.sleep(.15)
-            click(768, 11)
+            click(*SHELL_BUTTON)
             guest.wait_for('Desktop finished.')
             assert frames() == baseline, 'Keyboard switching leaked frames'
             assert tree()['ROUTE.TXT'] == b'first second'

@@ -23,6 +23,7 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
     if second > 128 || (number == 71 && third != 0) {
         return (-22i32) as u32;
     }
+    if number==101 && third!=crate::diskfs::volume_epoch() {return (-116i32) as u32;}
     if !crate::user_memory::readable(first, second, image) {
         return (-14i32) as u32;
     }
@@ -39,7 +40,7 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
         return (-22i32) as u32;
     }
     let line = core::str::from_utf8(&line[..second as usize]).unwrap();
-    if number == 71 {
+    if number == 71 || number==101 {
         return match crate::multitask::request_launch(line) {
             Ok(()) => 0,
             Err(e) => e as u32,

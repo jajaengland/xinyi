@@ -4,15 +4,23 @@ pub const MAX_APPS: usize = 16;
 pub struct Entry {
     pub label: [u8; 8],
     pub label_len: usize,
-    pub path: [u8; 18],
+    pub path: [u8; 30],
     pub path_len: usize,
+    title:[u8;32],title_len:usize,description:[u8;64],description_len:usize,pub icon:u8,
 }
 impl Entry {
+    pub fn title(&self)->&[u8] {if self.title_len==0 {&self.label[..self.label_len]}else{&self.title[..self.title_len]}}
+    pub fn description(&self)->&[u8] {if self.title_len==0 {b"Application"}else{&self.description[..self.description_len]}}
+    pub fn metadata(&mut self,title:&[u8],description:&[u8],icon:u8) {
+        self.title_len=title.len().min(32);self.title[..self.title_len].copy_from_slice(&title[..self.title_len]);
+        self.description_len=description.len().min(64);self.description[..self.description_len].copy_from_slice(&description[..self.description_len]);self.icon=icon.min(7);
+    }
     const EMPTY: Self = Self {
         label: [0; 8],
         label_len: 0,
-        path: [0; 18],
+        path: [0; 30],
         path_len: 0,
+        title:[0;32],title_len:0,description:[0;64],description_len:0,icon:7,
     };
 }
 pub struct Catalog {
@@ -62,5 +70,13 @@ impl Catalog {
     }
     pub fn sort(&mut self) {
         self.entries[..self.len].sort_unstable_by(|a, b| a.label.cmp(&b.label));
+    }
+    pub fn add_bundle(&mut self, executable: &[u8;11]) {
+        let before=self.len;self.add(executable,false);
+        if self.len==before {return;}
+        let entry=&mut self.entries[before];let n=entry.label_len;
+        entry.path.copy_within(6..entry.path_len,7+n);
+        entry.path[6..6+n].copy_from_slice(&entry.label[..n]);
+        entry.path[6+n]=b'/';entry.path_len+=n+1;
     }
 }

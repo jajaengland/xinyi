@@ -21,6 +21,14 @@ mod user_memory;
 mod elf;
 mod terminal;
 mod speaker;
+mod audio;
+mod audio_model;
+mod sound_model;
+mod system_sounds;
+mod stream_protocol;
+mod permissions;
+mod program_image;
+mod load_model;
 mod files_api;
 mod clipboard;
 mod file_clipboard;
@@ -44,7 +52,12 @@ mod mouse_packet;
 mod mouse_ui;
 mod desktop_ui;
 mod desktop_shell;
+mod desktop_paint;
 mod app_catalog;
+mod app_manifest;
+mod app_metadata;
+mod app_install;
+mod app_tree;
 mod cpu_context;
 mod scheduler_model;
 mod multitask;
@@ -66,6 +79,9 @@ mod ata_poll;
 mod ata_capacity;
 mod idle;
 mod pci;
+mod rtl8139;
+mod net_model;
+mod network;
 mod disk_target;
 mod diskfs;
 mod disk_io;
@@ -94,6 +110,7 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("multitask", "multitask [hog|fault|check|wait]", "Run two isolated counter programs concurrently"),
     ("files", "files", "Open the file manager"),
     ("settings", "settings", "Open appearance settings"),
+    ("sounds", "sounds [list|test NAME|volume N|mute|unmute|save]", "System voice sounds and volume"),
     ("terminal", "terminal", "Open a graphical terminal window"),
     ("desktop", "desktop", "Open the multitasking desktop and Apps menu"),
     ("windowtest", "windowtest", "Run the legacy window/launcher diagnostic"),
@@ -118,11 +135,12 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("usermode", "usermode [probe]", "Test protected ring 3 execution"),
     ("ps", "ps", "Show running processes"),
     ("apps", "apps", "List programs installed in /APPS"),
+    ("app", "app install FOLDER | app remove /APPS/ID", "Install or remove an app folder"),
     ("notepad", "notepad [FILE]", "Open a file in graphical Notepad"),
     ("edit", "edit [FILE]", "Open a text file in the editor"),
     ("disks", "disks", "List available numbered drives"),
     ("use", "use NUMBER", "Select a numbered drive and mount its filesystem"),
-    ("run", "run [NAME|FILE]", "Run a bundled application or program file"),
+    ("run", "run [--read-only|--isolated|--media] APP [ARGS]", "Run an application with a selected access profile"),
     ("spawn", "spawn [demo]", "Create a paused demo task record (diagnostic)"),
     ("kill", "kill PID", "Stop a desktop process or remove a diagnostic task record"),
     ("ls", "ls [PATH]", "List files and folders"),
@@ -173,15 +191,15 @@ macro_rules! println {
 
 fn launch_program(name:&str,arguments:&str)->bool {
     if pty::current().is_some() {return pty::launch(name,arguments);}
-    if name.eq_ignore_ascii_case("terminal")||name.eq_ignore_ascii_case("terminal.bin") {multitask::terminal_desktop();return true;}
+    launch_with_profile(name,arguments,permissions::Profile::for_name(name))
+}
+fn launch_with_profile(name:&str,arguments:&str,profile:permissions::Profile)->bool {
+    if pty::current().is_some() {return pty::launch_with_profile(name,arguments,profile);}
+    if profile==permissions::Profile::Trusted && (name.eq_ignore_ascii_case("terminal")||name.eq_ignore_ascii_case("terminal.bin")) {multitask::terminal_desktop();return true;}
     if arguments.len()>128 {println!("Program arguments exceed 128 bytes.");return false;}
-    let Some(staging)=loader::Frames::new(loader::MAX_BINARY_BYTES/4096) else {println!("Out of memory");return false;};
-    let data=unsafe {core::slice::from_raw_parts_mut(staging.base() as *mut u8,loader::MAX_BINARY_BYTES)};
-    let result=diskfs::read_executable(name,data);
-    let size=match result {Ok(0)=>{println!("Program is empty.");return false;},Ok(size)=>size,
-        Err(error)=>{println!("Program: {}",error.message());return false;}};
-    let mut program=match loader::load(&data[..size]){Ok(p)=>p,Err(e)=>{println!("{}",e.message());return false;}};
-    drop(staging);
+    let mut program=match loader::from_disk(name) {Ok(p)=>p,Err(e)=>{println!("Program: {}",e);return false;}};
+    program.profile=program.profile.restrict(profile);
+    println!("Application access: {}",profile.label());
     program.arguments[..arguments.len()].copy_from_slice(arguments.as_bytes());program.argument_length=arguments.len();
     if let Some(pid)=task::create_task(program) {println!("Running process {}...",pid);task::execute(pid);true}
     else {println!("Failed to create task record");false}
@@ -292,6 +310,8 @@ fn run_command(input: &str) {
     }
     if pty::current().is_some()&&matches!(command,"usermode"|"spawn"|"multitask") {println!("Run this kernel diagnostic from the physical console.");return;}
     match command {
+        "net"=>network::command(argument),
+        "ping"=>network::ping(argument),
         "exit"=>{if let Some(id)=pty::current() {pty::exit_shell(id);}else{println!("The physical console has no parent shell.");}},
         "help" => {
             println!("Xinyi commands:");
@@ -302,6 +322,7 @@ fn run_command(input: &str) {
         }
 
         "about" => {
+            system_sounds::play(system_sounds::Event::Info);
             println!("Xinyi");
             println!("A small 32-bit operating system kernel");
             println!("Written in Rust and x86 assembly.");
@@ -481,13 +502,25 @@ fn run_command(input: &str) {
         "mouse"=>graphics::mouse_demo(),
         "graphics"=>graphics::demo(),
         "apps" => {
-            if let Err(error) = diskfs::list("/APPS", |name,size,directory| {
-                if !directory {
-                    let mut text=[0;12]; let length=fat16::display_name(name,&mut text);
-                    println!("  {} ({} bytes)",core::str::from_utf8(&text[..length]).unwrap_or("?"),size);
-                }
-            }) { println!("Applications: {}. Use disks and use NUMBER to choose a drive.",error.message()); }
+            let mut catalog=app_catalog::Catalog::new();
+            match multi_window::collect_catalog(&mut catalog) {
+                Ok(())=>for entry in &catalog.entries[..catalog.len] {
+                    let path=core::str::from_utf8(&entry.path[..entry.path_len]).unwrap();
+                    println!("  {} - {}",path.rsplit('/').next().unwrap(),core::str::from_utf8(entry.title()).unwrap_or("Application"));
+                },
+                Err(error)=>println!("Applications: {}. Use disks and use NUMBER to choose a drive.",error.message()),
+            }
         }
+        "app"=>{
+            let (operation,path)=argument.split_once(' ').unwrap_or((argument,""));
+            let result=match operation {
+                "install" if !path.is_empty()=>app_install::install(path.trim()),
+                "remove" if !path.is_empty()=>app_install::remove(path.trim()),
+                _=>{println!("Usage: app install FOLDER | app remove /APPS/ID");return;},
+            };
+            match result {Ok(())=>println!("Application {} complete.",operation),Err(e)=>println!("Application: {}",e.message())}
+        }
+        "sounds" => system_sounds::command(argument),
         "edit" => {launch_program("edit", argument);},
         "notepad" => {launch_program("notepad", argument);},
         "files" => {launch_program("files", argument);},
@@ -501,8 +534,10 @@ fn run_command(input: &str) {
 
         "run" | "spawn" => {
             if command == "run" && !argument.is_empty() && argument != "demo" {
-                let (name,args)=argument.split_once(char::is_whitespace).unwrap_or((argument,""));
-                launch_program(name,args.trim());
+                match permissions::parse(argument) {
+                    Ok(request)=>{launch_with_profile(request.name,request.arguments,request.profile);},
+                    Err(message)=>println!("{}",message),
+                }
                 return;
             }
             if command == "spawn" && !argument.is_empty() && argument != "demo" {
@@ -667,12 +702,12 @@ fn run_command(input: &str) {
             Err(_)=>println!("Usage: mount [NUMBER]"),
         },
         "mount" => match diskfs::mount() {
-            Ok(start) => println!("Mounted FAT16 at sector {}. File commands now use disk.", start),
+            Ok(start) => {println!("Mounted FAT16 at sector {}. File commands now use disk.", start);system_sounds::play(system_sounds::Event::Connect);},
             Err(error) => println!("Mount failed: {}", error.message()),
         },
         "fsck" => diskfs::check_command(argument),
         "unmount" => match diskfs::unmount() {
-            Ok(()) => println!("Unmounted. File commands now use RAM (not persistent)."),
+            Ok(()) => {println!("Unmounted. File commands now use RAM (not persistent).");system_sounds::play(system_sounds::Event::Disconnect);},
             Err(error) => println!("Unmount failed: {}", error.message()),
         },
         "disk" => match argument {
@@ -696,11 +731,12 @@ fn run_command(input: &str) {
                     println!("Boot source is not detected; verify this is the intended target.");
                     println!("To erase this disk, enter: format confirm");
                     println!("Any other command cancels confirmation.");
+                    system_sounds::play(system_sounds::Event::Warning);
                 }
                 Err(error) => println!("Format refused: {}", error.message()),
             },
             "confirm" => match diskfs::confirm_format() {
-                Ok(()) => println!("Format complete. Run mount to use the empty FAT16 disk."),
+                Ok(()) => {println!("Format complete. Run mount to use the empty FAT16 disk.");system_sounds::play(system_sounds::Event::Complete);},
                 Err(error) => println!("Format failed: {}", error.message()),
             },
             _ => println!("Usage: format, then format confirm. Unmount first."),
@@ -725,12 +761,14 @@ fn run_command(input: &str) {
                         }
                         println!("To install, enter: install confirm");
                         println!("Any other command cancels confirmation.");
+                        system_sounds::play(system_sounds::Event::Warning);
                     }
                     Err(error) => println!("Install refused: {}",error.message()),
                 },
                 "confirm" => match installer::confirm() {
                     Ok(()) => {
                         println!("Installation complete: bootloader, kernel, and FAT16 data are ready.");
+                        system_sounds::play(system_sounds::Event::Complete);
                         if diskfs::mount().is_ok() {println!("Installed drive ready. Type apps or edit FILE.");}
                     }
                     Err(error) => println!("Install failed: {}",error.message()),
@@ -750,6 +788,7 @@ fn run_command(input: &str) {
 
         "shutdown" => {if !argument.is_empty()&&argument!="confirm"{println!("Usage: shutdown [confirm]");}else if multitask::active()&&argument!="confirm"{println!("Shutdown closes running applications. Save your work, then shutdown confirm.");}else{power::shutdown();}}
         "reboot" => {
+            audio::farewell();
             println!("Rebooting...");
 
             unsafe {
@@ -793,6 +832,7 @@ fn run_command(input: &str) {
 		}
 
         _ => {
+            system_sounds::play(system_sounds::Event::Error);
             println!("Unknown command: '{}'", command);
 
             if let Some(suggestion) = suggest_command(command) {
@@ -858,6 +898,10 @@ pub extern "C" fn rust_main(magic: u32, info_addr: u32) -> ! {
     diskfs::startup_mount();
     theme::load();
     power::init();
+    audio::init();
+    network::init();
+    system_sounds::load();
+    system_sounds::play(system_sounds::Event::Startup);
     println!();
 
     shell::Shell::physical()

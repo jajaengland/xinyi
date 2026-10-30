@@ -1,4 +1,6 @@
 // Drawing into owned RAM, independent of the display hardware.
+#[path="text_layout.rs"]
+pub mod text;
 pub struct Canvas<'a> {pixels:&'a mut [u32],width:usize,height:usize,stride:usize}
 impl<'a> Canvas<'a> {
     pub fn new(pixels:&'a mut [u32],width:usize,height:usize,stride:usize)->Option<Self> {
@@ -65,8 +67,51 @@ impl<'a> Canvas<'a> {
     }
     /// Draw one raw bitmap glyph, including CP437 console cells.
     pub fn glyph(&mut self,x:i32,y:i32,color:u32,byte:u8,font:&[u8;4096]) {
-        for row in 0..16 {let bits=font[byte as usize*16+row];
-            for column in 0..8 {if bits&(0x80>>column)!=0 {self.pixel(x.saturating_add(column),y.saturating_add(row as i32),color);}}
+        if x>=0 && y>=0 && x as i64+8<=self.width as i64 && y as i64+16<=self.height as i64 {
+            for row in 0..16 {
+                let bits=font[byte as usize*16+row];if bits==0 {continue;}
+                let start=(y as usize+row)*self.stride+x as usize;
+                let output=&mut self.pixels[start..start+8];
+                for column in 0..8 {if bits&(0x80>>column)!=0 {output[column]=color;}}
+            }
+            return;
+        }
+        self.glyph_clip(x,y,color,byte,font,0,8,(0,0,self.width as i64,self.height as i64));
+    }
+    fn glyph_clip(&mut self,x:i32,y:i32,color:u32,byte:u8,font:&[u8;4096],source:u8,width:u8,clip:(i64,i64,i64,i64)) {
+        let (x,y)=(x as i64,y as i64);
+        let left=x.max(clip.0).max(0);let right=(x+width as i64).min(clip.2).min(self.width as i64);
+        let top=y.max(clip.1).max(0);let bottom=(y+16).min(clip.3).min(self.height as i64);
+        if left>=right || top>=bottom {return;}
+        for row in top..bottom {
+            let bits=font[byte as usize*16+(row-y) as usize];
+            if bits==0 {continue;}
+            let output=&mut self.pixels[row as usize*self.stride+left as usize..row as usize*self.stride+right as usize];
+            let mut mask=0x80u8>>(source as i64+left-x);
+            for pixel in output {if bits&mask!=0 {*pixel=color;}mask>>=1;}
+        }
+    }
+    fn ui_run(&mut self,mut x:i32,y:i32,color:u32,bytes:&[u8],clip:(i64,i64,i64,i64)) {
+        for &byte in bytes {
+            let g=text::glyph(byte,text::Font::Ui);
+            self.glyph_clip(x,y,color,g.byte,&text::FONT,g.left,g.width,clip);
+            x=x.saturating_add(g.advance as i32);
+        }
+    }
+    /// Proportional label, ellipsized and clipped to the specified pixel box.
+    pub fn label(&mut self,x:i32,y:i32,width:u32,color:u32,bytes:&[u8]) {
+        let clip=(x as i64,y as i64,x as i64+width as i64,y as i64+16);
+        let (n,dots)=text::ellipsis(bytes,width,text::Font::Ui);
+        self.ui_run(x,y,color,&bytes[..n],clip);
+        self.ui_run(x.saturating_add(text::width(&bytes[..n],text::Font::Ui) as i32),y,color,&b"..."[..dots],clip);
+    }
+    /// Word-wrapped proportional text with hard breaks for long words and strict clipping.
+    pub fn paragraph(&mut self,x:i32,y:i32,width:u32,height:u32,color:u32,bytes:&[u8]) {
+        if width==0 || height==0 {return;}
+        let clip=(x as i64,y as i64,x as i64+width as i64,y as i64+height as i64);
+        for (i,line) in text::Lines::new(bytes,width,text::Font::Ui).enumerate() {
+            let dy=i as i64*16;if dy>=height as i64 {break;}
+            self.ui_run(x,y.saturating_add(dy as i32),color,&bytes[line.start..line.end],clip);
         }
     }
     pub fn text(&mut self,mut x:i32,mut y:i32,color:u32,text:&[u8],font:&[u8;4096]) {

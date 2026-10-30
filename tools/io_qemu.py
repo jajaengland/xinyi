@@ -1,4 +1,5 @@
 """Exercise real app progress and input while queued file operations are active."""
+from desktop_controls import APPS_BUTTON,SHELL_BUTTON,app_card,task_button
 import argparse
 from array import array
 import json
@@ -72,7 +73,7 @@ def main():
             guest.type('desktop\n')
             until(lambda: 'Desktop scheduler: ready' in log(), 'Desktop startup')
             names = sorted(path.split('/')[-1][:-4] for path in tree()
-                           if path.startswith('APPS/') and path.count('/') == 1
+                           if path.startswith('APPS/') and path.count('/') in (1,2)
                            and path.endswith(('.BIN', '.ELF')))
 
             def launch(name):
@@ -114,7 +115,7 @@ def main():
 
             def task(pid):
                 until(lambda: pid in task_pids(), 'Missing taskbar process '+str(pid))
-                click(110+148*task_pids().index(pid), 11)
+                click(*task_button(task_pids().index(pid)))
 
             counter = launch('COUNTER'); pad = launch('NOTEPAD')
             terminal = launch('TERMINAL'); probe = launch('IOCHECK')
@@ -235,7 +236,7 @@ def main():
             until(lambda: task_pids()==[terminal,0,0,0], 'Last app was not moved to the leftmost taskbar position')
             task(terminal); guest.key('alt-f4')
             until(lambda: f'Scheduler: exit pid={terminal} code=0' in log(), 'Terminal close')
-            click(768, 11); guest.wait_for('Desktop finished.')
+            click(*SHELL_BUTTON); guest.wait_for('Desktop finished.')
             assert frames() == baseline, 'Queued I/O leaked frames'
             print(('PASS queued I/O (' + ('native IDE' if args.native else 'BIOS USB' if args.usb else 'BIOS IDE') + '):') + ' steady timer rate, compact taskbar/click targets, live counter/editor/terminal, dragging and focus during writes/copies, '
                   'serialized queued saves, read/error validation, deferred termination, queued volume invalidation, exact file contents and frame balance', flush=True)

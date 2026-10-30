@@ -1,0 +1,83 @@
+{
+  "startup": {
+    "source_sha256": "c618fc68975420b7a614dd9708ff7d2aa7532d671fae101fe105bd7cdca87a62",
+    "source_bytes": 112892,
+    "trim_start": 0.0,
+    "trim_end": 0.5,
+    "gain": 0.71,
+    "frames": 8000,
+    "bytes": 16044
+  },
+  "shutdown": {
+    "source_sha256": "d92bc811c2f30c42efbb87189e3ced0167d873dcb1da84212b504d2fd6f83409",
+    "source_bytes": 111156,
+    "trim_start": 0.0,
+    "trim_end": 0.46,
+    "gain": 0.7983,
+    "frames": 7360,
+    "bytes": 14764
+  },
+  "error": {
+    "source_sha256": "3ade6730526709457479894dba18300f2f01f778a36ee49519eb6db70697379c",
+    "source_bytes": 111156,
+    "trim_start": 0.0,
+    "trim_end": 0.4,
+    "gain": 1.2761,
+    "frames": 6400,
+    "bytes": 12844
+  },
+  "warning": {
+    "source_sha256": "716acd70a7040176b04e356329bbf0924d9b5a589a13420c2bdccc3686519abe",
+    "source_bytes": 131988,
+    "trim_start": 0.0,
+    "trim_end": 0.53,
+    "gain": 2.1452,
+    "frames": 8480,
+    "bytes": 17004
+  },
+  "info": {
+    "source_sha256": "a7d133514a25625613bc10e0bd8fd50109edb4f3bf550ad9465692e9eabfa98d",
+    "source_bytes": 99000,
+    "trim_start": 0.0,
+    "trim_end": 0.43,
+    "gain": 1.7366,
+    "frames": 6880,
+    "bytes": 13804
+  },
+  "complete": {
+    "source_sha256": "3fb4768b1b8b3d69d21d40e1e978ba45e67c7ca0864a79a41a5664837420b413",
+    "source_bytes": 90320,
+    "trim_start": 0.0,
+    "trim_end": 0.32,
+    "gain": 1.0059,
+    "frames": 5120,
+    "bytes": 10284
+  },
+  "connect": {
+    "source_sha256": "9a7cc89a2b3c0b527d898077f06fcce1bae430859aa3c07783cab939d6765b0d",
+    "source_bytes": 147612,
+    "trim_start": 0.0,
+    "trim_end": 0.66,
+    "gain": 0.736,
+    "frames": 10560,
+    "bytes": 21164
+  },
+  "disconnect": {
+    "source_sha256": "5ef89b6b8c13838780bde95adfbeff437a612534486786756e16c66af201c128",
+    "source_bytes": 138932,
+    "trim_start": 0.0,
+    "trim_end": 0.62,
+    "gain": 0.7176,
+    "frames": 9920,
+    "bytes": 19884
+  },
+  "empty": {
+    "source_sha256": "f4f2b3cd1a56be96fcc306530e2cfe85e91bd88faa152586d23f149f689255c1",
+    "source_bytes": 119836,
+    "trim_start": 0.0,
+    "trim_end": 0.51,
+    "gain": 0.7479,
+    "frames": 8160,
+    "bytes": 16364
+  }
+}

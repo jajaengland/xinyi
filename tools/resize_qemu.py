@@ -1,4 +1,5 @@
 """Exercise shared multi-selection transfers, context menus, folders and appearance persistence."""
+from desktop_controls import APPS_BUTTON,SHELL_BUTTON,app_card,task_button
 import argparse,json,re,shutil,tempfile,time
 from seed_apps import seed_apps
 from pathlib import Path
@@ -41,8 +42,8 @@ def main():
     move(x,y)
     for down in [True,False]:g.call('input-send-event',{'events':[{'type':'btn','data':{'button':'left','down':down}}]});time.sleep(.07)
    def launch(name):
-    names=sorted(k.split('/')[-1][:-4] for k in inspect_tree(image,2048)[0] if k.startswith('APPS/') and k.count('/')==1 and k.endswith(('.BIN','.ELF')));start=len(log());click(40,11);click(40,46+names.index(name)*24)
-    until(lambda:re.search(r'Desktop: launch pid=(\d+) path=/APPS/'+name+r'\.BIN',log()[start:]),'Launch '+name);pid=int(re.search(r'Desktop: launch pid=(\d+)',log()[start:])[1]);until(lambda:f'Multiwindow: open pid={pid} ' in log()[start:],'Window '+name);return pid
+    names=sorted(k.split('/')[-1][:-4] for k in inspect_tree(image,2048)[0] if k.startswith('APPS/') and k.count('/') in (1,2) and k.endswith(('.BIN','.ELF')));start=len(log());click(*APPS_BUTTON);click(*app_card(names.index(name)))
+    until(lambda:re.search(r'Desktop: launch pid=(\d+) path=/APPS/(?:[A-Z0-9_]+/)?'+name+r'\.BIN',log()[start:]),'Launch '+name);pid=int(re.search(r'Desktop: launch pid=(\d+)',log()[start:])[1]);until(lambda:f'Multiwindow: open pid={pid} ' in log()[start:],'Window '+name);return pid
    def window(pid):
     m=re.search(r'Multiwindow: open pid='+str(pid)+r' handle=\d+ surface=([0-9a-f]+) client=(\d+)x(\d+) pos=(\d+),(\d+)',log());return int(m[1],16),int(m[2]),int(m[3])
    def rect(pid):
@@ -74,12 +75,12 @@ def main():
     button(False);until(lambda:current(pid)[1:]==(width,height),'Resize '+str((width,height)))
    def row(pid,y,n):
     address,w,h=current(pid);data=array('I');data.frombytes(mem(address+y*w*4,w*16*4));return ''.join(glyphs.get(bytes(data[dy*w+col*8+dx]==0 for dy in range(16) for dx in range(8)),'?') for col in range(n))
-   note=launch('NOTEPAD');g.type('x'*100);position_top(note);resize(note,768,528);until(lambda:row(note,32,94)=='x'*94,'Notepad wide wrapping');g.key('ctrl-s');g.type('wide.txt\n');until(lambda:tree().get('WIDE.TXT')==b'x'*100,'Save after resize');resize(note,640,400);until(lambda:row(note,32,78)=='x'*78,'Notepad shrink wrapping');g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={note} code=0' in log(),'Notepad close')
-   files=launch('FILES');position_top(files);resize(files,768,528);click(40,24+34+80+20*16+8);addr,w,h=current(files);until(lambda:int.from_bytes(mem(addr+((80+20*16)*w+8)*4,4),'little')==0x153e8e,'Files did not expose additional rows');resize(files,640,400);g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={files} code=0' in log(),'Files close')
-   term=launch('TERMINAL');position_top(term);g.type('help\nhelp\n');time.sleep(.3);resize(term,656,528);g.type('help\n');time.sleep(.3);addr,w,h=current(term)
-   move(8,24+34+32*16+8);button(True);move(48,24+34+32*16+8);button(False);until(lambda:int.from_bytes(mem(addr+32*16*w*4,4),'little')==0x0000aa,'Terminal last-row selection did not render');g.key('ctrl-shift-c');resize(term,656,400);g.type('echo resized\n');time.sleep(.2)
-   g.call('screendump',{'filename':str(out/'resize-terminal.png'),'format':'png'});g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={term} code=0' in log(),'Terminal close');click(768,11);g.wait_for('Desktop finished.');assert frames()==baseline,'Resize leaked frames';g.command('cat wide.txt','x'*60)
-   print('PASS resize: deferred allocation, Notepad reflow/save, Files extra rows, taller terminal including row 33, shrink/selection and frame balance',flush=True)
+   note=launch('NOTEPAD');g.type('x'*100);position_top(note);resize(note,768,480);until(lambda:row(note,32,94)=='x'*94,'Notepad wide wrapping');g.key('ctrl-s');g.type('wide.txt\n');until(lambda:tree().get('WIDE.TXT')==b'x'*100,'Save after resize');resize(note,640,400);until(lambda:row(note,32,78)=='x'*78,'Notepad shrink wrapping');g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={note} code=0' in log(),'Notepad close')
+   files=launch('FILES');position_top(files);resize(files,768,480);click(40,24+34+80+20*16+8);addr,w,h=current(files);until(lambda:int.from_bytes(mem(addr+((80+20*16)*w+8)*4,4),'little')==0x153e8e,'Files did not expose additional rows');resize(files,640,400);g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={files} code=0' in log(),'Files close')
+   term=launch('TERMINAL');position_top(term);g.type('help\nhelp\n');time.sleep(.3);resize(term,656,480);g.type('help\n');time.sleep(.3);addr,w,h=current(term)
+   move(8,24+34+29*16+8);button(True);move(48,24+34+29*16+8);button(False);until(lambda:int.from_bytes(mem(addr+29*16*w*4,4),'little')==0x0000aa,'Terminal last-row selection did not render');g.key('ctrl-shift-c');resize(term,656,400);g.type('echo resized\n');time.sleep(.2)
+   g.call('screendump',{'filename':str(out/'resize-terminal.png'),'format':'png'});g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={term} code=0' in log(),'Terminal close');click(*SHELL_BUTTON);g.wait_for('Desktop finished.');assert frames()==baseline,'Resize leaked frames';g.command('cat wide.txt','x'*60)
+   print('PASS resize: deferred allocation, Notepad reflow/save, Files extra rows, taller terminal including row 30, shrink/selection and frame balance',flush=True)
   finally:
    g.call('screendump',{'filename':str(out/'resize-last.png'),'format':'png'});g.close();shutil.copyfile(d/'debug.log',out/'resize-debug.log')
 if __name__=='__main__':main()

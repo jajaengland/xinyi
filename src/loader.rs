@@ -5,7 +5,7 @@ use crate::phys;
 pub const FRAME_BYTES: usize = 4096;
 pub const STACK_PAGES: usize = 4;
 pub const KERNEL_STACK_PAGES: usize = 16;
-pub const MAX_BINARY_BYTES: usize = 64 * 1024;
+pub const MAX_BINARY_BYTES: usize = crate::program_image::MAX_FILE;
 pub const DEMO_BINARY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/demo.bin"));
 
 pub struct Frames {
@@ -46,6 +46,7 @@ impl Drop for Frames {
     }
 }
 pub struct LoadedProgram {
+    pub profile: crate::permissions::Profile,
     pub layout: crate::elf::Image,
     pub image: Frames,
     pub stack: Frames,
@@ -60,6 +61,7 @@ pub fn load_binary(data: &[u8]) -> Option<LoadedProgram> {
 pub enum LoadError {
     Empty,
     TooLarge,
+    FlatTooLarge,
     InvalidElf(crate::elf::Error),
     Memory,
 }
@@ -67,37 +69,20 @@ impl LoadError {
     pub fn message(&self) -> &'static str {
         match self {
             Self::Empty => "Program is empty.",
-            Self::TooLarge => "Program file exceeds 64 KiB.",
+            Self::TooLarge => "Program file exceeds 1 MiB.",
+            Self::FlatTooLarge => "Flat program exceeds 64 KiB; build larger applications as ELF.",
             Self::InvalidElf(_) => "Invalid or unsupported ELF executable.",
             Self::Memory => "Not enough memory for program code/stack.",
         }
     }
 }
 pub fn load(data: &[u8]) -> Result<LoadedProgram, LoadError> {
-    if data.is_empty() {
-        return Err(LoadError::Empty);
-    }
-    if data.len() > MAX_BINARY_BYTES {
-        return Err(LoadError::TooLarge);
-    }
-    let layout = if data.starts_with(b"\x7fELF") {
-        crate::elf::parse(data).map_err(LoadError::InvalidElf)?
-    } else {
-        let mut segments = [crate::elf::Segment::default(); crate::elf::MAX_SEGMENTS];
-        segments[0] = crate::elf::Segment {
-            address: crate::elf::BASE,
-            offset: 0,
-            file_size: data.len() as u32,
-            memory_size: data.len() as u32,
-            flags: 5,
-        };
-        crate::elf::Image {
-            segments,
-            count: 1,
-            entry: crate::elf::BASE,
-            span: data.len() as u32,
-        }
-    };
+    let layout=crate::program_image::parse(data).map_err(|e|match e {
+        crate::program_image::Error::Empty=>LoadError::Empty,
+        crate::program_image::Error::TooLarge=>LoadError::TooLarge,
+        crate::program_image::Error::FlatTooLarge=>LoadError::FlatTooLarge,
+        crate::program_image::Error::InvalidElf(e)=>LoadError::InvalidElf(e),
+    })?;
     let image =
         Frames::new((layout.span as usize).div_ceil(FRAME_BYTES)).ok_or(LoadError::Memory)?;
     let stack = Frames::new(STACK_PAGES).ok_or(LoadError::Memory)?;
@@ -111,6 +96,7 @@ pub fn load(data: &[u8]) -> Result<LoadedProgram, LoadError> {
         }
     }
     Ok(LoadedProgram {
+        profile: crate::permissions::Profile::Trusted,
         layout,
         image,
         stack,
@@ -118,4 +104,18 @@ pub fn load(data: &[u8]) -> Result<LoadedProgram, LoadError> {
         arguments: [0; 128],
         argument_length: 0,
     })
+}
+
+/// Serialized filesystem reader, used synchronously at boot and on the desktop worker.
+pub fn from_disk(path:&str)->Result<LoadedProgram,&'static str> {
+    let staging=Frames::new(MAX_BINARY_BYTES/FRAME_BYTES).ok_or("Not enough memory for the program loader.")?;
+    let data=unsafe {core::slice::from_raw_parts_mut(staging.base() as *mut u8,MAX_BINARY_BYTES)};
+    let mut resolved=[0;105];
+    let(size,n)=crate::diskfs::read_executable_resolved(path,data,&mut resolved).map_err(|e|e.message())?;
+    let resolved=core::str::from_utf8(&resolved[..n]).unwrap();
+    let metadata=crate::app_metadata::load(resolved)?;
+    let mut program=load(&data[..size]).map_err(|e|e.message())?;
+    program.profile=crate::permissions::Profile::for_name(resolved);
+    if let Some(metadata)=metadata {program.profile=program.profile.restrict(crate::app_metadata::profile(metadata.access));crate::debug::write_fmt(format_args!("App manifest: path={} access={}\n",resolved,program.profile.label()));}
+    Ok(program)
 }

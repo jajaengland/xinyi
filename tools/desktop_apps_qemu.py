@@ -1,4 +1,5 @@
 """Exercise concurrent desktop apps, task switching and Notepad persistence."""
+from desktop_controls import APPS_BUTTON,SHELL_BUTTON,app_card,task_button
 import argparse,json,re,shutil,subprocess,sys,tempfile,time
 from seed_apps import seed_apps
 from pathlib import Path
@@ -39,15 +40,15 @@ def main():
     move(x,y)
     for down in [True,False]:g.call('input-send-event',{'events':[{'type':'btn','data':{'button':'left','down':down}}]});time.sleep(.06)
    def select(name):
-    names=sorted(k.split('/')[-1][:-4] for k in inspect_tree(image,2048)[0] if k.startswith('APPS/') and k.count('/')==1 and k.endswith(('.BIN','.ELF')))
-    offset=len(log());click(40,11);click(40,30+4+names.index(name)*24+12);return offset
+    names=sorted(k.split('/')[-1][:-4] for k in inspect_tree(image,2048)[0] if k.startswith('APPS/') and k.count('/') in (1,2) and k.endswith(('.BIN','.ELF')))
+    offset=len(log());click(*APPS_BUTTON);click(*app_card(names.index(name)));return offset
    def launch(name,window=True):
     offset=select(name)
-    until(lambda:re.search(r'Desktop: launch pid=(\d+) path=/APPS/'+name+r'\.BIN',log()[offset:]),'Launch '+name)
+    until(lambda:re.search(r'Desktop: launch pid=(\d+) path=/APPS/(?:[A-Z0-9_]+/)?'+name+r'\.BIN',log()[offset:]),'Launch '+name)
     pid=int(re.search(r'Desktop: launch pid=(\d+)',log()[offset:])[1])
     if window:until(lambda:f'Multiwindow: open pid={pid} ' in log()[offset:],'Missing window '+name)
     return pid
-   def task(slot):click(110+slot*148,11)
+   def task(slot):click(*task_button(slot))
    def exited(pid):return f'Scheduler: exit pid={pid} code=0' in log()
    def file(name):
     try:return inspect_tree(image,2048)[0].get(name)
@@ -68,7 +69,7 @@ def main():
    g.call('screendump',{'filename':str(output/f'desktop-apps-{a.vga}.png'),'format':'png'})
    task(3);g.key('q');until(lambda:exited(third),'Close fourth app')
    task(1);g.key('ctrl-q');until(lambda:exited(first),'First Notepad did not close')
-   task(2);g.type(' unsaved');click(768,11);time.sleep(.1);assert 'Desktop finished.' not in g.screen(),'Exit discarded running apps'
+   task(2);g.type(' unsaved');click(*SHELL_BUTTON);time.sleep(.1);assert 'Desktop finished.' not in g.screen(),'Exit discarded running apps'
    task(2);g.key('ctrl-q');time.sleep(.15);g.key('esc');time.sleep(.15);assert not exited(second),'Escape did not cancel close prompt'
    g.key('ctrl-q');g.key('d');until(lambda:exited(second),'Second Notepad discard/close failed')
    before=count(counter)
@@ -79,8 +80,8 @@ def main():
     terminal=int(re.search(r'Desktop: text attached pid='+str(pid)+r' terminal=(\d+)',log()[start:])[1]);until(lambda:f'Multiwindow: open pid={terminal}' in log()[start:],'Terminal window '+name)
     if name=='SNAKE':g.key('esc')
     until(lambda:exited(pid),'Text exit '+name);g.key('ctrl-q');until(lambda:exited(terminal),'Terminal close '+name)
-   text_app('CUSTOM');assert file('APPS/ADDED.BIN')==file('APPS/HELLO.BIN');text_app('ADDED');text_app('HELLO');text_app('SNAKE');until(lambda:count(counter)>before,'Counter stopped during text programs')
-   task(0);g.key('c');until(lambda:f'Scheduler: fault pid={counter} vector=6' in log(),'Counter fault did not recover');click(768,11);g.wait_for('Desktop finished.');assert frames()==baseline,'Desktop apps leaked frames'
+   text_app('CUSTOM');assert file('APPS/ADDED.BIN')==file('APPS/HELLO/HELLO.BIN');text_app('ADDED');text_app('HELLO');text_app('SNAKE');until(lambda:count(counter)>before,'Counter stopped during text programs')
+   task(0);g.key('c');until(lambda:f'Scheduler: fault pid={counter} vector=6' in log(),'Counter fault did not recover');click(*SHELL_BUTTON);g.wait_for('Desktop finished.');assert frames()==baseline,'Desktop apps leaked frames'
    assert file('DESK.TXT')==b'hello desktop!' and file('TWO.TXT')==b'second instance'
    g.command('echo desktop survived','\ndesktop survived\n')
    print(f'PASS concurrent desktop ({a.vga}, usb={a.usb}): dynamic launch, taskbar focus, two independent Notepads/saves, counter progress, four-app limit, safe Exit/Escape, close/fault isolation, text/game terminal windows and frame balance',flush=True)

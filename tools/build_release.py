@@ -56,6 +56,21 @@ def main():
     for suite in ("pty_qemu.py", "files_qemu.py", "files_settings_qemu.py", "widgets_qemu.py", "elf_qemu.py", "large_files_qemu.py", "resize_qemu.py", "maximize_qemu.py", "window_lifecycle_qemu.py", "keyboard_qemu.py", "io_qemu.py"):
         subprocess.run([sys.executable,str(ROOT/"tools"/suite),"--disk",str(image),"--vga","cirrus","--usb"],
                        cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/audio_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/system_sounds_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
+    for display in ("std","cirrus"):
+        subprocess.run([sys.executable,str(ROOT/"tools/text_qemu.py"),"--disk",str(image),"--vga",display],cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/desktop_redesign_qemu.py"),"--disk",str(image),"--vga","cirrus","--usb"],cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/app_system_qemu.py"),"--disk",str(image),"--kernel",str(kernel)],cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/app_install_qemu.py"),"--disk",str(image),"--package",str(directory),"--kernel",str(kernel)],cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/desktop_files_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/app_drop_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/drag_drop_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/network_qemu.py"),"--disk",str(image),"--kernel",str(kernel)],cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/async_load_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/large_apps_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/permissions_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/stream_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/fsck_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/power_qemu.py"),"--disk",str(image),"--kernel",str(kernel)],cwd=ROOT,env=environment,check=True)
     shutil.copyfile(kernel,directory/"rust-os")
@@ -74,29 +89,43 @@ def main():
         "Use disks to list numbered drives, use NUMBER to switch, and install NUMBER to preview installation.\n"
         "Installation copies /APPS from the currently mounted source to the destination after confirmation.\n"
         "BIOS disk/USB boots mount the actual boot filesystem as drive 0; IDE destinations use install NUMBER.\n"
+        "PLAYER supports sampled audio: T tests sound, Ctrl+O opens PCM WAV up to 512 KiB, S stops, +/- changes volume.\n"
+        "Player has read-and-audio access; the PCM stream is exclusive and released on exit/fault. Input voices are disabled.\n"
+        "Settings includes voice sound volume, mute and Test voice. Save keeps the volume; Terminal also supports sounds test NAME.\n"
+        "FONTS demonstrates proportional text, wrapping and clipping. +/- changes wrap width; Space toggles full width; Escape closes.\n"
+        "Networking is OFF at boot; developer command: net experimental-enable. net off disables it.\n"
+        "net shows DHCP IPv4, gateway, DNS and counters; ping 10.0.2.2 tests the QEMU router.\n"
+        "Ping runs in the background; use ping to see its results. net dhcp requests a new lease.\n"
+        "Initial networking uses RTL8139 Ethernet; Wi-Fi, DNS lookup, TCP and downloads are not implemented.\n"
         "QEMU speaker sound is enabled by Launch-Xinyi.cmd. Games: P pauses, R restarts, Escape quits.\n"
         "Graphics: QEMU std VGA, or BIOS VESA 800x600 RGB565/24/32-bit on supported cards. Type bios for diagnostics.\n"
         "Type mouse for the blue-screen PS/2 pointer/buttons/menu test; Escape exits.\n"
-        "Type desktop for concurrent graphical applications from /APPS and running-app buttons in the top taskbar.\n"
+        "Type desktop for concurrent graphical applications from /APPS and running-app buttons in the bottom taskbar.\n"
         "Apps opens text programs in Terminal automatically. The _ button minimizes; taskbar buttons restore.\n"
-        "Windows can move partly off-screen; the top taskbar remains accessible.\n"
+        "Windows can move partly off-screen; the bottom taskbar remains accessible.\n"
         "Type multitask for two concurrent protected counter windows; Q quits the focused app, C crashes it, Escape exits the demo.\n"
         "Ctrl+Alt+K stops the focused app; multitask hog verifies timer preemption of a CPU-bound app.\n"
-        "Up to four apps run together. Close apps before Exit; Escape cancels menus or goes to the focused app.\n"
+        "Up to four apps run together. Close apps before choosing Shell; Escape cancels menus or goes to the focused app.\n"
         "Choose FILES in Apps to browse folders, open files, create folders and confirm deletions.\n"
         "Drag lower-right grips to resize Files/Notepad; Terminal grows vertically and keeps 80 columns. Maximize/restore with the title-bar button or double-click; normal placement is remembered.\n"
         "shutdown flushes the disk and powers off or safely halts; in Desktop, save your work then shutdown confirm.\n"
         "Files: Ctrl/Shift-click selects multiple items; right-click opens actions. Copy/Move/Paste works across Files windows and transfers folders.\n"
         "Settings: choose desktop/title colours; Apply previews, Save writes /GUI.CFG for future boots.\n"
         "The mouse/windowtest tests and application windows use a simple built-in ASCII bitmap font.\n"
-        "Notepad is /APPS/NOTEPAD.BIN: mouse toolbar, keyboard editing, Ctrl+S save, Ctrl+Q quit.\n"
+        "Notepad is /APPS/NOTEPAD/NOTEPAD.BIN: mouse toolbar, keyboard editing, Ctrl+S save, Ctrl+Q quit.\n"
         "USB access uses BIOS EDD for the boot drive only; no hotplug/native USB or UEFI support.\n"
+        "run --read-only APP allows reads; run --isolated APP also blocks reads. Both block writes, shell controls, shared clipboard and child launches.\n"
+        "Viewer defaults to read-only; ps displays access. Unflagged other apps remain trusted.\n"
+        "BIGDEMO demonstrates a real >64 KiB ELF image, static asset, writable globals/BSS and heap; it defaults to isolated access.\n"
+        "Desktop image reads yield; Ctrl+Alt+Esc cancels the active load. Closed launch terminals cancel pending children.\n"
+        "Static ELF files may reach 1 MiB; flat images remain at 64 KiB. Installer copies larger apps.\n"
+        "Viewer opens hex/ASCII pages of files up to 1 MiB; Ctrl+O opens, arrows/Page Up/Down/Home/End navigate.\n"
         "fsck audits the selected FAT16 volume from the physical console without writes.\n"
         "Unmount, then fsck repair-orphans previews cleanup; fsck confirm applies it. Live-chain damage requires manual recovery.\n"
         "Firmware writes are read back, but provide no portable cache-flush durability guarantee.\n"
         "Verified in QEMU: BIOS boot, actual app files, editor saves across cold boots and copying apps onto another drive.\n")
     # %~dp0 keeps the Windows launcher usable after moving the release folder.
-    (directory/"Launch-Xinyi.cmd").write_text('@echo off\n"'+qemu+'" -m 128M -drive "file=%~dp0xinyi.img,format=raw,if=ide,index=0" -boot c -display sdl -name "Xinyi release" -audiodev dsound,id=speaker -machine pcspk-audiodev=speaker -nic none\n')
+    (directory/"Launch-Xinyi.cmd").write_text('@echo off\n"'+qemu+'" -m 128M -drive "file=%~dp0xinyi.img,format=raw,if=ide,index=0" -boot c -display sdl -name "Xinyi release" -audiodev dsound,id=speaker,in.voices=0,out.frequency=48000 -device AC97,audiodev=speaker -machine pcspk-audiodev=speaker -nic none\n')
     files=sorted(path for path in directory.rglob("*") if path.is_file())
     (directory/"SHA256SUMS.txt").write_text("".join(hashlib.sha256(path.read_bytes()).hexdigest()+"  "+path.relative_to(directory).as_posix()+"\n" for path in files))
     report={"directory":str(directory),"image":str(image),"kernel":str(directory/"rust-os"),"qemu":qemu}

@@ -28,7 +28,17 @@ qemu-system-i386 -kernel target/i686-unknown-none/release/rust-os
 
 ## Desktop and applications
 
-Type `desktop` at the shell. Apps lists the actual `.BIN` and `.ELF` files in `/APPS`; replacing or deleting a file changes the available programs. Up to four root application windows and their attached text processes can run together.
+Apps use one folder per application: `/APPS/NOTEPAD/NOTEPAD.BIN` and `/APPS/NOTEPAD/NOTEPAD.APP`, with any assets alongside them. To install a new app, put its folder on the mounted FAT16 volume (for example `/INBOX/SAMPLE`), select it in Files, choose **Install** or right-click **Install app**, then confirm with **Y**. It appears in Apps immediately on reopening the launcher. To uninstall, select its folder inside `/APPS`, choose **Remove**, and confirm. Running apps must be closed first. Removal deletes the app folder and bundled files; documents elsewhere stay intact. **N** or Escape cancels either prompt.
+
+Bundles use an ASCII app ID of 1–8 letters/digits/underscores beginning with a letter. The folder, executable stem, and manifest stem must match; use either `.BIN` or `.ELF` plus `.APP`. For example, `SAMPLE/SAMPLE.BIN` and `SAMPLE/SAMPLE.APP`. Installation validates metadata and executable format, preserves the source, and refuses an existing installation. Updates currently require removing the old version first. Only trusted programs may install or remove apps. The physical shell also supports `app install /INBOX/SAMPLE` and `app remove /APPS/SAMPLE`.
+
+The initial limits are 16 launcher apps, 64 entries per app tree, 1 MiB per file, 8 MiB total bundle data, and eight path components. Installation uses a reserved `/APPS/_STAGE` folder and publishes the final name only after copying succeeds. Removal first renames the app to `/APPS/_TRASH`. After an interrupted operation these reserved folders stay hidden from Apps and are preserved for manual recovery; a later operation refuses to overwrite them. This first version installs from the currently mounted volume; it does not download apps or access a second USB volume.
+
+The desktop has a bottom taskbar, clock, system-sound controls, and single-click Files, Terminal and Settings shortcuts. Apps opens a searchable two-column launcher with code-drawn icons and short descriptions. Type part of an app name, use arrows/Home/End, and press Enter. Escape dismisses the launcher without reaching an app underneath. Sound popup changes are immediate; Settings Save or `sounds save` keeps them on disk. Desktop shortcuts respond only where another window is not covering them.
+
+Type `desktop` at the shell. Apps discovers installed app folders in `/APPS`, as well as legacy loose `.BIN` and `.ELF` files. Up to four root application windows and their attached text processes can run together.
+
+App titles, descriptions, icon choices and restrictive access profiles come from sibling `/APPS/NAME/NAME.APP` manifests, documented in [programs/manifests/README.md](programs/manifests/README.md). Missing manifests retain filename/generic-icon discovery; invalid present manifests refuse execution. Files resolves TXT/LOG/MD/CFG/INI/CSV/APP and extensionless documents to Notepad, WAV to Player, and DAT/RAW/HEX to Viewer. Unknown types report no handler; conflicting handlers report ambiguity. BIN/ELF opening keeps the explicit executable path through Terminal. The whole-system installer preserves app folders, manifests, and assets.
 
 - **Files:** browse folders, open documents in Notepad, run programs through Terminal, create folders and confirm deletions. F5 refreshes; PageUp/PageDown changes pages. Click empty space to clear selection; arrow keys select an item again. F2 renames a file or unused folder. Ctrl+click toggles items; Shift+click selects a range; Ctrl+A selects up to 32 items. Right-click for actions. Copy/Move (Ctrl+C/X) shares the selection across Files windows, even after closing the source window; open a destination and Paste (Ctrl+V). Folders transfer recursively. Existing names offer Paste as rather than overwrite. Delete removes files and empty folders after confirmation.
 - **Settings:** choose desktop and active title-bar colours. Apply changes the current session; Save writes `/GUI.CFG` on the mounted drive for the next boot.
@@ -39,9 +49,9 @@ Type `desktop` at the shell. Apps lists the actual `.BIN` and `.ELF` files in `/
 - **Counter / Hello:** small application and scheduling examples.
 - **MEMDEMO:** an ELF application demonstrating writable globals, zeroed BSS, and heap-backed Rust `Vec`/`Box`. Run it from Apps or with `run memdemo`.
 
-Use the maximize/restore title-bar button or double-click the title bar in Files, Notepad and Terminal. Maximized frames fill the desktop below the taskbar, respect app layout limits and restore their previous size/position. Minimize and taskbar restore preserve maximized state.
+Use the maximize/restore title-bar button or double-click the title bar in Files, Notepad and Terminal. Maximized frames fill the work area above the taskbar, respect app layout limits and restore their previous size/position. Minimize and taskbar restore preserve maximized state.
 
-Drag the lower-right grip to resize Files or Notepad; Notepad reflows text and Files shows more rows. Terminal expands its background and right-edge scrollbar horizontally and grows vertically to display up to 34 rows, while preserving the 80-column text-program layout. Apps that do not opt in remain fixed-size.
+Drag the lower-right grip to resize Files or Notepad; Notepad reflows text and Files shows more rows. Terminal expands its background and right-edge scrollbar horizontally and grows vertically to display up to 32 rows when maximised, while preserving the 80-column text-program layout. Apps that do not opt in remain fixed-size.
 
 Closing an app shifts the remaining taskbar buttons left; new apps append on the right.
 
@@ -49,7 +59,7 @@ Use **Alt+Tab** to cycle apps in taskbar order and **Shift+Alt+Tab** to cycle ba
 
 During desktop file operations, the working app's window title shows `I/O` and a completed block-operation count. Other apps remain usable. Ctrl+Alt+K waits for an active filesystem operation to finish before reclaiming that process. Terminal typing and non-disk commands remain live; submitted filesystem commands wait for the worker.
 
-Drag normal title bars to move windows, including partly off-screen. Windows stay below the top taskbar. The **_** button minimizes without closing or pausing the program; its taskbar button restores it into view. Ctrl+Alt+K stops the focused app. Close running apps before selecting Exit.
+Drag normal title bars to move windows, including partly off-screen. The bottom taskbar remains accessible. The **_** button minimizes without closing or pausing the program; its taskbar button restores it into view. Ctrl+Alt+K stops the focused app. Close running apps before selecting Shell to return to the console.
 
 ## Shell and storage
 
@@ -66,7 +76,7 @@ diagnostic task-record behavior.
 | --- | --- |
 | Browse | `pwd`, `ls [PATH]`, `cd PATH`, `mkdir PATH`, `rmdir PATH` |
 | Text files | `touch FILE`, `cat FILE`, `write FILE TEXT`, `delete FILE` |
-| Applications | `apps`, `run NAME [ARGS]`, `edit [FILE]`, `notepad [FILE]`, `terminal`, `settings` |
+| Applications | `apps`, `run NAME [ARGS]`, `edit [FILE]`, `notepad [FILE]`, `terminal`, `settings`, `run viewer [FILE]` |
 | Drives | `disks`, `use NUMBER`, `mount`, `unmount` |
 | Recovery | `fsck`, `fsck repair-orphans`, `fsck confirm` |
 | System | `version`, `uptime`, `date`, `reboot`, `shutdown` |
@@ -74,6 +84,8 @@ diagnostic task-record behavior.
 The system mounts its boot filesystem automatically. BIOS boot-drive access supports boot USB media; native disks use ATA/IDE PIO, including compatible IDE emulation. BIOS boot media appears as drive 0, with native IDE targets numbered separately. Use `disks` before selecting a target.
 
 `install NUMBER` previews a bootable installation onto a native IDE destination and stages `/APPS` from the mounted source. Only `install confirm` immediately after the preview applies it. Compatible FAT16 layouts can be preserved; incompatible layouts are replaced after confirmation. `format` previews a whole-disk quick format; `format confirm` applies it and removes existing partitions and bootability. **Both operations can destroy data: inspect the target and preview carefully.**
+
+`run --read-only APP [ARGS]` allows reads from the mounted volume but denies file mutations, child launches, shared clipboard access, changing desktop colours and terminal-control services that can execute shell commands. `run --isolated APP [ARGS]` also denies file reads/listing. These modes work from the console and Terminal. Viewer uses read-only access automatically; its title shows `[RO]`. `ps` reports access profiles. BigDemo uses isolated access automatically. Player uses a media profile that allows reading and PCM playback. Other unflagged applications retain trusted access for compatibility, so choose a restricted mode for unfamiliar programs. Read-only access covers the entire mounted volume, not just a selected file. These initial profiles do not provide resource quotas or protection from kernel bugs.
 
 `fsck` checks the selected FAT16 volume from the physical console without writing or flushing disk sectors. It reports mirror differences, broken/cyclic/shared chains, file-size errors and lost allocations. A damaged mounted volume is detached to RAM. Close the desktop before scanning. To reclaim lost clusters, run `unmount`, then `fsck repair-orphans` to inspect the target and preview, followed immediately by `fsck confirm`. Any intervening command cancels confirmation. Cleanup discards data in unreferenced clusters; it refuses incomplete scans, live-chain damage and ambiguous mirrors. It preserves live file pointers, directories, boot sectors and bad-cluster markers.
 
@@ -93,10 +105,11 @@ USB access uses BIOS services for the boot drive only. Unmount before removal. F
 
 - Legacy BIOS boot; no UEFI or native USB/AHCI drivers.
 - FAT16 volumes below 2 GiB, ASCII 8.3 names and paths up to eight components.
-- Notepad documents: 64 KiB of ASCII text, with a scrollbar and four undo steps. Shell text commands, EDIT and the shared clipboard retain their 1024-byte limit. Executable images: 64 KiB.
-- Flat binaries remain supported. Static ELF32/i386 apps can use writable data/BSS (up to a 1 MiB image span) and a private heap capped at 1 MiB. Executable files still fit within 64 KiB. No dynamic linking, TLS, user threads or Linux ABI compatibility.
+- Positional file APIs support 1 MiB files in chunks up to 16 KiB. The Viewer app displays hex/ASCII pages without loading the whole file. Copy-on-write range edits require free space for the complete replacement and become slower as files grow. Existing recursive copy/move remains limited to 64 KiB per file.
+- Notepad documents: 64 KiB of ASCII text, with a scrollbar and four undo steps. Shell text commands, EDIT and the shared clipboard retain their 1024-byte limit. ELF executable files: 1 MiB; flat binaries: 64 KiB.
+- Flat binaries remain supported. Static ELF32/i386 apps can use writable data/BSS (up to a 1 MiB image span) and a private heap capped at 1 MiB. ELF files can be up to 1 MiB; flat binaries retain their 64 KiB cap. No dynamic linking, TLS, user threads or Linux ABI compatibility.
 - Bounded opt-in window resizing, shared GUI controls, basic bitmap fonts and 800Ã—600 framebuffer graphics; no GPU acceleration.
-- Desktop app file calls are queued and yield between completed disk blocks; other apps keep running during saves and copies. Individual firmware/controller calls, executable loading and kernel shell file commands still run synchronously.
+- Desktop app file calls are queued and yield between completed disk blocks; other apps keep running during saves and copies. Desktop executable reads share the yielding worker; individual firmware/controller calls and kernel shell file commands still run synchronously.
 - Folder transfers: up to 256 entries per tree, eight path components and 64 KiB per file. Batch operations stop on failure; completed items and partial destination trees can remain.
 - ACPI shutdown supports simple static legacy S5 tables; firmware needing AML methods, hardware-reduced ACPI or unsupported table layouts uses the safe halt fallback.
 - No filesystem journal or general power-loss recovery. The checker can reclaim unreferenced clusters and resume interrupted orphan cleanup; it cannot reconstruct broken live files or interrupted installations. This is a learning OS, not a hardened system for important data or untrusted programs.
@@ -119,3 +132,56 @@ rustc --edition=2021 --test tools/window_tests.rs -o target/window-tests.exe
 - [Architecture](ARCHITECTURE.md)
 - [Application SDK](sdk/README.md)
 - [Roadmap](TODO.md)
+
+
+`run bigdemo` (or BIGDEMO in Apps) demonstrates a real larger ELF application with a 128 KiB file-backed palette asset, private initialized data/BSS and a 96 KiB heap. Left/Right changes palette pages. The app runs isolated by default. Builds, foreground/desktop loading, image packaging and installation all accept ELF files up to 1 MiB. The 1 MiB virtual image span, 1 MiB heap and 16 KiB stack limits are separate and unchanged. Desktop image reads yield between completed disk operations and temporarily use a bounded 1 MiB staging buffer; physical-console/bootstrap loading remains synchronous; legacy whole-file APIs and Files copy/move keep their earlier limits.
+
+
+Desktop app loading, including automatic Terminal wrappers, shares the serialized disk worker with app file requests. Existing windows keep receiving input and drawing while an image is read. The status line reports completed logical disk blocks; Ctrl+Alt+Esc cancels the active load at a safe read boundary. No process starts until the complete image validates and its source volume, parent and available slots are rechecked. Closing a launching Terminal cancels its pending load. Only one pending Apps-menu request and one pending command request are retained; additional requests report that a launch is already queued. Individual firmware/controller calls still block, and final bounded image/page-table setup is synchronous.
+
+
+## Graphics and fonts
+
+Interface labels now use a proportional 16-pixel bitmap face with narrower letters and spaces, tabular digits, pixel-based measurement, word wrapping and clipped ellipsis. Window titles, taskbar entries, Apps labels and shared GUI buttons use it. Kernel and applications share the layout code. Terminal cells, text inputs and Notepad's editing grid retain their fixed 8x16 layout for accurate selection and cursor positioning. The rasterizer clips glyphs once and uses an in-bounds row fast path; framebuffer transfers continue to use the existing bounded span copies.
+
+Open **FONTS** from Apps or `run fonts` to compare fixed/proportional widths, adjust a wrapping box with +/- or Space, and test maximise/restore. The current faces cover printable ASCII at native size; scalable fonts, shaping and Unicode remain future work. `tools/text_qemu.py` checks actual foreground/desktop surface pixels, invalid buffers and batches, reflow, maximise/restore and memory reclamation on standard VGA and BIOS VESA.
+
+## Audio
+
+System events use the voice recordings in `sounds/`. Their prepared 16 kHz mono PCM copies in `assets/sounds/` total about 142 KB (down from 1.06 MB), with excess silence trimmed, peaks balanced and short edge fades. Originals are retained; run `python tools/prepare_sounds.py` with ffmpeg available to regenerate them, then rebuild the kernel. No compressed-audio decoder is needed.
+
+Startup/shutdown, errors, confirmation warnings, save/copy completion, empty folders and explicit filesystem mount/unmount events use the matching clips. Information and notifications share `info.wav`. Settings has system sound volume, mute and Test voice controls; Save persists the volume in `/SOUND.CFG`. The same controls are available through `sounds`, `sounds test error`, `sounds test notification`, `sounds volume 60`, `sounds mute`, `sounds unmute` and `sounds save` in Terminal/the console. The volume is separate from Player's. Voices never stack: requests during another voice, within 750 ms of the last accepted event, or while an app owns PCM are dropped. Opening app audio stops any current system voice. There is no deferred chorus after playback ends.
+
+PLAYER in Apps provides actual sampled sound through an Intel 82801AA AC'97 device, separate from the PC speaker. Use **Test sound** / T for a four-note PCM clip, **Open WAV** / Ctrl+O for a file, Space to restart, S to stop, and +/- for volume. The first player supports uncompressed 8/16-bit mono/stereo PCM WAV at 8-48 kHz, preloaded up to 512 KiB, with nearest-neighbour conversion to 48 kHz stereo. Files load in bounded chunks before playback; this avoids relying on the current range-read speed for continuous streaming. No MP3/OGG decoder or software mixer is included yet.
+
+`run --media APP` grants file-read and PCM playback access without file writes, child launches, clipboard access or shell controls. Player gets this profile automatically. A single process owns the PCM stream; other applications receive a busy result. Closing, faulting or forcibly terminating its owner stops DMA and releases the stream. The kernel copies samples into its own bounded DMA buffers, never pointing the device at process memory. Playback and the desktop run concurrently.
+
+`Launch-Xinyi.cmd` configures QEMU AC97 output and retains PC-speaker sound for Snake/Tetris. Audio input voices are disabled. Other hardware, including HDA/USB audio, is not supported by this first driver; absent hardware reports unavailable while the rest of the OS keeps working. The QEMU test records real PCM and checks WAV resampling, queue wraparound, ownership and process cleanup. The register implementation follows the [Intel AC'97 controller documentation](https://www.intel.com.br/content/dam/doc/manual/io-controller-hub-7-hd-audio-ac97-manual.pdf).
+
+## Networking
+
+Xinyi now has an initial Ethernet stack: an RTL8139 PCI driver, ARP, IPv4, DHCP with lease renewal/rebinding, and ICMP echo. After explicit enabling, it acquires an address when a supported adapter has a link. The release QEMU launcher has no network adapter by default; developers can attach RTL8139 explicitly for testing.
+
+- `net` shows link, MAC address, DHCP configuration and packet counters.
+- `net dhcp` starts a fresh DHCP request after a failed configuration or to reset the lease.
+- `ping 10.0.2.2` starts four background pings to QEMU's virtual router. `ping` shows progress/results. Terminal stays usable while other apps run.
+
+For a manual QEMU launch add `-netdev user,id=net0 -device rtl8139,netdev=net0,id=nic0`. There are no host port forwards. The initial driver supports PCI vendor/device `10ec:8139`; it does not support the HP laptop's Wi-Fi or arbitrary modern Ethernet controllers. DNS server addresses are displayed, but hostname lookup, TCP, HTTP/downloads and application socket APIs are future work. Public Internet ping depends on the host/backend; the local QEMU router is the supported test target. See [QEMU networking documentation](https://www.qemu.org/docs/master/system/devices/net.html).
+
+Run `rustc --edition=2021 --test tools/network_tests.rs -o target/network-tests.exe` and the resulting executable for packet/state tests. `python tools/network_qemu.py --kernel PATH --disk PATH` checks QEMU user networking, a private local packet peer, short leases, receive-ring wrapping/recovery, link changes and desktop/Terminal operation. Test images are disposable copies.
+
+Networking is disabled on every boot. The developer-only command `net experimental-enable` enables it for the current boot; `net off` disables it again. These commands are omitted from help/completion and have no Settings control or saved enable flag. Disabled adapters have RX/TX, interrupts and PCI bus mastering off; no DHCP or packet parsing runs until enabled.
+
+## Dragging files
+
+In the desktop, drag selected files or folders between Files windows. A green outline marks a receiving Files window; hovering a folder marks that row. Drop onto a folder to copy into it, or onto empty list space to copy into the displayed directory. Hold Shift to move instead; the pointer badge shows Copy or Move. Ctrl/Shift selection supports multiple items, and dragging a selected row preserves the selection. Escape cancels an active drag. Closing the source also cancels it.
+
+Dropping outside Files does nothing. Same-folder drops are no-ops, existing names offer Paste As instead of overwriting, and moves into a folder's own descendants are refused. The drag payload is independent of Copy/Move/Paste's clipboard. Transfers use the existing serialized filesystem worker, including its volume checks, busy-directory checks and size limits (currently 64 KiB per file for Files copy/move). Batch failures may leave earlier items completed. Desktop wallpaper file icons and dropping files onto other application types are future work.
+
+Drag one file onto Notepad to open it; unsaved edits retain the normal Save/Discard/Cancel prompt. Drag one WAV onto Player to load and play it. Application targets show **Open file** and always leave the source in place, even with Shift held. Folder/multiple-file drops and drops during an existing app dialog are refused.
+
+### Desktop files and folders
+
+The wallpaper shows up to 20 files and folders from `/DESKTOP` on the mounted drive. The Desktop shortcut opens that folder in Files, including items beyond the icon limit. Items persist across boots; icons refresh while the filesystem worker is idle. Click a folder to browse it, or a document to open its associated app. Executables are not automatically run by desktop document opening.
+
+Drag from Files onto exposed wallpaper to copy into `/DESKTOP`, or onto a desktop folder to copy into it. Hold Shift to move. A Files window opens to perform the transfer and handle existing-name prompts; a free application slot is required. Drag desktop icons into Files or compatible document apps using the same rules. Escape cancels an active drag. These gestures do not replace the shared file clipboard. Icon positions currently follow a fixed grid.

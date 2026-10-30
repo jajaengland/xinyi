@@ -1,4 +1,5 @@
 """Verify the shared shell and text programs inside graphical terminal sessions."""
+from desktop_controls import APPS_BUTTON,SHELL_BUTTON,app_card,task_button
 import argparse,json,re,shutil,tempfile,time
 from seed_apps import seed_apps
 from pathlib import Path
@@ -39,8 +40,8 @@ def main():
     move(x,y)
     for down in [True,False]:g.call('input-send-event',{'events':[{'type':'btn','data':{'button':'left','down':down}}]});time.sleep(.07)
    def launch(name):
-    names=sorted(k.split('/')[-1][:-4] for k in inspect_tree(image,2048)[0] if k.startswith('APPS/') and k.count('/')==1 and k.endswith(('.BIN','.ELF')));start=len(log());click(40,11);click(40,46+names.index(name)*24)
-    until(lambda:re.search(r'Desktop: launch pid=(\d+) path=/APPS/'+name+r'\.BIN',log()[start:]),'Launch '+name);pid=int(re.search(r'Desktop: launch pid=(\d+)',log()[start:])[1]);until(lambda:f'Multiwindow: open pid={pid} ' in log()[start:],'Window '+name);return pid
+    names=sorted(k.split('/')[-1][:-4] for k in inspect_tree(image,2048)[0] if k.startswith('APPS/') and k.count('/') in (1,2) and k.endswith(('.BIN','.ELF')));start=len(log());click(*APPS_BUTTON);click(*app_card(names.index(name)))
+    until(lambda:re.search(r'Desktop: launch pid=(\d+) path=/APPS/(?:[A-Z0-9_]+/)?'+name+r'\.BIN',log()[start:]),'Launch '+name);pid=int(re.search(r'Desktop: launch pid=(\d+)',log()[start:])[1]);until(lambda:f'Multiwindow: open pid={pid} ' in log()[start:],'Window '+name);return pid
    def window(pid):
     m=re.search(r'Multiwindow: open pid='+str(pid)+r' handle=\d+ surface=([0-9a-f]+) client=(\d+)x(\d+) pos=(\d+),(\d+)',log());return int(m[1],16),int(m[2]),int(m[3])
    counter=launch('COUNTER');terminal=launch('TERMINAL');until(lambda:'PTY: open' in log(),'PTY not opened')
@@ -68,13 +69,13 @@ def main():
    cmd('run tetris','T E T R I S');g.key('esc');until(lambda:'User program exited.' in screen(),'Tetris return')
    cmd('edit note.txt','Xinyi Editor');g.key('end');g.type('!');g.key('ctrl-s');until(lambda:inspect_tree(image,2048)[0].get('DOCS/NOTE.TXT')==b'shared shell!','Editor save');g.key('ctrl-q');until(lambda:'User program exited.' in screen(),'Editor return')
    cmd('run notepad child.txt','Graphical application started.');until(lambda:log().count('Multiwindow: open')==3,'GUI detach');g.type('inherited');g.key('ctrl-s');until(lambda:inspect_tree(image,2048)[0].get('DOCS/CHILD.TXT')==b'inherited','GUI cwd');g.key('ctrl-q');time.sleep(.2)
-   click(258,11);cmd('run snake','S N A K E');g.key('ctrl-c');until(lambda:'Interrupted.' in screen(),'Ctrl-C interrupt')
+   click(*task_button(1));cmd('run snake','S N A K E');g.key('ctrl-c');until(lambda:'Interrupted.' in screen(),'Ctrl-C interrupt')
    cmd('kill '+str(counter),'Termination requested for process '+str(counter))
    until(lambda:f'Scheduler: forced exit pid={counter}' in log(),'kill did not terminate the selected process')
    cmd('clear','xinyi:/DOCS>');cmd('ps','Total processes: 1')
    assert 'COUNTER' not in screen(),screen()
    cmd('kill '+str(counter),'Process not found')
-   g.call('screendump',{'filename':str(out/'pty.png'),'format':'png'});cmd('run spin','run spin');until(lambda:'name=spin' in log(),'Spin start');m=re.search(r'Multiwindow: open pid='+str(terminal)+r' .*pos=(\d+),(\d+)',log());tx,ty=int(m[1]),int(m[2]);click(tx+656,ty+15);time.sleep(.2);g.key('esc');time.sleep(.2);assert f'Scheduler: exit pid={terminal}' not in log();click(tx+656,ty+15);click(tx+656,ty+15);until(lambda:f'Scheduler: exit pid={terminal} code=0' in log(),'Terminal close');click(768,11);g.wait_for('Desktop finished.');assert frames()==baseline,'PTY frame leak';g.command('cat /docs/note.txt','shared shell!');print('PASS PTY: normal shell, process listing/kill, windowed Snake/editor, GUI detach/cwd, Ctrl-C and frame balance')
+   g.call('screendump',{'filename':str(out/'pty.png'),'format':'png'});cmd('run spin','run spin');until(lambda:'name=spin' in log(),'Spin start');m=re.search(r'Multiwindow: open pid='+str(terminal)+r' .*pos=(\d+),(\d+)',log());tx,ty=int(m[1]),int(m[2]);click(tx+656,ty+15);time.sleep(.2);g.key('esc');time.sleep(.2);assert f'Scheduler: exit pid={terminal}' not in log();click(tx+656,ty+15);click(tx+656,ty+15);until(lambda:f'Scheduler: exit pid={terminal} code=0' in log(),'Terminal close');click(*SHELL_BUTTON);g.wait_for('Desktop finished.');assert frames()==baseline,'PTY frame leak';g.command('cat /docs/note.txt','shared shell!');print('PASS PTY: normal shell, process listing/kill, windowed Snake/editor, GUI detach/cwd, Ctrl-C and frame balance')
   finally:
    g.call('screendump',{'filename':str(out/'pty-last.png'),'format':'png'});g.close();shutil.copyfile(d/'debug.log',out/'pty-debug.log')
 

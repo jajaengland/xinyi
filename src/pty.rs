@@ -122,23 +122,32 @@ pub fn read_key(id: u32) -> Option<u32> {
         Some(key)
     }
 }
+pub fn launch_pending(id:u32)->bool {
+    exists(id)&&pointer(id).is_some_and(|p|unsafe {(*p).pending})
+}
 pub fn can_launch(id: u32) -> bool {
     pointer(id).is_some_and(|p| unsafe { (*p).foreground == 0 && !(*p).pending && !(*p).closed })
 }
 pub fn launch(name: &str, args: &str) -> bool {
+    launch_with_profile(name,args,crate::permissions::Profile::for_name(name))
+}
+pub fn launch_with_profile(name:&str,args:&str,profile:crate::permissions::Profile)->bool {
     let Some(id) = current() else {
         return false;
     };
     let mut line = [0; 128];
-    let n = name.len() + usize::from(!args.is_empty()) + args.len();
+    let prefix=profile.prefix();
+    let n = prefix.len()+name.len() + usize::from(!args.is_empty()) + args.len();
     if n > 128 {
         crate::println!("Program arguments exceed 128 bytes.");
         return false;
     }
-    line[..name.len()].copy_from_slice(name.as_bytes());
+    line[..prefix.len()].copy_from_slice(prefix.as_bytes());
+    let start=prefix.len();let end=start+name.len();
+    line[start..end].copy_from_slice(name.as_bytes());
     if !args.is_empty() {
-        line[name.len()] = b' ';
-        line[name.len() + 1..n].copy_from_slice(args.as_bytes());
+        line[end] = b' ';
+        line[end + 1..n].copy_from_slice(args.as_bytes());
     }
     match crate::multitask::request_launch(core::str::from_utf8(&line[..n]).unwrap()) {
         Ok(()) => {

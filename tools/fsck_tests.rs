@@ -371,3 +371,5 @@ fn interrupted_file_operations_are_detected_without_guessing_live_metadata() {
     assert!(cases > 50);
     println!("checked {cases} interrupted operation states");
 }
+
+#[path = "stream_fault_tests.rs"] mod stream_fault_tests;

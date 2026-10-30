@@ -5,7 +5,9 @@ import struct
 from folders_qemu import inspect_tree
 
 
-def seed_apps(image,package):
+def seed_apps(image,package,root_name="APPS"):
+    assert root_name.isalpha() and 1<=len(root_name)<=8
+    root_name=root_name.upper()
     image=Path(image);package=Path(package)
     data=bytearray(image.read_bytes());start=struct.unpack_from("<I",data,454)[0]
     before,_=inspect_tree(image,start)
@@ -45,27 +47,42 @@ def seed_apps(image,package):
         for offset in (16,18,24):struct.pack_into("<H",entry,offset,0x21)
         struct.pack_into("<H",entry,26,cluster);struct.pack_into("<I",entry,28,size)
         data[free:free+32]=entry
-    apps=find(0,b"APPS       ")
+    root_encoded=root_name.ljust(11).encode()
+    apps=find(0,root_encoded)
     if apps is None:
-        directory=allocate();create(0,b"APPS       ",0x10,directory,0)
+        directory=allocate();create(0,root_encoded,0x10,directory,0)
         create(directory,b".          ",0x10,directory,0);create(directory,b"..         ",0x10,0,0)
     else:
         assert data[apps+11]&0x10;directory=word(apps+26)
     expected={}
+    artifacts=[]
     for app in json.loads((package/"applications.json").read_text()):
-        payload=(package/"apps"/app["file"].lower()).read_bytes();name=app["file"]
-        assert 0<len(payload)<=65536
-        expected["APPS/"+name]=payload
+        artifacts.append(app)
+        if app.get('manifest'):artifacts.append({'file':app['manifest'],'directory':app.get('directory','')})
+    for app in artifacts:
+        folder=app.get('directory','');parent=directory
+        if folder:
+            assert 1<=len(folder)<=8 and folder[0].isalpha() and all(c.isalnum() or c=='_' for c in folder)
+            encoded=folder.upper().ljust(11).encode();entry=find(directory,encoded)
+            if entry is None:
+                parent=allocate();create(directory,encoded,0x10,parent,0)
+                create(parent,b".          ",0x10,parent,0);create(parent,b"..         ",0x10,directory,0)
+            else:
+                assert data[entry+11]&0x10;parent=word(entry+26)
+        payload=(package/"apps"/folder.lower()/app["file"].lower()).read_bytes();name=app["file"]
+        key=root_name+"/"+(folder.upper()+"/" if folder else "")+name
+        assert 0<len(payload)<=(1024*1024 if payload.startswith(b"\x7fELF") else 65536)
+        expected[key]=payload
         base,extension=name.split(".");encoded=(base.ljust(8)+extension.ljust(3)).encode()
-        if find(directory,encoded) is not None:
-            assert before["APPS/"+name]==payload,"Refusing to replace existing application"
+        if find(parent,encoded) is not None:
+            assert before[key]==payload,"Refusing to replace existing application"
             continue
         clusters=[]
         for offset in range(0,len(payload),spc*512):
             cluster=allocate()
             if clusters:set_fat(clusters[-1],cluster)
             clusters.append(cluster);chunk=payload[offset:offset+spc*512];at=sector(cluster);data[at:at+len(chunk)]=chunk
-        create(directory,encoded,0x20,clusters[0],len(payload))
+        create(parent,encoded,0x20,clusters[0],len(payload))
     with image.open("r+b") as stream:stream.write(data)
     files,_=inspect_tree(image,start)
     assert all(files[path]==content for path,content in before.items())

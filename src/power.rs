@@ -124,8 +124,11 @@ unsafe fn read(port: u16) -> u16 {
 pub fn shutdown() {
     if let Err(e) = crate::diskfs::sync() {
         crate::println!("Shutdown cancelled: {}", e.message());
+        crate::system_sounds::play(crate::system_sounds::Event::Error);
         return;
     }
+    crate::audio::farewell();
+    crate::network::shutdown();
     crate::println!("Shutting down...");
     crate::debug::write_str("Power: disks synchronized\n");
     if let Some(s) = unsafe { SLEEP } {

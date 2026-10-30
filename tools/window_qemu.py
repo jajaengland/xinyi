@@ -107,7 +107,7 @@ def main():
         guest=Guest(qemu,args.kernel,directory,disk=image,extra_args=["-vga","cirrus"])
         try:
             baseline=frames();guest.command("notepad","Cannot open graphical window.");guest.wait_for("User program exited with code 1.");assert frames()==baseline,"Failed open leaked memory"
-            guest.command("delete /apps/notepad.bin","Deleted:");guest.command("notepad","Program: file not found")
+            guest.command("delete /apps/notepad/notepad.bin","Deleted:");guest.command("notepad","Program: file not found")
         finally:guest.close()
     print(f"PASS ring-3 windows/Notepad ({args.vga}, usb={args.usb}): pointer validation, atomic invalid batches, handles, protected drawing, fault cleanup, file saves/cold persistence, client clicks, dragging, toolbar, unsaved close and readonly retention")
 

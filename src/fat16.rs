@@ -1,12 +1,15 @@
 // Bounded FAT16 storage with short names and directories; no heap.
 #[path = "fat16_check.rs"]
 pub mod check;
+#[path = "fat16_stream.rs"]
+mod stream;
 use crate::blockdev::BlockDevice;
 pub const MAX_FILE_SIZE: usize = 1024;
 pub const MAX_PROGRAM_SIZE: usize = 64 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
     Io,
+    Cancelled,
     InvalidVolume,
     InvalidName,
     NotFound,
@@ -14,6 +17,7 @@ pub enum Error {
     Full,
     TooLarge,
     ProgramTooLarge,
+    ImageTooLarge,
     OutOfMemory,
     FirmwareDestination,
     Corrupt,
@@ -28,6 +32,7 @@ pub enum Error {
     ConfirmationRequired,
     DiskTooSmall,
     InvalidKernel,
+    InvalidApplication,
     InstallConfirmationRequired,
     DiskChanged,
     LimitedCapacity,
@@ -39,6 +44,7 @@ impl Error {
         match self {
             Self::CheckLimit => "filesystem exceeds checker workspace or traversal limits",
             Self::RepairConfirmationRequired => "run fsck repair-orphans, then fsck confirm immediately",
+            Self::Cancelled => "operation cancelled",
             Self::Io => "disk I/O failed (or timed out)",
             Self::InvalidVolume => "no supported FAT16 volume",
             Self::InvalidName => "use an ASCII 8.3 filename (for example NOTE.TXT)",
@@ -46,6 +52,7 @@ impl Error {
             Self::Exists => "file already exists",
             Self::Full => "filesystem is full",
             Self::TooLarge => "file exceeds 1024 bytes",
+            Self::ImageTooLarge => "application image exceeds 1 MiB",
             Self::ProgramTooLarge => "program exceeds 64 KiB",
             Self::OutOfMemory => "not enough memory",
             Self::FirmwareDestination => "choose an IDE destination with install NUMBER; drive 0 is the BIOS boot source",
@@ -63,6 +70,7 @@ impl Error {
             }
             Self::DiskTooSmall => "disk is too small for the supported FAT16 layout",
             Self::InvalidKernel => "invalid kernel image or image exceeds the reserved boot area",
+            Self::InvalidApplication => "app folder needs a matching, valid executable and manifest",
             Self::InstallConfirmationRequired => {
                 "run install first, then install confirm with no intervening command"
             }
@@ -388,6 +396,8 @@ impl<'a> Fat16<'a> {
         self.start
     }
     fn read_sector(&self, lba: u32, data: &mut [u8; 512]) -> Result<()> {
+        #[cfg(not(test))]
+        if crate::disk_io::load_cancelled() {return Err(Error::Cancelled);}
         if self.device.read_block(lba, data) {
             Ok(())
         } else {
@@ -762,13 +772,20 @@ impl<'a> Fat16<'a> {
     pub fn read_program(&self, name: &str, output: &mut [u8]) -> Result<usize> {
         self.read_bounded(name, output, MAX_PROGRAM_SIZE)
     }
+    pub fn read_image(&self,name:&str,output:&mut[u8])->Result<usize> {
+        if self.file_size(name)?>crate::stream_protocol::MAX_FILE {return Err(Error::ImageTooLarge);}
+        self.read_chain::<{crate::stream_protocol::MAX_CLUSTERS}>(name,output,crate::stream_protocol::MAX_FILE)
+    }
     fn read_bounded(&self, name: &str, output: &mut [u8], limit: usize) -> Result<usize> {
+        self.read_chain::<128>(name,output,limit)
+    }
+    fn read_chain<const N:usize>(&self,name:&str,output:&mut[u8],limit:usize)->Result<usize> {
         let (directory, name) = self.parent(name)?;
         let entry = directory.find(&name)?;
         if entry.data[11] & 0x10 != 0 {
             return Err(Error::NotFile);
         }
-        let (chain, count) = self.bounded_chain::<128>(&entry, limit)?;
+        let (chain, count) = self.bounded_chain::<N>(&entry, limit)?;
         if entry.size() > output.len() { return Err(Error::TooLarge); }
         let mut copied = 0;
         for cluster in &chain[..count] {
@@ -860,7 +877,7 @@ impl<'a> Fat16<'a> {
         if from.directory_readonly||entry.data[11]&1!=0 {return Err(Error::ReadOnly);}
         if old==new {return Ok(());}
         match to.find(&new) {Ok(_)=>return Err(Error::Exists),Err(Error::NotFound)=>(),Err(e)=>return Err(e)}
-        if entry.data[11]&0x10!=0 {self.is_directory(source)?;}else {self.bounded_chain::<128>(&entry,MAX_PROGRAM_SIZE)?;}
+        if entry.data[11]&0x10!=0 {self.is_directory(source)?;}else {self.bounded_chain::<{crate::stream_protocol::MAX_CLUSTERS}>(&entry,crate::stream_protocol::MAX_FILE)?;}
         entry.data[..11].copy_from_slice(&new);from.store_entry(&entry)?;from.flush()
     }
     /// Copy regular files, including executables, without publishing an empty target.
@@ -950,7 +967,7 @@ impl<'a> Fat16<'a> {
         if entry.data[11] & 1 != 0 {
             return Err(Error::ReadOnly);
         }
-        let (chain, count) = self.bounded_chain::<128>(&entry, MAX_PROGRAM_SIZE)?;
+        let (chain, count) = self.bounded_chain::<{crate::stream_protocol::MAX_CLUSTERS}>(&entry, crate::stream_protocol::MAX_FILE)?;
         // Persist the tombstone before releasing clusters. A failed operation
         // may leak space, but must not leave a live entry pointing to free data.
         entry.data[0] = 0xe5;

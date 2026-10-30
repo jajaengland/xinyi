@@ -12,6 +12,13 @@ fn at(s:&mut State,x:i32,y:i32,buttons:u8)->(bool,Option<Event>) {s.update(mouse
     for c in [Draw::rect(u32::MAX,0,2,1,0),Draw::rect(639,399,2,1,0),Draw::rect(0,0,1,1,0x1000000),Draw{kind:2,..Draw::default()},Draw::text(0,385,0,b"a"),Draw::text(633,0,0,b"a")] {assert!(!c.valid());}
     assert!(Draw::text(0,384,0,b"hello").valid());
 }
+#[test] fn desktop_work_area_keeps_bottom_taskbar_clear_and_maximized_borders_compact() {
+ let mut s=State::sized(0,640,400,72,50);s.work_area=desktop_ui::Rect{x:0,y:0,w:800,h:544};s.minimizable=true;
+ s.limits=Some((320,144,792,544));let b=s.maximize_button();at(&mut s,b.x+8,b.y+8,1);
+ let event=at(&mut s,b.x+8,b.y+8,0).1.unwrap();assert_eq!((event.x,event.y),(792,512));
+ s.resized(event.x,event.y);let c=s.client();assert_eq!((s.window.rect.y,s.window.rect.h),(0,544));
+ assert_eq!(c.x,4);assert_eq!(s.window.rect.h-c.y-c.h,4);
+}
 #[test] fn close_is_a_cancellable_request_and_never_closes_the_surface() {
     let mut s=State::new(0);assert!(at(&mut s,710,103,1).1.is_none());
     assert_eq!(at(&mut s,710,103,0).1.unwrap().kind,CLOSE);assert!(s.window.visible);

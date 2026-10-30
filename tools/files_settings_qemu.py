@@ -1,4 +1,5 @@
 """Exercise shared multi-selection transfers, context menus, folders and appearance persistence."""
+from desktop_controls import APPS_BUTTON,SHELL_BUTTON,app_card,task_button
 import argparse,json,re,shutil,tempfile,time
 from seed_apps import seed_apps
 from pathlib import Path
@@ -43,8 +44,8 @@ def main():
     move(x,y)
     for down in [True,False]:g.call('input-send-event',{'events':[{'type':'btn','data':{'button':'left','down':down}}]});time.sleep(.07)
    def launch(name):
-    names=sorted(k.split('/')[-1][:-4] for k in inspect_tree(image,2048)[0] if k.startswith('APPS/') and k.count('/')==1 and k.endswith(('.BIN','.ELF')));start=len(log());click(40,11);click(40,46+names.index(name)*24)
-    until(lambda:re.search(r'Desktop: launch pid=(\d+) path=/APPS/'+name+r'\.BIN',log()[start:]),'Launch '+name);pid=int(re.search(r'Desktop: launch pid=(\d+)',log()[start:])[1]);until(lambda:f'Multiwindow: open pid={pid} ' in log()[start:],'Window '+name);return pid
+    names=sorted(k.split('/')[-1][:-4] for k in inspect_tree(image,2048)[0] if k.startswith('APPS/') and k.count('/') in (1,2) and k.endswith(('.BIN','.ELF')));start=len(log());click(*APPS_BUTTON);click(*app_card(names.index(name)))
+    until(lambda:re.search(r'Desktop: launch pid=(\d+) path=/APPS/(?:[A-Z0-9_]+/)?'+name+r'\.BIN',log()[start:]),'Launch '+name);pid=int(re.search(r'Desktop: launch pid=(\d+)',log()[start:])[1]);until(lambda:f'Multiwindow: open pid={pid} ' in log()[start:],'Window '+name);return pid
    def window(pid):
     m=re.search(r'Multiwindow: open pid='+str(pid)+r' handle=\d+ surface=([0-9a-f]+) client=(\d+)x(\d+) pos=(\d+),(\d+)',log());return int(m[1],16),int(m[2]),int(m[3])
    def rect(pid):
@@ -67,29 +68,31 @@ def main():
    click(x+32,y+104);modifier('shift',True);click(x+32,y+136);modifier('shift',False);until(lambda:all(chosen(first,i) for i in range(1,4)),'Shift range')
    modifier('ctrl',True);click(x+32,y+120);modifier('ctrl',False);until(lambda:chosen(first,1) and not chosen(first,2) and chosen(first,3),'Ctrl toggle')
    right(x+32,y+104);click(x+60,y+104+4+2*22+10);until(lambda:'Copy selected.' in status(first),'Stage copy: '+status(first));g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={first}' in log(),'Source close')
-   other=launch('FILES');x,y=coords(other);click(x+32,y+120);g.key('ret');time.sleep(.2);right(x+300,y+300);click(x+330,y+238+4+4*22+10)
+   other=launch('FILES');x,y=coords(other);click(x+32,y+120);g.key('ret');time.sleep(.2);right(x+300,y+300);click(x+330,y+min(300,window(other)[2]-206)+4+4*22+10)
    until(lambda:tree().get('DST/A.TXT')==b'alpha' and tree().get('DST/C.TXT')==b'gamma','Cross-window copy');assert 'DST/B.TXT' not in tree()
    g.key('backspace');time.sleep(.2);click(x+32,y+104);g.key('ret');time.sleep(.2);click(x+32,y+88);g.key('ctrl-x');g.key('backspace');time.sleep(.2);click(x+32,y+120);g.key('ret');time.sleep(.2);g.key('ctrl-v')
    until(lambda:tree().get('DST/FOLDER/SUB/N.TXT')==b'nested' and 'SRC/FOLDER/SUB/N.TXT' not in tree(),'Recursive folder move')
    click(x+32,y+88);modifier('ctrl',True);click(x+32,y+104);modifier('ctrl',False);g.key('delete');g.key('n');assert tree().get('DST/A.TXT')==b'alpha';g.key('delete');g.key('y');until(lambda:'DST/A.TXT' not in tree() and 'DST/C.TXT' not in tree(),'Batch delete');assert tree()['DST/FOLDER/SUB/N.TXT']==b'nested'
    settings=launch('SETTINGS');sx,sy=coords(settings)
    # Exact custom RGB entry for desktop, then title bar; Save also applies.
-   click(sx+120,sy+218);g.type('294f9c\n');click(sx+50,sy+80);click(sx+120,sy+218);g.type('526a83\n');click(sx+160,sy+264)
+   click(sx+120,sy+218);g.type('294f9c\n');click(sx+50,sy+80);click(sx+120,sy+218);g.type('526a83\n');click(sx+160,sy+356)
    until(lambda:tree().get('GUI.CFG')==b'294F9C 526A83\n','Settings save')
+   click(sx+40,sy+296);click(sx+132,sy+296);click(sx+240,sy+296);click(sx+240,sy+296);click(sx+360,sy+296);g.key('ctrl-s')
+   until(lambda:tree().get('SOUND.CFG')==b'SND1'+(60).to_bytes(4,'little'),'System sound volume controls/save')
    if a.vga=='std':
     dev=next(v for v in g.call('query-pci')[0]['devices'] if v.get('id',{}).get('vendor')==0x1234);base=next(v['address'] for v in dev['regions'] if v['bar']==0);pitch=3200;size=4
    else:
     m=re.findall(r'BIOS VBE mode [0-9a-f]+ base=([0-9a-f]+) pitch=(\d+) bpp=(\d+)',log())[-1];base,pitch,size=int(m[0],16),int(m[1]),int(m[2])//8
    def pixel(px,py):return int.from_bytes(mem(base+py*pitch+px*size,size),'little')
    def native(rgb):return ((rgb>>19&31)<<11|(rgb>>10&63)<<5|(rgb>>3&31)) if size==2 else rgb
-   until(lambda:pixel(780,580)==native(0x294f9c),'Desktop colour not applied');tx,ty=rect(settings);until(lambda:pixel(tx+400,ty+15)==native(0x526a83),'Title colour not applied')
-   g.call('screendump',{'filename':str(out/'files-settings.png'),'format':'png'});click(sx+400,sy+264);until(lambda:f'Scheduler: exit pid={settings}' in log(),'Settings close');click(110,11);g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={other}' in log(),'Files close');click(768,11);g.wait_for('Desktop finished.');assert frames()==baseline,'Files/settings leaked frames'
+   until(lambda:pixel(780,8)==native(0x294f9c),'Desktop colour not applied');tx,ty=rect(settings);until(lambda:pixel(tx+400,ty+15)==native(0x526a83),'Title colour not applied')
+   g.call('screendump',{'filename':str(out/'files-settings.png'),'format':'png'});click(sx+400,sy+356);until(lambda:f'Scheduler: exit pid={settings}' in log(),'Settings close');click(*task_button(0));g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={other}' in log(),'Files close');click(*SHELL_BUTTON);g.wait_for('Desktop finished.');assert frames()==baseline,'Files/settings leaked frames'
    print('PASS multi-selection, context menus, shared file clipboard after source close, recursive move, batch delete/cancel, theme save/apply and frame balance',flush=True)
   finally:
    g.call('screendump',{'filename':str(out/'files-settings-last.png'),'format':'png'});g.close();shutil.copyfile(d/'debug.log',out/'files-settings-debug.log')
   g=Guest(r'C:\Program Files\qemu\qemu-system-i386.exe',None,d,disk=image,attach_disk=not a.usb,extra_args=extra)
   try:
-   g.command('cat /dst/folder/sub/n.txt','nested');g.type('desktop\n');until(lambda:'Desktop scheduler: ready' in log(),'Cold desktop');g.call('screendump',{'filename':str(out/'files-settings-cold.png'),'format':'png'});assert pixel(780,580)==native(0x294f9c),'Saved theme lost after cold boot';g.key('esc');g.wait_for('Desktop finished.')
+   g.command('cat /dst/folder/sub/n.txt','nested');g.type('desktop\n');until(lambda:'Desktop scheduler: ready' in log(),'Cold desktop');g.call('screendump',{'filename':str(out/'files-settings-cold.png'),'format':'png'});assert pixel(780,8)==native(0x294f9c),'Saved theme lost after cold boot';g.key('esc');g.wait_for('Desktop finished.')
   finally:g.close()
 
 if __name__=='__main__':main()

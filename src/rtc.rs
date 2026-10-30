@@ -78,7 +78,24 @@ pub fn read() -> DateTime {
         }
     };
 
-    let status_b = unsafe { read_register(0x0B) };
+    decode(snapshot,unsafe {read_register(0x0B)})
+}
+/// A damaged RTC must not stall the desktop's periodic clock update.
+pub fn try_read()->Option<DateTime> {
+    let mut previous=None;
+    for _ in 0..8 {
+        let mut ready=false;
+        for _ in 0..1000 {if unsafe {read_register(0x0a)}&0x80==0 {ready=true;break;}}
+        if !ready {return None;}
+        let snapshot=unsafe {RtcSnapshot{second:read_register(0),minute:read_register(2),hour:read_register(4),day:read_register(7),month:read_register(8),year:read_register(9)}};
+        if previous==Some(snapshot) {
+            let date=decode(snapshot,unsafe {read_register(0x0b)});
+            return if date.hour<24&&date.minute<60&&date.second<60 {Some(date)}else{None};
+        }
+        previous=Some(snapshot);
+    }None
+}
+fn decode(snapshot:RtcSnapshot,status_b:u8)->DateTime {
     let binary_mode = status_b & 0x04 != 0;
     let twenty_four_hour = status_b & 0x02 != 0;
 

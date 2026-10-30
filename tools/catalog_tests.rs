@@ -9,3 +9,11 @@ use app_catalog::Catalog;
 }
 
 #[test]fn elf_apps_are_listed_and_bin_wins_duplicate_stems(){let mut c=Catalog::new();c.add(b"TEST    ELF",false);assert_eq!(&c.entries[0].path[..c.entries[0].path_len],b"/APPS/TEST.ELF");c.add(b"TEST    BIN",false);c.add(b"TEST    ELF",false);assert_eq!(c.len,1);assert_eq!(&c.entries[0].path[..c.entries[0].path_len],b"/APPS/TEST.BIN");}
+#[test]fn bundles_have_explicit_paths_and_legacy_duplicates_win(){
+    let mut c=Catalog::new();c.add_bundle(b"NOTEPAD BIN");c.add_bundle(b"ABCDEFGHELF");
+    assert_eq!(&c.entries[0].path[..c.entries[0].path_len],b"/APPS/NOTEPAD/NOTEPAD.BIN");
+    assert_eq!(&c.entries[1].path[..c.entries[1].path_len],b"/APPS/ABCDEFGH/ABCDEFGH.ELF");
+    c.add_bundle(b"NOTEPAD BIN");assert_eq!(c.len,2);
+    let mut c=Catalog::new();c.add(b"HELLO   BIN",false);c.add_bundle(b"HELLO   BIN");
+    assert_eq!(&c.entries[0].path[..c.entries[0].path_len],b"/APPS/HELLO.BIN");
+}

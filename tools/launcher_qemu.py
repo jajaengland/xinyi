@@ -76,7 +76,7 @@ def main():
                 assert "pos=200,120;300,210 clicks=1/0" in log()[offset:],"Desktop state was lost"
             offset=launch('CUSTOM');returned(offset)
             names.insert(0,'ADDED')
-            assert inspect_tree(image,2048)[0]['APPS/ADDED.BIN']==inspect_tree(image,2048)[0]['APPS/HELLO.BIN']
+            assert inspect_tree(image,2048)[0]['APPS/ADDED.BIN']==inspect_tree(image,2048)[0]['APPS/HELLO/HELLO.BIN']
             offset=launch('ADDED');returned(offset)
             offset=launch('COUNTER');until(lambda:'client=320x144' in log()[offset:],'Sized foreground app did not open');guest.key('q');returned(offset)
             offset=launch('NOTEPAD');until(lambda:'Window: opened' in log()[offset:],'Graphical app did not open')

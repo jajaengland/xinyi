@@ -208,7 +208,8 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
         unsafe {
             asm!("sti", options(nostack));
         }
-        let result = open(&title[..second as usize], width, height);
+        let title_length=usermode::profile().title(&mut title,second as usize);
+        let result = open(&title[..title_length], width, height);
         unsafe {
             asm!("cli", options(nostack));
         }
@@ -267,7 +268,7 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
                 if !c.valid_for(app.width, app.height) {
                     return (-22i32) as u32;
                 }
-                if c.kind == 1 {
+                if c.kind != 0 {
                     if !user_buffer::readable(c.pointer, c.length, image) {
                         return (-14i32) as u32;
                     }
@@ -282,7 +283,7 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
                     }
                     if !texts[i][..c.length as usize]
                         .iter()
-                        .all(|b| (32..=126).contains(b))
+                        .all(|b| (32..=126).contains(b) || c.kind==3 && *b==b'\n')
                     {
                         return (-22i32) as u32;
                     }
@@ -314,6 +315,12 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
                         c.color,
                     );
                     (c.width, c.height)
+                } else if c.kind==2 {
+                    canvas.label(c.x as i32,c.y as i32,c.width,c.color,&texts[i][..c.length as usize]);
+                    (c.width,c.height)
+                } else if c.kind==3 {
+                    canvas.paragraph(c.x as i32,c.y as i32,c.width,c.height,c.color,&texts[i][..c.length as usize]);
+                    (c.width,c.height)
                 } else {
                     canvas.text(
                         c.x as i32,

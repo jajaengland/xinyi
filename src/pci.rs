@@ -1,4 +1,4 @@
-// PCI configuration mechanism #1. Configuration is read, never reprogrammed.
+// PCI configuration mechanism #1. Drivers may enable I/O/bus mastering on a matched device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IdeChannel {
     pub io: u16,
@@ -190,4 +190,11 @@ pub fn target_channel(target: crate::disk_target::Target) -> Option<IdeChannel> 
         bars,
         target.secondary(),
     )
+}
+
+// Write only the command halfword; never echo write-one-to-clear status bits.
+pub fn write_command(bus:u8,slot:u8,function:u8,command:u16) {
+    let address=0x80000000u32|(bus as u32)<<16|(slot as u32)<<11|(function as u32)<<8|4;
+    unsafe {core::arch::asm!("out dx,eax",in("dx")0xcf8u16,in("eax")address,options(nomem,nostack));
+        core::arch::asm!("out dx,ax",in("dx")0xcfcu16,in("ax")command,options(nomem,nostack));}
 }

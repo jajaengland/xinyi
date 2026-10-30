@@ -24,7 +24,10 @@ static mut ACTIVE: bool = false;
 static mut DESKTOP: bool = false;
 static mut PAUSE: Option<Pause> = None;
 static mut SAVED: Option<Cpu> = None;
+#[derive(Clone,Copy)]
 struct Launch {
+    volume:u32,
+    profile: crate::permissions::Profile,
     name: [u8; 105],
     length: usize,
     args: [u8; 128],
@@ -46,6 +49,7 @@ struct Process {
     memory_kib: u32,
     terminal: bool,
     disk: bool,
+    profile: crate::permissions::Profile,
 }
 // Published by the dispatcher before servicing shell commands. Never borrow
 // live Job records while a terminal command can request their termination.
@@ -62,13 +66,14 @@ fn sync_processes(jobs: &[Option<Job>; LIMIT]) {
             + job.stack.top() - job.stack.base()) / 1024 + job.space.memory_kib(),
         terminal: job.tty.is_some() || job.terminal_owner.is_some(),
         disk: job.io.is_some(),
+        profile: job.program.profile,
     }));
     unsafe { core::ptr::addr_of_mut!(PROCESSES).write(snapshot); }
 }
 
 pub fn list_processes() {
     let snapshot = unsafe { core::ptr::addr_of!(PROCESSES).read() };
-    crate::println!("PID  NAME      STATE    KiB  TYPE");
+    crate::println!("PID  NAME      STATE    KiB  TYPE  ACCESS");
     for process in snapshot.iter().flatten() {
         let state = if process.disk { "disk" } else { match process.state {
             State::Ready => "ready",
@@ -76,11 +81,15 @@ pub fn list_processes() {
             State::Waiting => "waiting",
         }};
         let name = core::str::from_utf8(&process.name[..process.name_length]).unwrap_or("?");
-        crate::println!("{:<4} {:<8} {:<7} {:>5}  {}", process.pid, name, state,
-            process.memory_kib, if process.terminal { "text" } else { "app" });
+        crate::println!("{:<4} {:<8} {:<7} {:>5}  {}  {}", process.pid, name, state,
+            process.memory_kib, if process.terminal { "text" } else { "app" },process.profile.label());
     }
     crate::println!("Total processes: {}", snapshot.iter().flatten().count());
     crate::println!("KiB includes private pages and kernel stack; excludes GUI buffers.");
+}
+pub fn app_running(name:&[u8])->bool {
+    let snapshot=unsafe{core::ptr::addr_of!(PROCESSES).read()};
+    snapshot.iter().flatten().any(|p|p.name[..p.name_length].eq_ignore_ascii_case(name))
 }
 
 pub fn request_kill(pid: u32) -> Result<(), &'static str> {
@@ -118,6 +127,7 @@ fn take_kill() -> Option<u32> {
     None
 }
 pub fn request_launch(command: &str) -> Result<(), i32> {
+    if crate::usermode::active_image(0x1b).is_some() && !crate::usermode::profile().allows(71,0) {return Err(-13);}
     if !active() || !unsafe { DESKTOP } {
         return Err(-16);
     }
@@ -130,15 +140,14 @@ pub fn request_launch(command: &str) -> Result<(), i32> {
     if unsafe { (&*core::ptr::addr_of!(REQUEST)).is_some() } {
         return Err(-16);
     }
-    let (name, args) = command
-        .trim()
-        .split_once(char::is_whitespace)
-        .unwrap_or((command.trim(), ""));
-    let args = args.trim();
+    let parsed=crate::permissions::parse(command).map_err(|_|-22)?;
+    let (name,args)=(parsed.name,parsed.arguments);
     if name.is_empty() || name.len() > 105 || args.len() > 128 {
         return Err(-22);
     }
     let mut request = Launch {
+        volume: crate::diskfs::volume_epoch(),
+        profile: parsed.profile,
         name: [0; 105],
         length: name.len(),
         args: [0; 128],
@@ -330,21 +339,14 @@ struct Job {
     io: Option<crate::disk_io::Request>,
     kill_after_io: bool,
     console_pending: bool,
+    console_volume:u32,
 }
 fn load(path: &str, arguments: &[u8]) -> Result<Job, &'static str> {
-    let staging = Frames::new(16).ok_or("Not enough memory for the program loader.")?;
-    let data = unsafe { core::slice::from_raw_parts_mut(staging.base() as *mut u8, 65536) };
-    let result=crate::diskfs::read_executable(path,data);
-    let size = result.map_err(|e| e.message())?;
-    if size == 0 {
-        return Err("Program is empty.");
-    }
-    if arguments.len() > 128 {
-        return Err("Program arguments exceed 128 bytes.");
-    }
-    let mut program =
-        loader::load(&data[..size]).map_err(|e|e.message())?;
-    drop(staging);
+    job_from_program(path,arguments,loader::from_disk(path)?)
+}
+fn job_from_program(path:&str,arguments:&[u8],mut program:loader::LoadedProgram)->Result<Job,&'static str> {
+    if arguments.len()>128 {return Err("Program arguments exceed 128 bytes.");}
+    program.profile=program.profile.restrict(crate::permissions::Profile::for_name(path));
     program.arguments[..arguments.len()].copy_from_slice(arguments);
     program.argument_length = arguments.len();
     let space = paging::AddressSpace::new(&program).ok_or("Not enough memory for page tables.")?;
@@ -383,6 +385,7 @@ fn load(path: &str, arguments: &[u8]) -> Result<Job, &'static str> {
         io: None,
         kill_after_io: false,
         console_pending: false,
+        console_volume:0,
     })
 }
 pub fn demo(argument: &str) {
@@ -494,26 +497,69 @@ fn sync_tasks(jobs: &mut [Option<Job>; LIMIT]) {
     }
     crate::multi_window::set_tasks(tasks);
 }
-fn open_console(jobs: &mut [Option<Job>; LIMIT], index: usize) {
-    assert!(!crate::disk_io::busy());
-    let free = jobs.iter().position(Option::is_none);
-    let directory = crate::diskfs::directory();
-    crate::diskfs::set_directory(jobs[index].as_ref().unwrap().directory);
-    let terminal = load("/APPS/TERMINAL.BIN", b"");
-    crate::diskfs::set_directory(directory);
-    let job = jobs[index].as_mut().unwrap();
-    job.console_pending = false;
-    match (free, terminal) {
-        (Some(slot), Ok(mut terminal)) => {
-            terminal.task_slot = job.task_slot.take();
-            job.terminal_owner = Some(terminal.pid);
-            crate::debug::write_fmt(format_args!("Desktop: text terminal pid={} terminal={}\n",job.pid,terminal.pid));
-            jobs[slot] = Some(terminal);
-            sync_tasks(jobs);
-        }
-        (_, Err(message)) => { crate::multi_window::status(message.as_bytes()); queue_kill(job.pid); }
-        _ => { crate::multi_window::status(b"No room for a terminal. Close another app."); queue_kill(job.pid); }
+#[derive(Clone,Copy)]
+enum LoadSource {Menu,Command,Console(u32)}
+struct PendingLoad {request:Launch,source:LoadSource,drag_token:u32}
+fn load_failed(pending:&PendingLoad,jobs:&mut [Option<Job>;LIMIT],message:&str) {
+    if matches!(pending.source,LoadSource::Menu) {crate::multi_window::desktop_loaded(None,pending.drag_token);}
+    crate::system_sounds::play(crate::system_sounds::Event::Error);
+    crate::debug::write_fmt(format_args!("App load: failed name={} reason={}\n",core::str::from_utf8(&pending.request.name[..pending.request.length]).unwrap(),message));
+    if let LoadSource::Console(pid)=pending.source {
+        if let Some(job)=jobs.iter_mut().flatten().find(|j|j.pid==pid) {job.console_pending=false;queue_kill(pid);}
+    } else if let Some(id)=pending.request.tty {crate::pty::child_done(id,0,message);}
+    crate::multi_window::status(message.as_bytes());
+}
+fn finish_load(pending:PendingLoad,jobs:&mut [Option<Job>;LIMIT],result:Result<loader::LoadedProgram,&'static str>,cancelled:bool) {
+    use crate::load_model::{ready,Ready};
+    let parent_open=pending.request.tty.is_none_or(crate::pty::launch_pending);
+    let parent_alive=match pending.source {LoadSource::Console(pid)=>jobs.iter().flatten().any(|j|j.pid==pid&&j.console_pending),_=>true};
+    let root=matches!(pending.source,LoadSource::Menu)||matches!(pending.source,LoadSource::Command)&&pending.request.tty.is_none();
+    let room=jobs.iter().any(Option::is_none)&&(!root||root_slot(jobs).is_some());
+    let decision=ready(cancelled,pending.request.volume,crate::diskfs::volume_epoch(),parent_open,parent_alive,room);
+    if decision!=Ready::Publish {
+        drop(result);
+        load_failed(&pending,jobs,match decision {
+            Ready::Cancelled=>"App load cancelled.",Ready::StaleVolume=>"App source volume changed; launch again.",
+            Ready::ClosedParent|Ready::MissingParent=>"App launch cancelled: parent closed.",_=>"No room for another application.",
+        });return;
     }
+    let program=match result {Ok(p)=>p,Err(message)=>{load_failed(&pending,jobs,message);return;}};
+    let request=&pending.request;let name=core::str::from_utf8(&request.name[..request.length]).unwrap();
+    let previous=crate::diskfs::directory();crate::diskfs::set_directory(request.directory);
+    let loaded=job_from_program(name,&request.args[..request.argc],program);
+    crate::diskfs::set_directory(previous);
+    let mut job=match loaded {Ok(j)=>j,Err(message)=>{load_failed(&pending,jobs,message);return;}};
+    job.program.profile=job.program.profile.restrict(request.profile);
+    if matches!(pending.source,LoadSource::Menu) {crate::multi_window::desktop_loaded(Some(job.pid),pending.drag_token);}
+    match pending.source {
+        LoadSource::Console(pid)=>{
+            let child=jobs.iter_mut().flatten().find(|j|j.pid==pid).unwrap();
+            child.console_pending=false;job.task_slot=child.task_slot.take();child.terminal_owner=Some(job.pid);
+            crate::debug::write_fmt(format_args!("Desktop: text terminal pid={} terminal={}\n",pid,job.pid));
+        }
+        LoadSource::Command=>{
+            job.tty=request.tty;
+            if let Some(id)=job.tty {crate::pty::attach(id,job.pid);} else {job.task_slot=root_slot(jobs);}
+            crate::debug::write_fmt(format_args!("Desktop: terminal launch pid={} name={}\n",job.pid,name));
+        }
+        LoadSource::Menu=>{
+            job.task_slot=root_slot(jobs);
+            crate::debug::write_fmt(format_args!("Desktop: launch pid={} path={}\n",job.pid,name));
+        }
+    }
+    let index=jobs.iter().position(Option::is_none).unwrap();jobs[index]=Some(job);sync_tasks(jobs);
+    crate::multi_window::status(b"");
+}
+fn next_load(jobs:&[Option<Job>;LIMIT])->Option<PendingLoad> {
+    if let Some(child)=jobs.iter().flatten().find(|j|j.console_pending) {
+        let mut name=[0;105];name[..18].copy_from_slice(b"/APPS/TERMINAL.BIN");
+        return Some(PendingLoad{source:LoadSource::Console(child.pid),drag_token:0,request:Launch{volume:child.console_volume,profile:crate::permissions::Profile::Trusted,name,length:18,args:[0;128],argc:0,directory:child.directory,tty:None}});
+    }
+    if let Some(request)=unsafe {(*core::ptr::addr_of_mut!(REQUEST)).take()} {return Some(PendingLoad{source:LoadSource::Command,drag_token:0,request});}
+    if let Some((entry,volume,args,argc,drag_token))=crate::multi_window::take_launch() {
+        let mut name=[0;105];name[..entry.path_len].copy_from_slice(&entry.path[..entry.path_len]);
+        return Some(PendingLoad{source:LoadSource::Menu,drag_token,request:Launch{volume,profile:crate::permissions::Profile::Trusted,name,length:entry.path_len,args,argc,directory:crate::diskfs::directory(),tty:None}});
+    }None
 }
 fn run(mut jobs: [Option<Job>; LIMIT], desktop: bool) {
     let mut io_worker = if desktop {
@@ -523,6 +569,8 @@ fn run(mut jobs: [Option<Job>; LIMIT], desktop: bool) {
         };
         Some(worker)
     } else { None };
+    let mut pending_load:Option<PendingLoad>=None;
+    let mut prefer_load=true;
     let mut io_last = LIMIT - 1;
     let mut io_idle_slices = 0u8;
     if let Err(message) = if desktop {
@@ -547,14 +595,8 @@ fn run(mut jobs: [Option<Job>; LIMIT], desktop: bool) {
     let (mut last, mut switches, mut preemptions, mut sleeps, mut waits) =
         (LIMIT - 1, 0u32, 0u32, 0u32, 0u32);
     loop {
-        if !crate::disk_io::busy() {
-            for index in 0..LIMIT {
-                if jobs[index].as_ref().is_some_and(|job| job.console_pending) {
-                    open_console(&mut jobs, index);
-                }
-            }
-        }
         // A text task keeps its context while its newly-created terminal opens.
+        crate::network::poll();
         for i in 0..LIMIT {
             if let Some(owner) = jobs[i].as_ref().and_then(|j| j.terminal_owner) {
                 if let Some(id) = crate::pty::for_owner(owner) {
@@ -581,80 +623,6 @@ fn run(mut jobs: [Option<Job>; LIMIT], desktop: bool) {
             break;
         }
         check_host_stack();
-        if !crate::disk_io::busy() {
-        if let Some(request) = unsafe { (*core::ptr::addr_of_mut!(REQUEST)).take() } {
-            if request.tty.is_some_and(|id| !crate::pty::exists(id)) {
-                continue;
-            }
-            if let Some(index) = jobs.iter().position(Option::is_none) {
-                let previous = crate::diskfs::directory();
-                crate::diskfs::set_directory(request.directory);
-                let name = core::str::from_utf8(&request.name[..request.length]).unwrap();
-                let loaded = load(name, &request.args[..request.argc]);
-                crate::diskfs::set_directory(previous);
-                match loaded {
-                    Ok(mut job) => {
-                        job.tty = request.tty;
-                        if let Some(id) = job.tty {
-                            crate::pty::attach(id, job.pid);
-                        } else {
-                            job.task_slot = root_slot(&jobs);
-                        }
-                        crate::debug::write_fmt(format_args!(
-                            "Desktop: terminal launch pid={} name={}\n",
-                            job.pid, name
-                        ));
-                        jobs[index] = Some(job);
-                        crate::multi_window::status(b"App launched from terminal.");
-                    }
-                    Err(error) => {
-                        if let Some(id) = request.tty {
-                            crate::pty::child_done(id, 0, error);
-                        } else {
-                            crate::multi_window::status(error.as_bytes());
-                        }
-                    }
-                }
-                sync_tasks(&mut jobs);
-            } else {
-                crate::multi_window::status(
-                    b"No free app slots. Close an app before launching another.",
-                );
-            }
-        }
-        if let Some(entry) = crate::multi_window::take_launch() {
-            if let Some((index, slot)) = jobs.iter().position(Option::is_none).zip(root_slot(&jobs))
-            {
-                let path = core::str::from_utf8(&entry.path[..entry.path_len]).unwrap();
-                match load(path, b"") {
-                    Ok(mut job) => {
-                        job.task_slot = Some(slot);
-                        crate::debug::write_fmt(format_args!(
-                            "Desktop: launch pid={} path={}\n",
-                            job.pid, path
-                        ));
-                        jobs[index] = Some(job);
-                        crate::multi_window::status(
-                            b"App started. Click its window or task to switch focus.",
-                        );
-                    }
-                    Err(error) => {
-                        crate::debug::write_fmt(format_args!(
-                            "Desktop: launch failed {}: {}\n",
-                            path, error
-                        ));
-                        crate::multi_window::status(error.as_bytes());
-                    }
-                }
-                sync_tasks(&mut jobs);
-                crate::multi_window::refresh_catalog();
-            } else {
-                crate::multi_window::status(
-                    b"Four apps are already running. Close one before starting another.",
-                );
-            }
-        }
-        }
         if let Some(pid) = crate::multi_window::take_kill() {
             queue_kill(pid);
         }
@@ -671,6 +639,7 @@ fn run(mut jobs: [Option<Job>; LIMIT], desktop: bool) {
                 }
                 crate::debug::write_fmt(format_args!("Scheduler: forced exit pid={}\n", pid));
                 crate::multi_window::remove(pid);
+                crate::audio::close_owner(pid);
                 crate::pty::close_owner(pid);
                 if let Some(id) = jobs[index].as_ref().and_then(|j| j.tty) {
                     crate::pty::child_done(id, pid, "Interrupted.");
@@ -678,7 +647,7 @@ fn run(mut jobs: [Option<Job>; LIMIT], desktop: bool) {
                 jobs[index] = None;
                 sync_tasks(&mut jobs);
                 crate::multi_window::refresh_catalog();
-                crate::multi_window::status(b"Focused app stopped. Other apps are still running.");
+                crate::multi_window::status(b"");
             }
         }
         if !desktop && jobs.iter().all(Option::is_none) {
@@ -686,16 +655,48 @@ fn run(mut jobs: [Option<Job>; LIMIT], desktop: bool) {
         }
         if let Some(worker) = &mut io_worker {
             if !crate::disk_io::busy() {
+                let syscall_waiting=jobs.iter().flatten().any(|j|j.io.is_some());
+                if (prefer_load||!syscall_waiting)&&pending_load.is_none() {
+                    if let Some(pending)=next_load(&jobs) {
+                        let name=core::str::from_utf8(&pending.request.name[..pending.request.length]).unwrap();
+                        worker.start_load(name,pending.request.volume);
+                        pending_load=Some(pending);prefer_load=false;
+                        crate::multi_window::status(b"Loading app... Ctrl+Alt+Esc cancels. Other apps keep running.");
+                    }
+                }
+            }
+            if !crate::disk_io::busy() {
                 for offset in 1..=LIMIT {
                     let index = (io_last + offset) % LIMIT;
                     if let Some(job) = jobs[index].as_ref().filter(|job| job.io.is_some()) {
                         worker.start(job.pid, job.io.unwrap());
                         io_last = index;
+                        prefer_load=true;
                         break;
                     }
                 }
             }
-            if let Some(pid) = crate::disk_io::owner() {
+            if crate::disk_io::loading() {
+                let pending=pending_load.as_ref().unwrap();
+                if pending.request.tty.is_some_and(|id|!crate::pty::launch_pending(id))
+                    || matches!(pending.source,LoadSource::Console(pid) if !jobs.iter().flatten().any(|j|j.pid==pid)) {crate::disk_io::cancel_load();}
+                let directory=crate::diskfs::directory();crate::diskfs::set_directory(pending.request.directory);
+                let result=worker.step();crate::diskfs::set_directory(directory);
+                if result.is_none() {
+                    let mut label=[b' ';96];let prefix=b"Loading app: ";label[..prefix.len()].copy_from_slice(prefix);
+                    let name=&pending.request.name[..pending.request.length];let n=name.len().min(32);
+                    label[13..13+n].copy_from_slice(&name[..n]);
+                    let at=14+n;let mut blocks=crate::disk_io::blocks();
+                    for i in (at..at+10).rev() {label[i]=b'0'+(blocks%10) as u8;blocks/=10;}
+                    let tail=b" blocks | Ctrl+Alt+Esc cancels";label[at+10..at+10+tail.len()].copy_from_slice(tail);
+                    crate::multi_window::status(&label[..at+10+tail.len()]);
+                }
+                if result.is_some() {
+                    let cancelled=crate::disk_io::cancel_requested();
+                    let program=crate::disk_io::take_loaded();
+                    finish_load(pending_load.take().unwrap(),&mut jobs,program,cancelled);
+                }
+            } else if let Some(pid) = crate::disk_io::owner() {
                 let index = jobs.iter().position(|job| job.as_ref().is_some_and(|job| job.pid == pid)).unwrap();
                 let job = jobs[index].as_mut().unwrap();
                 let directory = crate::diskfs::directory();
@@ -787,6 +788,7 @@ fn run(mut jobs: [Option<Job>; LIMIT], desktop: bool) {
         }
         if matches!(reason, Some(Pause::Console(_))) {
             job.console_pending = true;
+            job.console_volume=crate::diskfs::volume_epoch();
             job.state = State::Waiting;
             continue;
         }
@@ -860,15 +862,14 @@ fn run(mut jobs: [Option<Job>; LIMIT], desktop: bool) {
                 );
             }
             let pid = job.pid;
+            crate::audio::close_owner(pid);
+            if matches!(outcome,Some(usermode::Outcome::Fault{..})) {crate::system_sounds::play(crate::system_sounds::Event::Error);}
             crate::pty::close_owner(pid);
             crate::multi_window::remove(pid);
             jobs[index] = None;
             if desktop {
                 sync_tasks(&mut jobs);
                 crate::multi_window::refresh_catalog();
-                crate::multi_window::status(
-                    b"App finished. Apps launches another; Exit returns to the shell when empty.",
-                );
             }
         }
     }

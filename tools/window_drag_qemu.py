@@ -1,4 +1,5 @@
 """Measure window-drag latency and cursor visibility under burst mouse input."""
+from desktop_controls import APPS_BUTTON,SHELL_BUTTON,app_card,task_button
 import argparse,json,re,shutil,statistics,tempfile,time
 from pathlib import Path
 from smoke import Guest,ROOT
@@ -29,13 +30,13 @@ def main():
                 while "Desktop scheduler: ready" not in (directory/"debug.log").read_text():
                     assert time.monotonic()<deadline;time.sleep(.01)
                 from folders_qemu import inspect_tree
-                names=sorted(k.split('/')[-1][:-4] for k in inspect_tree(image,2048)[0] if k.startswith('APPS/') and k.count('/')==1 and k.endswith(('.BIN','.ELF')))
+                names=sorted(k.split('/')[-1][:-4] for k in inspect_tree(image,2048)[0] if k.startswith('APPS/') and k.count('/') in (1,2) and k.endswith(('.BIN','.ELF')))
                 for name in ["NOTEPAD","COUNTER"]:
-                    click_at(40,11);click_at(40,30+4+names.index(name)*24+12);deadline=time.monotonic()+20
+                    click_at(*APPS_BUTTON);click_at(*app_card(names.index(name)));deadline=time.monotonic()+20
                     while (directory/"debug.log").read_text().count("Multiwindow: open")<(1 if name=="NOTEPAD" else 2):
                         assert time.monotonic()<deadline;time.sleep(.01)
-                click_at(110,11)
-                start_x,start_y=56,124
+                click_at(*task_button(0))
+                m=re.search(r"Multiwindow: open pid=\d+ .*pos=(\d+),(\d+)",(directory/"debug.log").read_text());start_x,start_y=int(m[1]),int(m[2])
             else:
                 guest.type("notepad drag.txt\n");deadline=time.monotonic()+20
                 while "nr=61" not in (directory/"debug.log").read_text():
@@ -65,9 +66,9 @@ def main():
                     band=memory(base+pointer_y*pitch,pitch*3)
                     pointer=any(rgb(band,c)==0 and rgb(band[2*pitch:],c+1)==0xffffff for c in range(pointer_x-20,pointer_x+50))
                     absent+=not pointer;visible_samples+=1
-                    bottom=memory(base+(start_y+443)*pitch,800*size)
-                    columns=[c for c in range(800) if rgb(bottom,c)==0x40]
-                    if columns==list(range(x+6,x+662)) and rgb(band,cursor)==0 and rgb(band[2*pitch:],cursor+1)==0xffffff:break
+                    bottom=memory(base+(start_y+(440 if args.desktop else 443))*pitch,800*size)
+                    columns=[c for c in range(800) if rgb(bottom,c)==(0x122333 if args.desktop else 0x40)]
+                    if columns==(list(range(x+3,x+659)) if args.desktop else list(range(x+6,x+662))) and rgb(band,cursor)==0 and rgb(band[2*pitch:],cursor+1)==0xffffff:break
                     assert time.monotonic()<deadline,"Window/cursor failed to catch up";time.sleep(.002)
                 samples.append((time.monotonic()-started)*1000)
             button(False);time.sleep(.1)

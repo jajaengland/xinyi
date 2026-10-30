@@ -6,8 +6,8 @@ pub struct Theme {
 }
 impl Theme {
     pub const DEFAULT: Self = Self {
-        desktop: 0x204a9c,
-        title: 0x153e8e,
+        desktop: 0x20364f,
+        title: 0x215c83,
     };
     pub fn valid(self) -> bool {
         self.desktop <= 0xffffff && self.title <= 0xffffff

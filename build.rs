@@ -29,7 +29,7 @@ fn main() {
         .arg("--output-dir").arg(&out_dir)
         .status().expect("Standard applications require Python 3 on PATH (or PYTHON)");
     assert!(status.success(), "Application build failed");
-    for path in ["programs", "sdk", "src/window_protocol.rs", "src/directory_protocol.rs", "tools/build_apps.py", "tools/build_program.py", "i686-unknown-none.json"] {
+    for path in ["programs", "sdk", "src/window_protocol.rs", "src/ui_font.rs", "src/text_layout.rs", "src/directory_protocol.rs", "tools/build_apps.py", "tools/build_program.py", "i686-unknown-none.json"] {
         println!("cargo:rerun-if-changed={path}");
     }
 

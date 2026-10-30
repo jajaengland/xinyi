@@ -20,6 +20,7 @@ pub struct State {
     pub minimizable: bool,
     pub buttons: u8,
     pub limits: Option<(i32, i32, i32, i32)>,
+    pub work_area: Rect,
     preview: Option<Rect>,
     capture: Option<Capture>,
     offset: (i32, i32),
@@ -47,6 +48,7 @@ impl State {
             minimizable: false,
             buttons,
             limits: None,
+            work_area:Rect{x:0,y:24,w:800,h:576},
             preview: None,
             capture: None,
             offset: (0, 0),
@@ -89,7 +91,7 @@ impl State {
         let r = &mut self.window.rect;
         if self.maximized.is_none() {
             r.x = r.x.clamp(0, (800 - r.w - 6).max(0));
-            r.y = r.y.clamp(24, (594 - r.h).max(24));
+            r.y = r.y.clamp(self.work_area.y, (self.work_area.y+self.work_area.h-6-r.h).max(self.work_area.y));
         }
         self.capture = None;
         self.preview = None;
@@ -122,6 +124,8 @@ impl State {
         // Reissue from the committed state if an earlier proposal was lost.
         // Repeated clicks cannot publish geometry before the app acknowledges it.
         let (a, b, w, h) = self.limits?;
+        let usable_height=((self.work_area.h-32)/16)*16;
+        if self.maximized.is_none() && (b>usable_height || a>self.work_area.w-8) {return None;}
         let (target, maximize, w, h) = if let Some((mut normal, _, _)) = self.maximized {
             let nw = (normal.w - 16).clamp(a, w);
             let nh = (normal.h - 38).clamp(b, h);
@@ -130,15 +134,10 @@ impl State {
             (normal, false, nw, nh)
         } else {
             (
-                Rect {
-                    x: 0,
-                    y: 24,
-                    w: 800,
-                    h: 576,
-                },
+                self.work_area,
                 true,
                 w.min(792),
-                h.min(544),
+                h.min(usable_height),
             )
         };
         self.placement = Some((target, maximize));
@@ -255,7 +254,7 @@ impl State {
                 if self.dragged && !self.is_maximized() && self.placement.is_none() {
                     let r = &mut self.window.rect;
                     r.x = (self.x - self.offset.0).clamp(32 - r.w, 768);
-                    r.y = (self.y - self.offset.1).clamp(24, 568);
+                    r.y = (self.y - self.offset.1).clamp(self.work_area.y,self.work_area.y+self.work_area.h-32);
                 }
             }
         }

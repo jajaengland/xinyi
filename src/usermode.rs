@@ -28,6 +28,7 @@ pub(crate) enum Outcome {
     },
 }
 struct RunState {
+    profile: crate::permissions::Profile,
     active: bool,
     outcome: Option<Outcome>,
     pid: u32,
@@ -38,6 +39,7 @@ struct RunState {
     argument_length: usize,
 }
 static mut RUN: RunState = RunState {
+    profile: crate::permissions::Profile::Isolated,
     active: false,
     outcome: None,
     pid: 0,
@@ -90,6 +92,9 @@ pub extern "C" fn xinyi_user_should_return() -> u32 {
         let state = &*core::ptr::addr_of!(RUN);
         (state.active && state.outcome.is_some()) as u32
     }
+}
+pub fn profile() -> crate::permissions::Profile {
+    unsafe { (*core::ptr::addr_of!(RUN)).profile }
 }
 pub fn getpid() -> u32 {
     unsafe {
@@ -250,6 +255,7 @@ pub fn execute(
         (*core::ptr::addr_of_mut!(RUN)).directory = space.directory();
         (*core::ptr::addr_of_mut!(RUN)).arguments = program.arguments;
         (*core::ptr::addr_of_mut!(RUN)).argument_length = program.argument_length;
+        (*core::ptr::addr_of_mut!(RUN)).profile = program.profile;
         enter_user_mode(
             program.layout.entry,
             paging::USER_STACK_TOP - 4,
@@ -298,6 +304,7 @@ pub fn execute(
         crate::interrupts::timer_ticks().wrapping_sub(started),
         restored_flags
     ));
+    crate::audio::close_owner(pid);
     crate::terminal::finish();
     match outcome {
         Outcome::Exit(code) => println!("User program exited with code {}.", code),
@@ -337,6 +344,7 @@ pub(crate) fn quantum(
         run.space = space;
         run.arguments = program.arguments;
         run.argument_length = program.argument_length;
+        run.profile = program.profile;
         enter_scheduled_user(cpu, space.directory());
     }
     gdt::set_kernel_stack(old_stack);
@@ -373,7 +381,7 @@ pub(crate) fn io_context<T>(
         core::arch::asm!("cli", options(nostack));
         assert!(!(*core::ptr::addr_of!(RUN)).active);
         core::ptr::addr_of_mut!(RUN).write(RunState {
-            active: true, outcome: None, pid, image_size: program.size,
+            active: true, outcome: None, pid, image_size: program.size, profile: program.profile,
             directory: space.directory(), space,
             arguments: program.arguments, argument_length: program.argument_length,
         });

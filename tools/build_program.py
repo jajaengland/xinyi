@@ -44,7 +44,7 @@ def executable_image(elf):
         offset=len(image);offset+=((p[2]&4095)-offset)%4096
         image.extend(bytes(offset-len(image)));data=elf[p[1]:p[1]+p[4]];p[1]=offset;p[7]=4096
         struct.pack_into('<8I',image,52+i*32,*p);image.extend(data)
-    if not loads or len(image)>65536:raise ValueError('ELF executable file exceeds the 64 KiB filesystem limit')
+    if not loads or len(image)>1024*1024:raise ValueError('ELF executable file exceeds the 1 MiB loader limit')
     return image
 
 def main():

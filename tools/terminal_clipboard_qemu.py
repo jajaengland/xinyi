@@ -1,4 +1,5 @@
 """Test graphical Terminal, cross-app clipboard/selection and private directories."""
+from desktop_controls import APPS_BUTTON,SHELL_BUTTON,app_card,task_button
 import argparse,json,re,shutil,subprocess,sys,tempfile,time
 from pathlib import Path
 from array import array
@@ -28,10 +29,10 @@ def main():
      dx=max(-80,min(80,x-pos[0]));dy=max(-80,min(80,y-pos[1]));g.call('input-send-event',{'events':[{'type':'rel','data':{'axis':'x','value':dx}},{'type':'rel','data':{'axis':'y','value':dy}}]});pos[0]+=dx;pos[1]+=dy;time.sleep(.025)
    def button(down):g.call('input-send-event',{'events':[{'type':'btn','data':{'button':'left','down':down}}]});time.sleep(.06)
    def click(x,y):move(x,y);button(True);button(False)
-   def task(slot):click(110+slot*148,11)
+   def task(slot):click(*task_button(slot))
    def launch(name):
-    names=sorted(k.split('/')[-1][:-4] for k in inspect_tree(image,2048)[0] if k.startswith('APPS/') and k.count('/')==1 and k.endswith(('.BIN','.ELF')));offset=len(log());click(40,11);click(40,46+names.index(name)*24)
-    until(lambda:re.search(r'Desktop: launch pid=(\d+) path=/APPS/'+name+r'\.BIN',log()[offset:]),'Launch '+name);pid=int(re.search(r'Desktop: launch pid=(\d+)',log()[offset:])[1]);until(lambda:f'Multiwindow: open pid={pid} ' in log()[offset:],'Window '+name);return pid
+    names=sorted(k.split('/')[-1][:-4] for k in inspect_tree(image,2048)[0] if k.startswith('APPS/') and k.count('/') in (1,2) and k.endswith(('.BIN','.ELF')));offset=len(log());click(*APPS_BUTTON);click(*app_card(names.index(name)))
+    until(lambda:re.search(r'Desktop: launch pid=(\d+) path=/APPS/(?:[A-Z0-9_]+/)?'+name+r'\.BIN',log()[offset:]),'Launch '+name);pid=int(re.search(r'Desktop: launch pid=(\d+)',log()[offset:])[1]);until(lambda:f'Multiwindow: open pid={pid} ' in log()[offset:],'Window '+name);return pid
    def window(pid):
     m=re.search(r'Multiwindow: open pid='+str(pid)+r' handle=\d+ surface=([0-9a-f]+) client=(\d+)x(\d+) pos=(\d+),(\d+)',log());return int(m[1],16),int(m[2]),int(m[3]),int(m[4])+8,int(m[5])+34
    def memory(address,length):
@@ -69,7 +70,7 @@ def main():
    # History recalls and re-executes the last command in the other terminal.
    task(2);g.key('up');g.key('ret');time.sleep(.2);assert file('ROOT.TXT')==b'root data';command(other,'clear');command(other,'echo final terminal','final terminal')
    g.call('screendump',{'filename':str(output/f'terminal-clipboard-{a.vga}.png'),'format':'png'})
-   g.key('ctrl-q');until(lambda:exited(other),'Close other terminal');task(1);g.key('ctrl-q');until(lambda:exited(terminal),'Close terminal');task(0);g.key('ctrl-q');until(lambda:exited(first),'Close first editor');click(768,11);g.wait_for('Desktop finished.');assert frames()==baseline,'Clipboard/terminal jobs leaked frames';g.command('pwd','xinyi:/>');g.command('cat source.txt','gamma alpha!')
+   g.key('ctrl-q');until(lambda:exited(other),'Close other terminal');task(1);g.key('ctrl-q');until(lambda:exited(terminal),'Close terminal');task(0);g.key('ctrl-q');until(lambda:exited(first),'Close first editor');click(*SHELL_BUTTON);g.wait_for('Desktop finished.');assert frames()==baseline,'Clipboard/terminal jobs leaked frames';g.command('pwd','xinyi:/>');g.command('cat source.txt','gamma alpha!')
    print(f'PASS Terminal/clipboard ({a.vga}, usb={a.usb}): validated ABI, mouse/Shift selection, cross-app copy/cut/paste/undo, source-close retention, shell commands/history, private cwd/inheritance, app launch, saved files and frame balance',flush=True)
   finally:
    g.call('screendump',{'filename':str(output/f'terminal-clipboard-last-{a.vga}.png'),'format':'png'});g.close();shutil.copyfile(directory/'debug.log',output/f'terminal-clipboard-{a.vga}-debug.log')
