@@ -79,3 +79,61 @@ fn task(pid:u32)->Task {Task{pid,name:*b"APP     ",length:3}}
 #[test] fn desktop_grid_fits_work_area_without_shortcut_overlap() {
  for i in 0..20 {let r=Shell::desktop_file(i);assert!(r.x>=132&&r.x+r.w<=548&&r.y+r.h<=544);for j in 0..i {let q=Shell::desktop_file(j);assert!(r.x>=q.x+q.w||q.x>=r.x+r.w||r.y>=q.y+q.h||q.y>=r.y+r.h);}}
 }
+
+#[test] fn rearranging_swaps_and_survives_directory_refresh() {
+ let mut s=Shell::new();let mut files=[desktop_shell::DesktopEntry::EMPTY;20];
+ files[0].name[0]=b'A';files[0].length=1;files[1].name[0]=b'B';files[1].length=1;
+ s.update_files(files,2);s.arrange(0,1);assert_eq!(&s.slots[..2],&[1,0]);
+ s.arrange(0,19);assert_eq!(&s.slots[..2],&[19,0]);s.update_files(files,2);assert_eq!(&s.slots[..2],&[19,0]);
+ files.swap(0,1);s.update_files(files,2);assert_eq!(&s.slots[..2],&[0,19]);
+ files[1]=desktop_shell::DesktopEntry::EMPTY;s.update_files(files,1);files[1].name[0]=b'C';files[1].length=1;s.update_files(files,2);assert_eq!(&s.slots[..2],&[0,1]);
+ assert_eq!(Shell::nearest_slot(-100,-100),0);assert_eq!(Shell::nearest_slot(799,599),19);
+}
+
+#[test] fn layout_roundtrip_rejects_corruption_without_changing_positions() {
+ let mut s=Shell::new();let mut files=[desktop_shell::DesktopEntry::EMPTY;20];files[0].name[0]=b'A';files[0].length=1;files[1].name[0]=b'B';files[1].length=1;s.update_files(files,2);s.arrange(0,19);
+ let mut data=[0;305];let n=s.encode_layout(&mut data);let mut fresh=Shell::new();fresh.update_files(files,2);assert!(fresh.apply_layout(&data[..n]));assert_eq!(&fresh.slots[..2],&[19,1]);
+ let before=fresh.slots;data[34]=19;assert!(!fresh.apply_layout(&data[..n]));assert_eq!(fresh.slots,before);assert!(!fresh.apply_layout(&data[..4]));
+}
+
+#[test] fn desktop_context_menu_clamps_captures_and_dismisses() {
+ let mut s=Shell::new();assert!(s.input(799,543,2,false).0);s.input(799,543,0,false);
+ let r=s.context_rect().unwrap();assert!(r.x+r.w<=800&&r.y+r.h<=544);assert_eq!(click(&mut s,r.x+20,r.y+40),Some(Action::OpenDesktop(21)));assert!(s.context.is_none());
+ s.input(700,300,2,false);s.input(700,300,0,false);assert_eq!(s.key(27),(true,None));assert!(s.context.is_none());
+ s.background=false;s.input(700,300,2,false);assert!(s.context.is_none());s.input(700,300,0,false);
+ s.background=true;s.input(700,300,2,false);s.input(700,300,0,false);assert!(s.input(500,100,1,false).0);assert!(s.context.is_none());assert!(s.input(500,100,0,false).1.is_none());
+}
+
+#[test] fn desktop_multi_selection_and_group_arrangement_remain_unique() {
+ let mut s=Shell::new();let mut files=[desktop_shell::DesktopEntry::EMPTY;20];for i in 0..4 {files[i].name[0]=b'A'+i as u8;files[i].length=1;}s.update_files(files,4);
+ s.modifiers=1<<17;assert!(click(&mut s,180,60).is_none());assert!(click(&mut s,180,164).is_none());assert_eq!(s.selection,3);
+ s.modifiers=0;s.arrange_group(0,6);assert_eq!(&s.slots[..4],&[6,7,2,3]);
+ s.arrange_group(0,19);assert_eq!(&s.slots[..2],&[18,19]);
+ s.slots=[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19];s.arrange_group(0,2);assert_eq!(&s.slots[..4],&[2,3,0,1]);
+ s.modifiers=1<<17;click(&mut s,180,268);assert_eq!(s.selection,2);
+ s.modifiers=1<<16;click(&mut s,180,60);assert_eq!(s.selection,13);
+ s.modifiers=0;click(&mut s,700,500);assert_eq!(s.selection,0);
+}
+
+#[test] fn desktop_keyboard_selection_is_focus_scoped_and_uses_grid() {
+ let mut s=Shell::new();let mut files=[desktop_shell::DesktopEntry::EMPTY;20];for i in 0..4 {files[i].name[0]=b'A'+i as u8;files[i].length=1;}s.update_files(files,4);
+ s.slots[..4].copy_from_slice(&[0,1,5,6]);assert!(s.key(0x104).0);assert_eq!(s.selection,1);s.key(0x103);assert_eq!(s.selection,4);s.key(0x101|(1<<16));assert_eq!(s.selection,12);assert_eq!(s.key(10),(true,None));s.key(0x104);assert_eq!(s.key(10),(true,Some(Action::OpenDesktop(0))));
+ s.key(65|(1<<17));assert_eq!(s.selection,15);s.key(27);assert_eq!(s.selection,0);
+ s.keyboard=false;assert_eq!(s.key(0x104),(false,None));assert_eq!(s.key(65|(1<<17)),(false,None));
+}
+
+#[test] fn desktop_clipboard_shortcuts_are_focus_scoped() {
+ let mut s=Shell::new();for (key,op) in [(b'c',0),(b'x',1),(b'v',2)] {assert_eq!(s.key(key as u32|(1<<17)),(true,Some(Action::FileAction(op))));}
+ s.keyboard=false;assert_eq!(s.key(b'c' as u32|(1<<17)),(false,None));
+}
+
+#[test] fn desktop_context_clipboard_rows_match_selection() {
+ let mut s=Shell::new();s.file_count=1;s.files[0].name[0]=b'A';s.files[0].length=1;
+ s.input(180,60,2,false);s.input(180,60,0,false);let r=s.context_rect().unwrap();assert_eq!(r.h,150);assert_eq!(click(&mut s,r.x+10,r.y+75),Some(Action::FileAction(0)));
+ s.input(700,500,2,false);s.input(700,500,0,false);let r=s.context_rect().unwrap();assert_eq!(r.h,90);assert_eq!(click(&mut s,r.x+10,r.y+75),Some(Action::FileAction(2)));
+}
+
+#[test]fn desktop_recycle_is_a_confirmation_request_and_focus_scoped(){
+ let mut s=Shell::new();assert_eq!(s.key(0x106),(true,Some(Action::FileAction(3))));s.keyboard=false;assert_eq!(s.key(0x106),(false,None));
+ s.file_count=1;s.files[0].name[0]=b'A';s.files[0].length=1;s.input(180,60,2,false);s.input(180,60,0,false);let r=s.context_rect().unwrap();assert_eq!(click(&mut s,r.x+10,r.y+135),Some(Action::FileAction(3)));
+}

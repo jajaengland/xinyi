@@ -26,11 +26,11 @@ def main():
         d=Path(tmp);image=d/'test.img';shutil.copyfile(a.disk,image);fixtures(image,a.package,d)
         helper=d/'helper';(helper/'apps').mkdir(parents=True)
         subprocess.run([sys.executable,str(ROOT/'tools/build_program.py'),str(ROOT/'programs/install_check/main.rs'),'--format','elf','--output',str(helper/'apps/instchk.elf')],check=True)
-        (helper/'applications.json').write_text(json.dumps([{'file':'INSTCHK.ELF'}]));seed_apps(image,helper)
+        (helper/'applications.json').write_text(json.dumps([{'file':'INSTCHK.ELF'}]));seed_apps(image,helper,'TOOLS')
         qemu=r'C:\Program Files\qemu\qemu-system-i386.exe';g=Guest(qemu,None,d,disk=image)
         try:
             def check(argument,profile=''):
-                g.command('run '+profile+'instchk '+argument,'App installation checks passed!');g.wait_for('User program exited with code 0.')
+                g.command('run '+profile+'/TOOLS/INSTCHK.ELF '+argument,'App installation checks passed!');g.wait_for('User program exited with code 0.')
             baseline=int(re.search(r'Free now: +(\d+)',g.command('frames','Free now:'))[1])
             check('restricted','--read-only ');check('restricted','--isolated ');check('api');check('stage');check('install')
             files,dirs=inspect_tree(image,2048)

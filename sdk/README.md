@@ -247,3 +247,9 @@ The first driver exposes output only: no capture, mixing, multiple simultaneous 
 `drag_drop::{register,begin,take,finish}` wraps syscall 103. Source registration and beginning a drag require Trusted access; receive-only operations are described below. Window events `DRAG_OVER`, `DROP` and `DRAG_END` carry client coordinates and delivery tokens. Only a physically captured registered source may begin a drag; only its chosen recipient may consume it. FileClipboard is the payload layout, but normal clipboard contents are independent.
 
 `drag_drop::register_open()` (operation 4) registers a whole-client file-open target. `drag_drop::open_file(event)` consumes/finishes a DROP and returns one regular file path, length and volume. These receive-only calls are available to ReadOnly/Media; starting file drags remains trusted-only.
+
+## Recycle helper
+
+`trash::recycle(absolute_path, folder, volume)` stages a bounded XTR1 record and moves the source into `/TRASH`. `trash::read(id, volume)` validates metadata; `trash::restore(id, volume)` refuses unfinished records and original-name collisions, then removes the empty record. Return 0 means success, positive 1 means restored with incomplete record cleanup; negative values are normal filesystem errors. These helpers need existing read/write permissions and retain the 64 KiB per-file transfer limit. They do not journal operations or automatically delete partial records. See `programs/trash_check` and `tools/trash_qemu.py`.
+
+`trash::purge(id, volume)` permanently deletes one completed record after a 32-node preflight. Callers must obtain explicit confirmation. It rejects unfinished/corrupt records, records a purging state before deleting data, and allows a marked purge to resume. Restore refuses marked purges. Limits/errors are returned before deletion when found during planning; later I/O failures can leave a partially deleted record.

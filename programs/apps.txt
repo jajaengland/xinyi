@@ -13,3 +13,4 @@ viewer|programs/viewer/main.rs|Read-only hex viewer for files up to 1 MiB
 bigdemo|programs/bigdemo/main.rs|Large ELF app with a 128 KiB palette asset|elf
 player|programs/player/main.rs|WAV and sampled audio player|elf
 fonts|programs/fonts/main.rs|Font metrics, wrapping and clipping demo|elf
+trash|programs/trash/main.rs|Restore files from the recycle bin

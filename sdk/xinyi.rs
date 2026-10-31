@@ -567,3 +567,5 @@ pub mod sounds {
         super::syscall(100, 2, percent, 0)
     }
 }
+
+#[path="trash.rs"]pub mod trash;

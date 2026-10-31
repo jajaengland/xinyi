@@ -239,7 +239,8 @@ impl Files {
             b"Copy selected. Open the destination, in any Files window, then Paste."
         };
     }
-    fn paste(&mut self) {
+    fn paste(&mut self) {self.paste_checked(0);}
+    fn paste_checked(&mut self,expected:u32) {
         self.drop_batch = false;
         self.destination_len = 0;
         let n = file_clipboard::get(&mut self.pending);
@@ -247,6 +248,7 @@ impl Files {
             self.status = error(n);
             return;
         }
+        if expected!=0&&self.pending.version!=expected {self.status=error(-116);return;}
         if self.pending.count == 0 {
             self.status = b"Copy or Move files first.";
             return;
@@ -340,6 +342,21 @@ impl Files {
         self.destination_len = 0;
         self.drop_row = None;
     }
+    fn receive_recycle(&mut self,e:window::Event) {
+        let mut payload=FileClip::new();payload.version=e.code;
+        let result=xinyi::drag_drop::take(&mut payload);xinyi::drag_drop::finish();
+        if result<0 {self.status=error(result);return;}
+        self.selection.clear();
+        if payload.volume!=self.volume||self.volume!=directory::volume() {self.status=error(-116);return;}
+        for i in 0..payload.count as usize {
+            let path=&payload.paths[i][..payload.lengths[i] as usize];
+            let Some(at)=path.iter().rposition(|b|*b==b'/') else{self.status=error(-22);self.selection.clear();return;};
+            let parent=if at==0 {&path[..1]}else{&path[..at]};let name=&path[at+1..];
+            if !parent.eq_ignore_ascii_case(&self.path[..self.length])||name.is_empty()||name.len()>12 {self.status=error(-22);self.selection.clear();return;}
+            self.selection.add(name,payload.flags[i]);
+        }
+        if self.selection.count>0 {self.mode=3;self.status=b"Confirm recycling this desktop selection. Y continues / N cancels.";xinyi::sounds::play(xinyi::sounds::Event::Warning);}
+    }
     fn receive_drop(&mut self, e: window::Event) {
         if self.mode != 0 {
             xinyi::drag_drop::finish();
@@ -403,11 +420,10 @@ impl Files {
     fn delete(&mut self) {
         let s = self.selection;
         for i in 0..s.count {
-            let n = directory::action_on(
-                &s.names[i][..s.lengths[i] as usize],
-                if s.flags[i] & 1 != 0 { 2 } else { 1 },
-                self.volume,
-            );
+            let mut path=[0;105];let extra=usize::from(self.length>1);let len=self.length+extra+s.lengths[i] as usize;
+            if len>105 {self.status=error(-22);return;}
+            path[..self.length].copy_from_slice(&self.path[..self.length]);if extra!=0 {path[self.length]=b'/';}path[self.length+extra..len].copy_from_slice(&s.names[i][..s.lengths[i] as usize]);
+            let n=xinyi::trash::recycle(&path[..len],s.flags[i]&1!=0,self.volume);
             if n < 0 {
                 self.status = error(n);
                 self.selection.clear();
@@ -415,7 +431,7 @@ impl Files {
                 return;
             }
         }
-        self.status = b"Deleted selected items.";
+        self.status = b"Moved to Recycle Bin. Open Recycle Bin from Apps to restore.";
         xinyi::sounds::play(xinyi::sounds::Event::Complete);
         self.selection.clear();
         self.refresh();
@@ -827,7 +843,7 @@ impl Files {
             b"Open",
             b"New",
             b"Folder",
-            b"Delete",
+            b"Recycle",
             b"Refresh",
             b"<",
             b">",
@@ -930,7 +946,7 @@ impl Files {
         let hint = match self.mode {
             1 => b"New file (8.3): " as &[u8],
             2 => b"New folder (8.3): ",
-            3 => b"Delete selected items? Y confirms / N cancels",
+            3 => b"Move selection to Recycle Bin? Y confirms / N cancels",
             4 => b"Rename to (8.3): ",
             5 => b"Paste as (8.3): ",
             6 => b"Install selected app folder? Y confirms / N cancels",
@@ -977,7 +993,7 @@ impl Files {
                 b"Copy",
                 b"Move",
                 b"Paste",
-                b"Delete",
+                b"Recycle",
                 b"Refresh",
                 b"Install app",
                 b"Remove app",
@@ -1053,8 +1069,16 @@ fn main() -> u32 {
     };
     window::resizable(w, 640, 400, 792, 544);
     let mut args=[0;128];let argc=xinyi::arguments(&mut args);
+    let mut paste_version=0;let mut recycle=false;
     if argc>0 {
-        let raw=&args[..argc as usize];let folder=raw.starts_with(b"--folder ");let path=if folder {&raw[9..]}else{raw};
+        let mut raw=&args[..argc as usize];
+        if raw.starts_with(b"--paste ") {
+            if raw.len()<20 {return 1;}
+            paste_version=match core::str::from_utf8(&raw[8..18]).ok().and_then(|s|s.parse::<u32>().ok()){Some(v) if v>0=>v,_=>return 1};
+            if raw[18]!=b' ' {return 1;}raw=&raw[19..];
+        }
+        if raw.starts_with(b"--recycle ") {recycle=true;raw=&raw[10..];}
+        let raw=raw;let folder=raw.starts_with(b"--folder ")||paste_version!=0||recycle;let path=if raw.starts_with(b"--folder ") {&raw[9..]}else{raw};
         if directory::cd(path)<0 {
             if folder {return 1;}
             if let Some(at)=path.iter().rposition(|b|*b==b'/') {
@@ -1066,6 +1090,7 @@ fn main() -> u32 {
     if app.rows() > 0 {
         app.select(0, false, false);
     }
+    if paste_version!=0 {app.paste_checked(paste_version);}
     app.paint(w);
     xinyi::drag_drop::register();
     let mut buttons = 0;
@@ -1081,7 +1106,7 @@ fn main() -> u32 {
         let repaint = match e.kind {
             window::DROP => {
                 buttons = 0;
-                app.receive_drop(e);
+                if recycle {recycle=false;app.receive_recycle(e);}else{app.receive_drop(e);}
                 true
             }
             window::DRAG_OVER => {

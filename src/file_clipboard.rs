@@ -25,30 +25,16 @@ pub fn syscall(cs: u32, op: u32, pointer: u32, size: u32) -> u32 {
     if !user_buffer::readable_range(pointer, 3468, image) {
         return (-14i32) as u32;
     }
-    let mut request = unsafe { core::ptr::read_unaligned(pointer as *const FileClipboard) };
-    if request.count > 32 || request.cut > 1 {
-        return (-22i32) as u32;
-    }
-    if op == 2 && request.version != unsafe { CLIP.version } {
-        return (-116i32) as u32;
-    }
-    if request.count > 0
-        && (!crate::diskfs::is_mounted() || request.volume != crate::diskfs::volume_epoch())
-    {
-        return (-116i32) as u32;
-    }
-    if let Err(e) = validate(&mut request) {
-        return e;
-    }
-    unsafe {
-        if NEXT > i32::MAX as u32 {
-            return (-24i32) as u32;
-        }
-        request.version = NEXT;
-        NEXT += 1;
-        CLIP = request;
-        request.version
-    }
+    let request = unsafe { core::ptr::read_unaligned(pointer as *const FileClipboard) };
+    if op == 2 && request.version != unsafe { CLIP.version } {return (-116i32) as u32;}
+    set(request)
+}
+pub(crate) fn snapshot()->FileClipboard {unsafe {CLIP}}
+pub(crate) fn set(mut request:FileClipboard)->u32 {
+    if request.count>32||request.cut>1{return (-22i32) as u32;}
+    if request.count>0&&(!crate::diskfs::is_mounted()||request.volume!=crate::diskfs::volume_epoch()){return (-116i32) as u32;}
+    if let Err(e)=validate(&mut request){return e;}
+    unsafe {if NEXT>i32::MAX as u32{return (-24i32) as u32;}request.version=NEXT;NEXT+=1;CLIP=request;request.version}
 }
 
 pub(crate) fn validate(request: &mut FileClipboard) -> Result<(), u32> {

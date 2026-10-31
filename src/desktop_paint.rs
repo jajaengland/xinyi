@@ -27,7 +27,7 @@ pub fn background(c:&mut Canvas<'_>,s:&Shell,color:u32) {
     for (x,y,w,h) in [(628,56,100,6),(722,56,6,96),(596,88,100,6),(690,88,6,96)] {c.rect(x,y,w,h,subtle);}
     let ink=crate::theme_model::ink(color);
     c.label(620,212,132,ink,b"Xinyi");
-    for i in 0..3 {
+    for i in [0,1,2,4] {
         let Some(index)=s.shortcut_app(i) else {continue;};let entry=&s.catalog.entries[index];let r=Shell::shortcut(i);
         if s.hit()==Some(Hit::Shortcut(i)) {c.rect(r.x,r.y,r.w,r.h,subtle);}
         icon(c,r.x+28,r.y+8,40,entry.icon as usize);
@@ -37,8 +37,8 @@ pub fn background(c:&mut Canvas<'_>,s:&Shell,color:u32) {
     let r=Shell::shortcut(3);if s.hit()==Some(Hit::DesktopFolder){c.rect(r.x,r.y,r.w,r.h,subtle);}
     icon(c,r.x+28,r.y+8,40,0);c.label(r.x+22,r.y+60,72,ink,b"Desktop");
     for i in 0..s.file_count {
-        let e=&s.files[i];let r=Shell::desktop_file(i);
-        if s.selected==Some(i)||s.hit()==Some(Hit::Desktop(i)) {c.rect(r.x,r.y,r.w,r.h,subtle);}
+        let e=&s.files[i];let r=s.file_rect(i);
+        if s.selection&(1<<i)!=0||s.hit()==Some(Hit::Desktop(i)) {c.rect(r.x,r.y,r.w,r.h,subtle);}
         icon(c,r.x+28,r.y+8,40,if e.folder {0}else{3});
         let label=&e.name[..e.length];let width=text::width(label,Font::Ui).min(92);
         c.label(r.x+(96-width as i32)/2,r.y+60,92,ink,label);
@@ -87,4 +87,13 @@ pub fn chrome(c:&mut Canvas<'_>,s:&Shell) {
             let b=Shell::volume_button(hit);c.rect(b.x,b.y,b.w,b.h,if s.hit()==Some(hit){0xc6dfef}else{0xe0eaf2});c.label(b.x+8,b.y+7,(b.w-12) as u32,INK,label);
         }
     }
+    if let Some(r)=s.context_rect() {
+        c.rect(r.x+3,r.y+3,r.w,r.h,0x102333);c.rect(r.x,r.y,r.w,r.h,0xe0eaf2);
+        for row in 0..(r.h/30) as usize {let y=r.y+row as i32*30;
+            if s.hit()==Some(Hit::DesktopMenu(row)){c.rect(r.x+1,y+1,r.w-2,28,0xc6dfef);}
+            let label:&[u8]=if row>=2 {if s.context.unwrap().2.is_none(){b"Paste"}else if row==2{b"Copy"}else if row==3{b"Cut"}else{b"Recycle"}}else if row==1 {b"Reset icon positions" as &[u8]}else if s.context.unwrap().2.is_some(){b"Open"}else{b"Open Desktop"};
+            c.label(r.x+10,y+7,156,INK,label);
+        }
+    }
+
 }

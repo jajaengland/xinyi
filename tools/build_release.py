@@ -63,6 +63,9 @@ def main():
     subprocess.run([sys.executable,str(ROOT/"tools/desktop_redesign_qemu.py"),"--disk",str(image),"--vga","cirrus","--usb"],cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/app_system_qemu.py"),"--disk",str(image),"--kernel",str(kernel)],cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/app_install_qemu.py"),"--disk",str(image),"--package",str(directory),"--kernel",str(kernel)],cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/desktop_recycle_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/trash_purge_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/trash_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/desktop_files_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/app_drop_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/drag_drop_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
@@ -106,7 +109,7 @@ def main():
         "Type multitask for two concurrent protected counter windows; Q quits the focused app, C crashes it, Escape exits the demo.\n"
         "Ctrl+Alt+K stops the focused app; multitask hog verifies timer preemption of a CPU-bound app.\n"
         "Up to four apps run together. Close apps before choosing Shell; Escape cancels menus or goes to the focused app.\n"
-        "Choose FILES in Apps to browse folders, open files, create folders and confirm deletions.\n"
+        "Choose FILES in Apps to browse folders, open files, create folders and confirm recycling.\n"
         "Drag lower-right grips to resize Files/Notepad; Terminal grows vertically and keeps 80 columns. Maximize/restore with the title-bar button or double-click; normal placement is remembered.\n"
         "shutdown flushes the disk and powers off or safely halts; in Desktop, save your work then shutdown confirm.\n"
         "Files: Ctrl/Shift-click selects multiple items; right-click opens actions. Copy/Move/Paste works across Files windows and transfers folders.\n"

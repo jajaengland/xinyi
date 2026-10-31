@@ -16,8 +16,17 @@
 
 Networking development is deferred; it remains off by default behind the developer command. Native USB input and broader laptop audio support are also deferred.
 
-- [ ] Desktop icon rearrangement, multiple selection and context menus.
-- [ ] Recycle bin and restore before permanent deletion.
+- [x] Desktop icon rearrangement with grid snapping and saved positions.
+- [x] Desktop context menus for opening items/the folder and resetting saved positions.
+- [x] Desktop Ctrl/Shift multiple selection, batch drag transfers and group rearrangement.
+- [x] Desktop arrow/Home/End navigation, Shift ranges, Ctrl+A, Space toggle and Enter opening.
+- [x] Shared desktop/Files Copy, Cut and Paste with collision prompts.
+- [x] Files Recycle action, Recycle Bin app and desktop shortcut.
+- [x] Desktop Delete/right-click Recycle with confirmed captured multi-selection.
+- [ ] Richer desktop batch actions.
+- [x] Initial Recycle Bin and confirmed restore with collision refusal.
+- [x] Confirmed permanent deletion of selected Recycle Bin records, bounded preflight and marked deletion retry.
+- [ ] Empty Bin and unfinished/corrupt recycle-record recovery UX.
 - [ ] Files icon/compact views, sorting and clearer transfer progress.
 - [ ] Safe app updates/recovery and launcher pagination beyond 16 apps.
 - [ ] Further app isolation and kernel hardening before downloadable apps.
