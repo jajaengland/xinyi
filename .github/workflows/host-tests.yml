@@ -1,0 +1,55 @@
+name: Host tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: host-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host-tests:
+    name: Host tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      RUSTUP_TOOLCHAIN: '1.99.0'
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.14.2'
+
+      - name: Install host Rust compiler
+        run: rustup toolchain install 1.99.0 --profile minimal
+
+      - name: Run all host suites
+        run: python tools/test_host.py --jobs 2 --timeout 120
+
+      - name: Preserve host-test logs and reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: host-tests-${{ matrix.os }}
+          path: |
+            target/host-tests/run-*/*-compile.log
+            target/host-tests/run-*/*-test.log
+            target/host-tests/run-*/summary.json
+          if-no-files-found: warn
+          retention-days: 7

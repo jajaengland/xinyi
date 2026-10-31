@@ -31,11 +31,17 @@ const VALID:&[u8]=b"XINYI-APP 1\nexec=TEST.ELF\ntitle=Example\ndescription=A tes
  }
 }
 #[test]fn all_bundled_manifests_are_valid_and_associations_are_unambiguous() {
- let mut extensions=std::collections::HashMap::new();let mut count=0;
+ let mut expected=std::collections::BTreeMap::new();
+ for line in std::fs::read_to_string("programs/apps.txt").unwrap().lines() {
+  let line=line.trim();if line.is_empty()||line.starts_with('#'){continue;}let fields:Vec<_>=line.split('|').collect();assert!((3..=5).contains(&fields.len()));
+  let format=fields.get(3).copied().unwrap_or("flat");let ext=fields.get(4).copied().unwrap_or(if format=="elf"{"elf"}else{"bin"});
+  let exec=format!("{}.{}",fields[0],ext).to_ascii_uppercase().into_bytes();assert!(expected.insert(format!("{}.app",fields[0]),exec).is_none());
+ }
+ assert!(!expected.is_empty());let mut extensions=std::collections::HashMap::new();
  for p in std::fs::read_dir("programs/manifests").unwrap() {
-  let p=p.unwrap().path();if p.extension().and_then(|x|x.to_str())!=Some("app"){continue;}let bytes=std::fs::read(&p).unwrap();let exec=bytes.split(|b|*b==b'\n').find_map(|l|l.strip_prefix(b"exec=")).unwrap();let exec=exec.strip_suffix(b"\r").unwrap_or(exec);
-  let m=Manifest::parse(&bytes,exec).unwrap();count+=1;
+  let p=p.unwrap().path();if p.extension().and_then(|x|x.to_str())!=Some("app"){continue;}let bytes=std::fs::read(&p).unwrap();let exec=expected.remove(p.file_name().unwrap().to_str().unwrap()).expect("Manifest without a bundled app");
+  let m=Manifest::parse(&bytes,&exec).unwrap();
   for ext in [b"txt" as &[u8],b"wav",b"dat",b"raw",b"hex",b"log",b"app",b""] {if m.handles(ext) {assert!(extensions.insert(ext.to_vec(),p.clone()).is_none(),"Duplicate type: {ext:?}");}}
  }
- assert_eq!(count,14);assert!(extensions.get(b"wav".as_slice()).unwrap().ends_with("player.app"));assert!(extensions.get(b"txt".as_slice()).unwrap().ends_with("notepad.app"));
+ assert!(expected.is_empty(),"Missing bundled manifests: {expected:?}");assert!(extensions.get(b"wav".as_slice()).unwrap().ends_with("player.app"));assert!(extensions.get(b"txt".as_slice()).unwrap().ends_with("notepad.app"));
 }

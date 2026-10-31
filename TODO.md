@@ -12,7 +12,22 @@
    - [ ] Updates, permissions review UI, launcher pagination and app package distribution.
    - [ ] App manager for install/update/remove, default-app selection and permission controls.
 
-## Next priorities
+## Foundation phase before broader feature work
+
+External review reinforces the need to consolidate the existing OS before expanding it further. Treat claims against the checked-out source: README, architecture/SDK documentation and substantial host/QEMU tests already exist; adding duplicate documentation or another independent emulator harness is not the priority. Existing tests are useful evidence, not a security audit or proof of correctness.
+
+1. [ ] Make the existing build/test pipeline reproducible: document/pin the supported toolchain and dependencies, add one discoverable host-test entry point, and separate quick checks from full disposable-image release checks.
+   - [x] One native host-test entry point (`tools/test_host.py`), suite selection, timeouts, failure exit codes and per-run logs/JSON results.
+2. [ ] Add GitHub Actions for host tests and a practical headless QEMU smoke subset, retaining failure logs and captures. Full release/hardware coverage remains separate; do not imply all tests run in CI.
+   - [x] Host-only Windows/Ubuntu workflow with pinned compiler/Python, commit-pinned actions, read-only permissions and failure artifacts. First GitHub execution remains pending until pushed.
+   - [ ] Headless kernel/QEMU smoke job after validating its toolchain and portable entry point.
+3. [ ] Review syscall/user-memory boundaries systematically: overflow and range checks, readable/writable mappings, ownership, capability checks, deferred-request lifetimes, IRQ/preemption assumptions and process cleanup. Record verified findings and add targeted regression tests for fixes.
+4. [ ] Inventory the existing syscall numbers, argument layouts, errors and capability rules in the SDK documentation; add ABI/layout and compatibility checks before promising a stable ABI.
+5. [ ] Extract shell dispatch/diagnostics from main.rs in small behaviour-preserving steps after a reliable test baseline. Avoid a broad kernel rewrite alongside security fixes.
+
+These are planned priorities, not completed audits or CI guarantees. Networking remains deferred and disabled by default. Broader desktop/application features below follow this consolidation phase unless explicitly reprioritized.
+
+## Desktop and application backlog
 
 Networking development is deferred; it remains off by default behind the developer command. Native USB input and broader laptop audio support are also deferred.
 

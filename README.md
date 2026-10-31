@@ -116,6 +116,16 @@ USB access uses BIOS services for the boot drive only. Unmount before removal. F
 
 ## Development and tests
 
+Run all native Rust test suites with Rust and Python on PATH (no NASM/QEMU needed):
+
+```text
+python tools/test_host.py
+python tools/test_host.py --list
+python tools/test_host.py --suite user_buffer permission elf program_image
+```
+
+The runner compiles for the host with `rustc --test`, runs two suites concurrently by default, and returns nonzero if any compile/test fails or times out. `--jobs` and `--timeout` adjust concurrency and the per-process timeout. Storage includes the folder, fsck, stream and stream-fault modules; selecting one of those names runs the complete storage suite. Each run gets a fresh `target/host-tests/run-*` directory containing compiler/test logs and `summary.json` with compiler version, selected suites, timings and results. These are host model/validation tests; they do not replace booted-kernel, QEMU or real-hardware checks. The host-test GitHub Actions workflow runs this same command on Windows 2022 and Ubuntu 24.04 for pushes to main, pull requests and manual dispatch. It pins host Rust 1.99.0 and Python 3.14.2, uses read-only repository permissions, and uploads compiler/test logs plus JSON reports for seven days even when tests fail. Action references are pinned to commit hashes. Kernel builds, QEMU integration and real-hardware checks are not part of this host-only workflow. A workflow definition does not establish a passing remote run; check the repository Actions page after pushing it.
+
 Automated storage tests use disposable QEMU images. Host storage tests also cut writes and flushes at each operation boundary, including write-through and write-back disk models. `python tools/fsck_qemu.py --disk PATH` verifies scans and recovery on private copies of a bootable image. `python tools/build_release.py` runs the release integration suite. Individual checks include:
 
 ```powershell
