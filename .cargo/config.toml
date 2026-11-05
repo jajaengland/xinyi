@@ -2,5 +2,8 @@
 [build]
 target = "i686-unknown-none.json"
 
+[unstable]
+json-target-spec = true
+
 [target.i686-unknown-none]
 linker = "rust-lld"
