@@ -3,6 +3,7 @@
 mod selection;
 mod browser;
 mod chrome;
+mod app_review;
 use browser::{Favorites, History, Sort, View};
 #[path = "../../sdk/xinyi.rs"]
 mod xinyi;
@@ -14,6 +15,8 @@ use xinyi::{
     window::{self, Draw},
 };
 struct Files {
+    review_buttons:[xinyi::widgets::Button;2],
+    review:Option<xinyi::app_manifest::Manifest>,
     toolbar_hot:Option<usize>,
     handle: u32,
     view: View,
@@ -606,6 +609,9 @@ impl Files {
         }
         let name = self.selection.names[0];
         let n = self.selection.lengths[0] as usize;
+        if operation!=1 && self.review.is_some() {
+            if app_review::load(&name[..n],self.volume).ok()!=self.review {self.review=None;self.status=b"App metadata changed. Review the package again before continuing.";return;}
+        }
         let result = directory::app_action(&name[..n], operation, self.volume);
         self.status = if result < 0 {
             error(result)
@@ -674,6 +680,13 @@ impl Files {
                 } else if n == 14 && !self.path[..self.length].eq_ignore_ascii_case(b"/APPS") {
                     self.status = b"Open /APPS and select an installed app to remove.";
                 } else {
+                    let id=&self.selection.names[0][..self.selection.lengths[0] as usize];
+                    self.review=match app_review::load(id,self.volume) {
+                        Ok(metadata)=>Some(metadata),
+                        Err(_) if n==14=>None,
+                        Err(code)=>{self.status=error(code);return false;},
+                    };
+                    for button in &mut self.review_buttons {button.reset(1);}
                     self.mode = if n == 13 { 6 } else if n == 19 {10} else { 7 };
                     xinyi::sounds::play(xinyi::sounds::Event::Warning);
                 }
@@ -921,6 +934,17 @@ impl Files {
         }
     }
     fn pointer(&mut self, event: window::Event, previous: u32) -> bool {
+        if matches!(self.mode,6|7|10) {
+            let mut clicked=None;let mut changed=false;
+            for (i,button) in self.review_buttons.iter_mut().enumerate() {
+                button.rect=xinyi::widgets::Rect::new(self.width as i32-if i==0 {232}else{128},312,88,24);
+                let before=(button.hover,button.pressed);
+                if button.pointer(event.x,event.y,event.buttons) {clicked=Some(i);}
+                changed|=before!=(button.hover,button.pressed);
+            }
+            if let Some(i)=clicked {self.key(if i==0 {b'y' as u32}else{b'n' as u32});return true;}
+            return changed;
+        }
         if self.column_drag.is_some() && event.buttons & 1 == 0 { self.column_drag = None; return true; }
         if event.buttons & 1 == 0 && previous & 1 != 0 {
             if let Some((_, _, row, mods, selected)) = self.press.take() {
@@ -1167,6 +1191,25 @@ impl Files {
                 )],
             );
         }
+        if matches!(self.mode,6|7|10) {
+            use xinyi::widgets::Rect;
+            xinyi::gui::dialog_flat(w,if self.mode==6 {b"Review app installation"}else if self.mode==10 {b"Review app update"}else {b"Remove installed app?"},Rect::new(24,96,self.width as i32-48,248));
+            if let Some(metadata)=self.review {
+                let mut version=[b'0';10];let mut value=metadata.version;for digit in version.iter_mut().rev() {*digit+= (value%10) as u8;value/=10;}
+                let start=version.iter().position(|&b|b!=b'0').unwrap_or(9);
+                let (profile,permissions)=app_review::profile(metadata.access);
+                window::draw(w,&[Draw::label(40,132,self.width-80,0x20384d,metadata.title()),Draw::text(40,156,0,b"Version:"),Draw::text(120,156,0,if metadata.version==0 {b"Legacy"}else{&version[start..]}),Draw::label(240,156,self.width-280,0x20384d,profile),Draw::label(40,180,self.width-80,0x536c80,metadata.description()),Draw::paragraph(40,232,self.width-80,40,0x20384d,permissions)]);
+            } else {window::draw(w,&[Draw::label(40,140,self.width-80,0,b"Metadata unavailable. Access profile cannot be displayed.")]);}
+            let id=&self.selection.names[0][..self.selection.lengths[0] as usize];let mut destination=[0;18];destination[..6].copy_from_slice(b"/APPS/");destination[6..6+id.len()].copy_from_slice(id);
+            window::draw(w,&[Draw::text(40,204,0,b"Target:"),Draw::text(104,204,0,&destination[..6+id.len()])]);
+            window::draw(w,&[Draw::paragraph(40,276,self.width-80,32,0x536c80,if self.mode==7 {b"Removes the app bundle from /APPS. Your documents remain."}else if self.mode==10 {b"Updates require a newer version and cannot add access. Profiles are not a complete sandbox."}else {b"Profiles limit OS services; they are not a complete security sandbox."}),Draw::label(40,320,self.width-296,0x20384d,b"Y: confirm  N / Escape: cancel")]);
+        }
+        if matches!(self.mode,6|7|10) {
+            for (i,button) in self.review_buttons.iter().enumerate() {
+                let mut button=*button;button.rect=xinyi::widgets::Rect::new(self.width as i32-if i==0 {232}else{128},312,88,24);
+                xinyi::gui::button_flat(w,&button,if i==1 {b"Cancel"}else if self.mode==6 {b"Install"}else if self.mode==10 {b"Update"}else{b"Remove"},i==0);
+            }
+        }
         if let Some((x, y)) = self.menu {
             window::draw(
                 w,
@@ -1258,7 +1301,7 @@ fn main() -> u32 {
     }
     let w = w as u32;
     let mut app = Files {
-        toolbar_hot:None,handle:w, view:View::Details, favorites:Favorites::new(), favorite_focus:0, transfer_total:0, transfer_done:0,
+        review_buttons:[xinyi::widgets::Button::new(xinyi::widgets::Rect::new(408,312,88,24)),xinyi::widgets::Button::new(xinyi::widgets::Rect::new(512,312,88,24))],review:None,toolbar_hot:None,handle:w, view:View::Details, favorites:Favorites::new(), favorite_focus:0, transfer_total:0, transfer_done:0,
         width: 640,
         height: 400,
         list: Listing::new(),

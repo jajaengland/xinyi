@@ -61,7 +61,7 @@ fn paint(w: u32, width: u32, height: u32, box_width: u32, buttons: &[Button; 2])
         ],
     ),14);
     for (b, label) in buttons.iter().zip([b"Toggle width" as &[u8], b"Close"]) {
-        gui::button(w, b, label, false);
+        gui::button_flat(w,b,label,false);
     }
     window::draw(
         w,

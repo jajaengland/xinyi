@@ -64,8 +64,29 @@ def main():
                 click(x+width-40,y+16);click(x+width-140,y+32+4+7*22+11)
             def remove_button():
                 click(x+width-40,y+16);click(x+width-140,y+32+4+8*22+11)
-            g.key('home');install_button();g.key('n');time.sleep(.2);assert 'APPS/SAMPLE' not in inspect_tree(image,2048)[1],'Cancelled installation wrote an app'
-            install_button();g.key('y');until(lambda:'APPS/SAMPLE/ASSETS/MORE/DATA.TXT' in inspect_tree(image,2048)[0],'Files install')
+            # Verify the review contains the parsed identity and profile before any write.
+            subprocess.run(['rustc','--edition=2021',str(ROOT/'tools/font_dump.rs'),'-o',str(d/'review-font.exe')],check=True)
+            font=subprocess.check_output([str(d/'review-font.exe')])
+            surface=int(re.search(r'Multiwindow: open pid='+str(files_pid)+r'.*surface=([0-9a-f]+)',log())[1],16)
+            def review_text(label,left,top,ink=0x20384d,mono=False):
+                expected=set();advance=0
+                for byte in label:
+                    rows=font[byte*16:byte*16+16];bits=0
+                    for row in rows:bits|=row
+                    first=0 if mono else next((i for i in range(8) if bits&(128>>i)),8)
+                    last=8 if mono else next((i+1 for i in reversed(range(8)) if bits&(128>>i)),first)
+                    for yy,row in enumerate(rows):
+                        for xx in range(first,last):
+                            if row&(128>>xx):expected.add((advance+xx-first,yy))
+                    advance+=8 if mono else (7 if 48<=byte<=57 else (last-first+1 if bits else 4))
+                path=d/'review-pixels.bin';g.call('human-monitor-command',{'command-line':f'pmemsave {surface+top*width*4:#x} {width*16*4} "{path.as_posix()}"'})
+                data=path.read_bytes();actual={(xx,yy) for yy in range(16) for xx in range(advance) if int.from_bytes(data[(yy*width+left+xx)*4:(yy*width+left+xx+1)*4],'little')==ink}
+                return actual==expected
+            g.key('home');install_button()
+            until(lambda:review_text(b'Sample',40,132) and review_text(b'Full access',240,156) and review_text(b'/APPS/SAMPLE',104,204,0,True),'Install review identity/profile/target')
+            g.call('screendump',{'filename':str(out/'app-review.png'),'format':'png'})
+            click(x+width-84,y+324);time.sleep(.2);assert 'APPS/SAMPLE' not in inspect_tree(image,2048)[1],'Cancelled installation wrote an app'
+            install_button();click(x+width-188,y+324);until(lambda:'APPS/SAMPLE/ASSETS/MORE/DATA.TXT' in inspect_tree(image,2048)[0],'Files install')
             assert inspect_tree(image,2048)[0]['APPS/SAMPLE/ASSETS/EMPTY.TXT']==b''
             sample=launch('sample')
             # Return Files to /APPS, select the installed folder and try removing a live app.

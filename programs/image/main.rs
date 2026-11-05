@@ -5,13 +5,13 @@ extern crate alloc;
 use alloc::vec::Vec;
 #[path="../../sdk/xinyi.rs"]mod xinyi;
 #[path="../../src/bmp.rs"]mod bmp;
-use xinyi::{window::{self,Draw},file_dialog,key,files};
+use xinyi::{window::{self,Draw},file_dialog,key,files,gui,widgets::{Button,Rect}};
 #[global_allocator]static HEAP:xinyi::heap::Allocator=xinyi::heap::Allocator::new();
 #[alloc_error_handler]fn oom(_:core::alloc::Layout)->! {xinyi::exit(12)}
 static SAMPLE:&[u8]=include_bytes!("../../assets/images/sample.bmp");
 struct Loading {volume:u32,read:usize,size:usize}
 struct Viewer {
-    data:Vec<u8>,tile:Vec<u32>,image:Option<bmp::Image>,loading:Option<Loading>,dialog:Option<file_dialog::Dialog>,
+    controls:[Button;4],data:Vec<u8>,tile:Vec<u32>,image:Option<bmp::Image>,loading:Option<Loading>,dialog:Option<file_dialog::Dialog>,
     name:[u8;105],len:usize,width:u32,height:u32,fit:bool,pan_x:u32,pan_y:u32,message:&'static[u8],
 }
 impl Viewer {
@@ -44,10 +44,11 @@ impl Viewer {
     }
     fn paint(&mut self,w:u32) {
         window::draw(w,&[Draw::rect(0,0,self.width,self.height,0x202b36),
-            Draw::rect(0,0,self.width,60,0xf0f3f6),Draw::text(8,40,0,&self.name[self.len.saturating_sub(76)..self.len])]);
-        for (x,label) in [(8,b"Open".as_slice()),(80,b"Fit"),(152,b"1:1"),(224,b"Sample")] {
-            window::draw(w,&[Draw::rect(x,8,64,26,0xc6d4df),Draw::text(x+8,13,0,label)]);
+            Draw::rect(0,0,self.width,60,0xf3f6f8),Draw::text(8,40,0,&self.name[self.len.saturating_sub(76)..self.len])]);
+        for (i,label) in [b"Open".as_slice(),b"Fit",b"1:1",b"Sample"].iter().enumerate() {
+            gui::button_flat(w,&self.controls[i],label,(i==1&&self.fit)||(i==2&&!self.fit));
         }
+        window::draw(w,&[Draw::rect(0,59,self.width,1,0xc6d3dc)]);
         if let Some(image)=self.image {
             let aw=self.width-16;let ah=self.height-96;
             let (rw,rh)=if self.fit {image.fit(aw,ah)}else{(image.width.min(aw),image.height.min(ah))};
@@ -75,12 +76,11 @@ impl Viewer {
 fn number(out:&mut[u8],mut value:u32) {for b in out.iter_mut().rev(){*b=b'0'+(value%10) as u8;value/=10;}}
 fn main()->u32 {
     let w=window::open(b"Image viewer");if w<0 {return 1;}let w=w as u32;
-    let mut viewer=Viewer{data:Vec::new(),tile:Vec::new(),image:None,loading:None,dialog:None,name:[0;105],len:0,width:640,height:400,fit:true,pan_x:0,pan_y:0,message:b""};
+    let mut viewer=Viewer{controls:[Button::new(Rect::new(8,8,64,26)),Button::new(Rect::new(80,8,64,26)),Button::new(Rect::new(152,8,64,26)),Button::new(Rect::new(224,8,64,26))],data:Vec::new(),tile:Vec::new(),image:None,loading:None,dialog:None,name:[0;105],len:0,width:640,height:400,fit:true,pan_x:0,pan_y:0,message:b""};
     if viewer.tile.try_reserve_exact(2048).is_err() {return 12;}
     viewer.sample();window::resizable(w,640,400,1280,1024);xinyi::drag_drop::register_open();
     let mut args=[0;128];let n=xinyi::arguments(&mut args);
     if n>0 && n<=105 {let mut path=[0;105];path[..n as usize].copy_from_slice(&args[..n as usize]);viewer.load(path,n as usize,xinyi::directory::volume());}
-    let mut buttons=0;
     loop {
         viewer.step();viewer.paint(w);
         let mut e=window::Event::default();let result=window::event(w,&mut e,viewer.loading.is_none());
@@ -109,11 +109,14 @@ fn main()->u32 {
                 key::UP=>viewer.pan_y=viewer.pan_y.saturating_sub(32),key::DOWN=>viewer.pan_y=viewer.pan_y.saturating_add(32),_=>(),
             }
         }
-        if e.kind==window::RESET {buttons=e.buttons;}
+        if e.kind==window::RESET {for b in &mut viewer.controls {b.reset(e.buttons);}}
         if e.kind==window::POINTER {
-            if e.buttons&1!=0 && buttons&1==0 && (8..34).contains(&e.y) {
-                match e.x {8..=71=>{viewer.loading=None;viewer.dialog=Some(file_dialog::Dialog::new(false));},80..=143=>viewer.fit=true,152..=215=>viewer.fit=false,224..=287=>viewer.sample(),_=>()}
-            }buttons=e.buttons;
+            let mut action=None;
+            for (i,b) in viewer.controls.iter_mut().enumerate() {if b.pointer(e.x,e.y,e.buttons) {action=Some(i);}}
+            match action {
+                Some(0)=>{viewer.loading=None;viewer.dialog=Some(file_dialog::Dialog::new(false));},
+                Some(1)=>{viewer.fit=true;viewer.pan_x=0;viewer.pan_y=0;},Some(2)=>viewer.fit=false,Some(3)=>viewer.sample(),_=>(),
+            }
         }
     }
 }

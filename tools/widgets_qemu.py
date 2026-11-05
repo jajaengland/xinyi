@@ -39,7 +39,7 @@ def main():
    g.command('mkdir docs','Created directory')
    g.command('touch docs/orig.txt','Created:');g.command('write docs/orig.txt original','Wrote')
    for i in range(12):g.command('touch f'+str(i)+'.txt','Created:')
-   baseline=frames();g.type('desktop\n');until(lambda:'Desktop scheduler: ready' in log(),'Desktop')
+   baseline=frames();desktop_start=len(log());g.type('desktop\n');until(lambda:'Desktop scheduler: ready' in log()[desktop_start:],'Desktop')
    pos=[400,300]
    def move(x,y):
     while pos!=[x,y]:
@@ -68,15 +68,20 @@ def main():
     move(x,y)
     for down in [True,False]:g.call('input-send-event',{'events':[{'type':'btn','data':{'button':'right','down':down}}]});time.sleep(.08)
 
-   note=launch('NOTEPAD');x,y=coords(note);g.type('first draft');g.key('ctrl-s');time.sleep(.2)
+   note=launch('NOTEPAD');x,y=coords(note);note_addr,note_width,_=window(note)
+   move(x+30,y+16);until(lambda:int.from_bytes(mem(note_addr+(6*note_width+10)*4,4),'little')==0x367c85,'Notepad hover feedback did not redraw')
+   move(x+500,y+350);until(lambda:int.from_bytes(mem(note_addr+(6*note_width+10)*4,4),'little')==0x2b5268,'Notepad hover feedback stayed stuck')
+   g.type('first draft');g.key('ctrl-s');time.sleep(.2)
+   move(x+392,y+336);until(lambda:int.from_bytes(mem(note_addr+(326*note_width+354)*4,4),'little')==0x367c85,'File dialog hover feedback missing')
+   move(x+580,y+365);until(lambda:int.from_bytes(mem(note_addr+(326*note_width+354)*4,4),'little')==0x2b5268,'File dialog hover stayed stuck')
    # Browse DOCS by double click, then save through the shared filename field/button.
-   click(x+100,y+132);click(x+100,y+132);time.sleep(.2);click(x+160,y+300);g.type('saved.txt');g.call('screendump',{'filename':str(out/'widgets-save-dialog.png'),'format':'png'});click(x+392,y+336)
+   click(x+100,y+148);click(x+100,y+148);time.sleep(.2);click(x+160,y+300);g.type('saved.txt');g.call('screendump',{'filename':str(out/'widgets-save-dialog.png'),'format':'png'});click(x+392,y+336)
    until(lambda:tree().get('DOCS/SAVED.TXT')==b'first draft','Browse and Save')
-   g.type('!');g.key('ctrl-shift-s');g.type('/docs/saved.txt\n');time.sleep(.2);click(x+310,y+234);assert tree()['DOCS/SAVED.TXT']==b'first draft','Overwrite Cancel changed disk'
-   g.key('ctrl-shift-s');g.type('/docs/saved.txt\n');time.sleep(.2);click(x+170,y+234);until(lambda:tree()['DOCS/SAVED.TXT']==b'first draft!','Overwrite Replace')
+   g.type('!');g.key('ctrl-shift-s');g.type('/docs/saved.txt\n');until(lambda:int.from_bytes(mem(note_addr+(132*note_width+104)*4,4),'little')==0x94aabb,'Overwrite confirmation not ready');move(x+310,y+234);until(lambda:int.from_bytes(mem(note_addr+(222*note_width+266)*4,4),'little')==0xdceef0,'Confirmation hover feedback missing');move(x+580,y+300);until(lambda:int.from_bytes(mem(note_addr+(222*note_width+266)*4,4),'little')==0xe6edf2,'Confirmation hover stayed stuck');click(x+310,y+234);assert tree()['DOCS/SAVED.TXT']==b'first draft','Overwrite Cancel changed disk'
+   g.key('ctrl-shift-s');g.type('/docs/saved.txt\n');until(lambda:int.from_bytes(mem(note_addr+(132*note_width+104)*4,4),'little')==0x94aabb,'Overwrite confirmation not ready');click(x+170,y+234);until(lambda:tree()['DOCS/SAVED.TXT']==b'first draft!','Overwrite Replace')
    # A fresh relative save starts in the original cwd: browsing must not cd the process.
    g.key('ctrl-shift-s');g.type('root.txt\n');until(lambda:tree().get('ROOT.TXT')==b'first draft!','File picker leaked cwd')
-   g.key('ctrl-o');time.sleep(.2);click(x+100,y+132);click(x+100,y+132);time.sleep(.2);click(x+100,y+116);click(x+392,y+336);time.sleep(.2)
+   g.key('ctrl-o');time.sleep(.2);click(x+100,y+148);click(x+100,y+148);time.sleep(.2);click(x+100,y+116);click(x+392,y+336);time.sleep(.2)
    g.key('ctrl-end');g.type('!');g.key('ctrl-s');until(lambda:tree()['DOCS/ORIG.TXT']==b'original!','Mouse Open file')
    # Text-field selection/paste and Escape cancel retain the current document.
    g.key('ctrl-shift-s');g.type('discard.txt');g.key('ctrl-a');g.type('cancel.txt');g.key('esc');g.key('ctrl-s');assert 'CANCEL.TXT' not in tree() and tree()['DOCS/ORIG.TXT']==b'original!'
@@ -85,6 +90,7 @@ def main():
    g.type('help\nhelp\nhelp\n');time.sleep(.5)
    def content():
     data=mem(addr,w*h*4);return b''.join(data[row*w*4:row*w*4+640*4] for row in range(400))
+   until(lambda:bytes.fromhex('4d382000') in mem(addr+640*4,w*16*4),'Terminal scrollbar arrow missing')
    before=content();click(x+648,y+8);until(lambda:content()!=before,'Scrollbar Up did not scroll')
    # Drag the thumb beyond both ends; capture must clamp and release cleanly.
    def thumb():
@@ -97,7 +103,7 @@ def main():
    start=len(log());g.type('run stream\n');time.sleep(.3);g.key('shift-pgup');time.sleep(.2);anchored=content();time.sleep(.4);assert content()==anchored,'Scrolled terminal moved while background output arrived'
    until(lambda:re.search(r'Scheduler: exit pid=\d+ code=0',log()[start:]),'Output fixture did not finish');g.type('echo live\n');time.sleep(.2)
    g.call('screendump',{'filename':str(out/'widgets-terminal.png'),'format':'png'});g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={term} code=0' in log(),'Terminal close')
-   settings=launch('SETTINGS');sx,sy=coords(settings);click(sx+120,sy+218);g.type('112233');g.key('ctrl-a');g.type('294f9c\n');click(sx+160,sy+264);until(lambda:tree().get('GUI.CFG')==b'294F9C 153E8E\n','Shared Settings field/Save');g.call('screendump',{'filename':str(out/'widgets-settings.png'),'format':'png'});click(sx+400,sy+264);until(lambda:f'Scheduler: exit pid={settings}' in log(),'Settings close')
+   settings=launch('SETTINGS');sx,sy=coords(settings);click(sx+120,sy+218);g.type('112233');g.key('ctrl-a');g.type('294f9c\n');click(sx+160,sy+356);until(lambda:tree().get('GUI.CFG')==b'294F9C 215C83\n','Shared Settings field/Save');g.call('screendump',{'filename':str(out/'widgets-settings.png'),'format':'png'});click(sx+400,sy+356);until(lambda:f'Scheduler: exit pid={settings}' in log(),'Settings close')
    click(*SHELL_BUTTON);g.wait_for('Desktop finished.');assert frames()==baseline,'Widget application frame leak'
    print('PASS GUI controls: file browsing/save/open/cancel/overwrite, private cwd, field selection, terminal scrollbar and 80 columns, Settings and frame balance',flush=True)
   finally:

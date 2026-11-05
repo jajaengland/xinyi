@@ -11,7 +11,7 @@ fn banner(window: u32, width: u32, text: &[u8]) {
     window::draw(
         window,
         &[
-            window::Draw::rect(0, 0, width - 16, 32, 0xc4c4c4),
+            window::Draw::rect(0, 0, width - 16, 32, 0xf3f6f8),
             window::Draw::text(8, 8, 0, text),
         ],
     );
@@ -195,7 +195,7 @@ fn main() -> u32 {
         bar.value = history.saturating_sub(scroll);
         let state = (bar.value, bar.max, bar.dragging());
         if painted != Some(state) {
-            gui::scrollbar(window, &bar);
+            gui::scrollbar_flat(window,&bar);
             window::present(window);
             painted = Some(state);
         }

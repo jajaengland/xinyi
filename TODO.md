@@ -10,8 +10,10 @@
    - [x] Filesystem manifests, metadata-driven launcher, restrictive loader profiles, TXT/WAV/data associations and bundle-preserving OS installation.
    - [x] Per-app folders and confirmed Files installation/removal, staged publication, asset copying and running-app refusal.
    - [x] Versioned staged updates, explicit rollback/finalize, and a 64-app paged/searchable launcher.
-   - [ ] Permissions review UI and app package distribution.
-   - [ ] App manager for install/update/remove, default-app selection and permission controls.
+   - [x] Files install/update/removal review: identity, version, target, access explanation, captured confirm/cancel and metadata-change refusal.
+   - [ ] App package distribution and further isolation review.
+   - [x] Initial Applications manager: installed-bundle list, versions/access details, paging, launch, folder inspection and confirmed removal.
+   - [ ] Manager install/update workflows, default-app selection and permission controls.
 
 ## Foundation phase before broader feature work
 
@@ -117,5 +119,12 @@ Keep generated artifacts out of Git. Update the relevant docs and run checks app
    - [x] First shell styling pass: adaptive wallpaper, launcher cards, task icons/active indicators and coordinated panel/window colours.
    - [x] Files: simplified primary toolbar, navigation/address row, More menu, matching selection/popup colours and separate page controls.
    - [x] Settings: grouped appearance/sound panels, reusable flat buttons, highlighted Save, volume meter and hover feedback.
-   - [ ] Apply shared controls and spacing to editor controls and standard app dialogs.
+   - [x] Notepad toolbar/confirmations and shared Open/Save dialogs use flat controls, focused-button outlines and coordinated panels.
+   - [x] Player and Image Viewer: shared flat controls, coordinated media panels and active Fit/1:1 mode; Image buttons use captured release/cancel behaviour.
+   - [x] Terminal flat scrollbar, Hex Viewer header/status panels and distinct Recycle Bin action buttons.
+   - [x] Core app consistency pass: flat editor/dialog scrollbars, Fonts controls and immediate toolbar/dialog hover repaint.
+   - [ ] Remaining legacy/demo controls and future keyboard-navigation polish.
 3. [ ] Extend the application system with richer bundles and shared app UI components.
+
+- [x] Initial storage performance pass: larger verified BIOS read cache, cheaper bounded cached-read checkpoints and byte-verified desktop benchmark.
+- [ ] Storage follow-up: multi-sector transfers and measured allocation/metadata optimisations while preserving recovery guarantees.

@@ -34,7 +34,7 @@ impl BlockDevice for BiosDisk {
     fn read_block(&self,block:u32,buffer:&mut [u8])->bool {
         if buffer.len()<512||block>=self.block_count() {return false;}
         let cached=unsafe {(&mut *core::ptr::addr_of_mut!(CACHE)).read(block,buffer)};
-        if cached {crate::disk_io::checkpoint();return true;}
+        if cached {crate::disk_io::cached_checkpoint();return true;}
         if !self.transfer(block,false) {invalidate_cache();return false;}
         unsafe {core::ptr::copy_nonoverlapping(0x10000 as *const u8,buffer.as_mut_ptr(),512);}
         unsafe {(&mut *core::ptr::addr_of_mut!(CACHE)).store(block,buffer);}

@@ -267,3 +267,9 @@ Desktop resolution is selectable up to 1280x1024. The window protocol bounds do 
 UI scaling is transparent to apps: window sizes, draw coordinates, font metrics, pixel tiles, pointer events and resize limits are **logical pixels**. At 125%/150%, the compositor enlarges the complete desktop and maps physical mouse motion back into logical coordinates. Apps must not multiply coordinates or font metrics by the desktop scale. The unchanged text ABI supports printable ASCII bitmap faces; vector/Unicode fonts are not implemented.
 
 `gui::button_flat` paints the refreshed flat button style using the existing `widgets::Button` interaction model; its primary flag highlights the main action. `gui::outline` provides matching field/panel borders. Existing beveled controls remain available. Settings adopts the flat style and repaints on hover and reset.
+
+`gui::dialog_flat` paints a themed flat modal frame; `gui::button_flat_focus` adds a visible keyboard focus outline independently of the primary action. Shared Open/Save dialogs use these helpers without changing selection, filename editing or confirmation behaviour.
+
+`gui::scrollbar_flat` uses the same `widgets::Scrollbar` geometry and capture model as the beveled painter. Terminal adopts it without changing its text grid, clipboard or scrollback handling.
+
+File dialogs expose `pointer_feedback()` for hosts that redraw on demand. Compare it before/after forwarding pointer events to repaint hover/pressed changes without requiring a click.

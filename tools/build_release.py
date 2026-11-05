@@ -65,6 +65,7 @@ def main():
     subprocess.run([sys.executable,str(ROOT/"tools/desktop_redesign_qemu.py"),"--disk",str(image),"--vga","cirrus","--usb"],cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/app_system_qemu.py"),"--disk",str(image),"--kernel",str(kernel)],cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/app_install_qemu.py"),"--disk",str(image),"--package",str(directory),"--kernel",str(kernel)],cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/app_manager_qemu.py"),"--disk",str(image),"--package",str(directory)],cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/app_updates_qemu.py"),"--disk",str(image),"--package",str(directory)],cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/desktop_recycle_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/trash_purge_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)

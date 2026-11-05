@@ -53,6 +53,10 @@ App titles, descriptions, icon choices and restrictive access profiles come from
 
 Use the maximize/restore title-bar button or double-click the title bar in Files, Notepad and Terminal. Maximized frames fill the work area above the taskbar, respect app layout limits and restore their previous size/position. Minimize and taskbar restore preserve maximized state.
 
+Open **Applications** from Apps (search `appmgr`) to inspect up to 64 installed bundles, their versions and access profiles. Launch opens the selected app; Open folder shows its bundle in Files. Remove requires confirmation and refuses running apps or the manager itself. Installation and updates remain in Files for now. Arrow/Home/End and Page Up/Down navigate; Enter launches, Delete reviews removal and F5 refreshes.
+
+Before installing, updating or removing an app in Files, a review shows its manifest title, version, destination and access profile. Install/update metadata is reread before confirmation; changed metadata requires a fresh review. The kernel independently validates the bundle and enforces version/access restrictions. Removal can proceed when metadata is missing, so broken bundles remain removable. These profiles limit OS services and are not a complete security sandbox.
+
 Files has a primary toolbar, Back/Forward/Places navigation and a separate address field. Use More (or right-click) for Rename, Copy, Move, Paste, Recycle, Properties and app install/remove/update. Previous/Next below the list and PgUp/PgDn browse pages. Disabled navigation controls are dimmed.
 
 Drag the lower-right grip to resize Files or Notepad; Notepad reflows text and Files shows more rows. Terminal expands its background and right-edge scrollbar horizontally and grows vertically to display up to 32 rows when maximised, while preserving the 80-column text-program layout. Apps that do not opt in remain fixed-size.

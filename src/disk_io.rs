@@ -144,14 +144,18 @@ extern "C" fn entry() -> ! {
     loop { unsafe { xinyi_io_switch(core::ptr::addr_of_mut!(WORKER_SP), HOST_SP); } }
 }
 
-pub fn checkpoint() {
+// Keep the existing eight-physical-block quantum. Cache hits cost much less
+// than firmware calls and must not each consume a physical-block slot.
+pub fn checkpoint() {checkpoint_cost(16);}
+pub fn cached_checkpoint() {checkpoint_cost(1);}
+fn checkpoint_cost(cost:u32) {
     if !unsafe { EXECUTING } { return; }
     let flags: u32;
     unsafe {
         asm!("pushfd", "pop {0}", "cli", out(reg) flags);
         BLOCKS = BLOCKS.saturating_add(1);
-        SLICE += 1;
-        if SLICE >= 8 {
+        SLICE += cost;
+        if SLICE >= 128 {
             EXECUTING = false;
             xinyi_io_switch(core::ptr::addr_of_mut!(WORKER_SP), HOST_SP);
             EXECUTING = true;

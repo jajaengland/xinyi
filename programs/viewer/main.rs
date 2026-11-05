@@ -54,12 +54,12 @@ fn main() -> u32 {
                 }
             }
         }
-        window::draw(w, &[Draw::rect(0, 0, 640, 400, 0xffffff)]);
-        window::row(w, 8, 8, 0xffffff, 0, &path[..len.min(78)]);
+        window::draw(w,&[Draw::rect(0,0,640,400,0xffffff),Draw::rect(0,0,640,56,0xf3f6f8),Draw::rect(0,55,640,1,0xc6d3dc),Draw::rect(0,360,640,40,0xf3f6f8),Draw::rect(0,360,640,1,0xc6d3dc)]);
+        window::row(w, 8, 8, 0xf3f6f8, 0, &path[..len.min(78)]);
         let mut status = *b"Size 00000000h bytes     Offset 00000000h";
         hex(size, &mut status[5..13]);
         hex(offset, &mut status[32..40]);
-        window::row(w, 8, 32, 0xffffff, 0, &status);
+        window::row(w, 8, 32, 0xf3f6f8, 0, &status);
         window::row(
             w,
             8,
@@ -83,7 +83,7 @@ fn main() -> u32 {
             }
             window::row(w, 8, 88 + row as u32 * 16, 0xffffff, 0, &line);
         }
-        window::row(w, 8, 376, 0xffffff, 0, message);
+        window::row(w, 8, 376, 0xf3f6f8, 0, message);
         if let Some(d) = dialog.as_ref() {
             d.paint(w);
         }

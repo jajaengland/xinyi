@@ -180,6 +180,7 @@ impl Dialog {
             volume: self.volume,
         }
     }
+    pub fn pointer_feedback(&self)->u32 {self.buttons.iter().fold(0,|state,b|(state<<2)|u32::from(b.hover)|(u32::from(b.pressed&&b.hover)<<1))}
     pub fn reset(&mut self, buttons: u32) {
         self.mouse = buttons;
         self.bar.reset(buttons);
@@ -312,12 +313,12 @@ impl Dialog {
         Result::Pending
     }
     pub fn paint(&self, w: u32) {
-        gui::dialog(
+        gui::dialog_flat(
             w,
             if self.save { b"Save as" } else { b"Open file" },
             Rect::new(48, 40, 544, 316),
         );
-        gui::button(w, &self.buttons[0], b"Up", self.focus == 4);
+        gui::button_flat_focus(w,&self.buttons[0],b"Up",false,self.focus==4);
         let start = self.len.saturating_sub(54);
         window::draw(
             w,
@@ -353,7 +354,7 @@ impl Dialog {
                 ],
             );
         }
-        gui::scrollbar(w, &self.bar);
+        gui::scrollbar_flat(w,&self.bar);
         window::draw(
             w,
             &[
@@ -362,12 +363,13 @@ impl Dialog {
             ],
         );
         gui::text_input(w, FIELD, &self.input, self.focus == 0);
-        gui::button(
+        gui::outline(w,FIELD,if self.focus==0 {0x367c85}else {0xc6d3dc});
+        gui::button_flat_focus(
             w,
             &self.buttons[1],
             if self.save { b"Save" } else { b"Open" },
-            self.focus == 2,
+            true,self.focus == 2,
         );
-        gui::button(w, &self.buttons[2], b"Cancel", self.focus == 3);
+        gui::button_flat_focus(w,&self.buttons[2],b"Cancel",false,self.focus==3);
     }
 }

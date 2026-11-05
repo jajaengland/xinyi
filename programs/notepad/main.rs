@@ -524,11 +524,16 @@ impl Editor {
         if matches!(self.mode, Mode::Name(_)) {
             let redraw = (event.buttons | self.mouse_buttons) & 1 != 0;
             self.mouse_buttons = event.buttons;
-            return (self.dialog_event(event), redraw);
+            let before=self.dialog.as_ref().map_or(0,|d|d.pointer_feedback());
+            let quit=self.dialog_event(event);
+            let after=self.dialog.as_ref().map_or(0,|d|d.pointer_feedback());
+            return (quit,redraw||before!=after);
         }
         if matches!(self.mode, Mode::Confirm(_) | Mode::Overwrite) {
             let redraw = (event.buttons | self.mouse_buttons) & 1 != 0;
             self.mouse_buttons = event.buttons;
+            let feedback=|buttons:&[Button;3]|buttons.iter().fold(0u32,|n,b|(n<<2)|u32::from(b.hover)|(u32::from(b.pressed&&b.hover)<<1));
+            let before=feedback(&self.modal_buttons);
             let overwrite = matches!(self.mode, Mode::Overwrite);
             let mut action = None;
             for (i, b) in self.modal_buttons.iter_mut().enumerate() {
@@ -547,7 +552,7 @@ impl Editor {
                 };
                 return (self.event(code as u32), true);
             }
-            return (false, redraw);
+            return (false,redraw||before!=feedback(&self.modal_buttons));
         }
 
         self.bar.range(
@@ -637,7 +642,7 @@ impl Editor {
         }
         (
             false,
-            redraw || (self.capture.is_some() && hit != old_hover),
+            redraw || hit != old_hover,
         )
     }
     fn draw(&mut self, handle: u32) -> bool {
@@ -658,7 +663,7 @@ impl Editor {
         if self.follow && row >= self.top + self.rows() {
             self.top = row + 1 - self.rows();
         }
-        if window::draw(handle, &[Draw::rect(0, 0, self.width, 32, 0xc4c4c4)]) < 0 {
+        if window::draw(handle, &[Draw::rect(0, 0, self.width, 32, 0xf3f6f8)]) < 0 {
             return false;
         }
         for (i, (x, w, label)) in [
@@ -674,7 +679,7 @@ impl Editor {
             let mut button = Button::new(Rect::new(*x as i32, 4, *w as i32, 24));
             button.pressed = self.capture == Some(i);
             button.hover = self.hover == Some(i);
-            gui::button(handle, &button, label, false);
+            gui::button_flat(handle,&button,label,i==0);
         }
         let mut name = [b' '; 26];
         name[0] = if self.doc.dirty() { b'*' } else { b' ' };
@@ -759,11 +764,11 @@ impl Editor {
             self.rows() as u32,
         );
         self.bar.value = self.top as u32;
-        gui::scrollbar(handle, &self.bar);
+        gui::scrollbar_flat(handle,&self.bar);
         if let Some(d) = self.dialog.as_ref() {
             d.paint(handle);
         } else if matches!(self.mode, Mode::Confirm(_) | Mode::Overwrite) {
-            gui::dialog(
+            gui::dialog_flat(
                 handle,
                 if matches!(self.mode, Mode::Overwrite) {
                     b"Replace file?"
@@ -792,7 +797,7 @@ impl Editor {
             };
             for (i, button) in self.modal_buttons.iter().enumerate() {
                 if !matches!(self.mode, Mode::Overwrite) || i < 2 {
-                    gui::button(handle, button, labels[i], false);
+                    gui::button_flat(handle,button,labels[i],i==0);
                 }
             }
         } else if let Some(caret_row) = caret {

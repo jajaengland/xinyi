@@ -4,12 +4,13 @@ struct Entry { valid: bool, block: u32, age: u8, data: [u8; 512] }
 impl Entry {
     const EMPTY: Self = Self { valid: false, block: 0, age: 0, data: [0; 512] };
 }
-pub struct Cache { entries: [Entry; 4] }
+pub const CAPACITY:usize=32;
+pub struct Cache { entries: [Entry; CAPACITY] }
 impl Cache {
-    pub const fn new() -> Self { Self { entries: [Entry::EMPTY; 4] } }
-    pub fn clear(&mut self) { self.entries = [Entry::EMPTY; 4]; }
+    pub const fn new() -> Self { Self { entries: [Entry::EMPTY; CAPACITY] } }
+    pub fn clear(&mut self) { self.entries = [Entry::EMPTY; CAPACITY]; }
     fn touch(&mut self, index: usize) {
-        let age = if self.entries[index].valid { self.entries[index].age } else { 4 };
+        let age = if self.entries[index].valid { self.entries[index].age } else { CAPACITY as u8 };
         for (i, entry) in self.entries.iter_mut().enumerate() {
             if i != index && entry.valid && entry.age < age { entry.age += 1; }
         }

@@ -28,7 +28,7 @@ def main():
             def frames():return int(re.search(r'Free now: +(\d+)',g.command('frames','Free now:'))[1])
             def memory(address,n):
                 f=d/'memory.bin';g.call('human-monitor-command',{'command-line':f'pmemsave {address:#x} {n} "{f.as_posix()}"'});return f.read_bytes()
-            baseline=frames();g.type('desktop\n');until(lambda:'Desktop scheduler: ready' in log(),'desktop')
+            baseline=frames();desktop_start=len(log());g.type('desktop\n');until(lambda:'Desktop scheduler: ready' in log()[desktop_start:],'desktop')
             files,_=inspect_tree(image,2048);names=sorted(k.split('/')[-1][:-4] for k in files if k.startswith('APPS/') and k.endswith(('.BIN','.ELF')))
             def menu(name):
                 marker=len(log());g.key('ctrl-esc');g.key('home')
@@ -50,7 +50,8 @@ def main():
                 while position!=[x,y]:
                     dx=max(-80,min(80,x-position[0]));dy=max(-80,min(80,y-position[1]));g.call('input-send-event',{'events':[{'type':'rel','data':{'axis':'x','value':dx}},{'type':'rel','data':{'axis':'y','value':dy}}]});position[0]+=dx;position[1]+=dy;time.sleep(.02)
                 for down in [True,False]:g.call('input-send-event',{'events':[{'type':'btn','data':{'button':'left','down':down}}]});time.sleep(.06)
-            def focus_terminal():click(300,11)
+            def focus_terminal():
+                position=re.search(r'Multiwindow: open pid='+str(terminal)+r' .*pos=(\d+),(\d+)',log());click(int(position[1])+100,int(position[2])+15)
             block=g.call('query-block')[0]['device']
             def throttle(rate):g.call('block_set_io_throttle',{'device':block,'bps':0,'bps_rd':rate,'bps_wr':0,'iops':0,'iops_rd':0,'iops_wr':0})
             throttle(262144)

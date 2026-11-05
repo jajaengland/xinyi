@@ -23,9 +23,9 @@ def main():
     with tempfile.TemporaryDirectory(prefix='fsck-',dir=ROOT/'target/smoke') as tmp:
         directory=Path(tmp);image=directory/'system.img'
         pristine=a.disk.read_bytes();fat,spf,root=layout(pristine)
-        extra=[]
+        extra=['-vga','none'] # Keep desktop startup writes outside this read-only audit.
         if a.usb:
-            extra=['-drive',f'if=none,id=stick,file={image.as_posix()},format=raw',
+            extra+=['-drive',f'if=none,id=stick,file={image.as_posix()},format=raw',
                    '-device','piix3-usb-uhci,id=uhci',
                    '-device','usb-storage,bus=uhci.0,drive=stick,bootindex=1']
         for native in ([False] if a.usb else [False,True]):

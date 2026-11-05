@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 #[path="../../sdk/xinyi.rs"]mod xinyi;
-use xinyi::{window::{self,Draw},directory,trash};
+use xinyi::{window::{self,Draw},directory,trash,gui,widgets::{Button,Rect}};
 struct Bin {ids:[usize;16],records:[Option<trash::model::Record>;16],count:usize,offset:u16,total:u32,selected:usize,volume:u32,message:&'static[u8],confirm:u8}
 impl Bin {
  fn refresh(&mut self){self.count=0;self.confirm=0;self.volume=directory::volume();let mut list=directory::Listing::new();let r=directory::list(b"/TRASH",self.offset,&mut list);if r == -2 {self.total=0;self.message=b"Recycle Bin is empty.";return;}if r<0 {self.message=b"Cannot read Recycle Bin.";return;}self.total=list.total;
@@ -11,8 +11,12 @@ impl Bin {
  }
  fn restore(&mut self){if self.count==0{return;}let r=trash::restore(self.ids[self.selected],self.volume);self.refresh();self.message=match r {0=>b"Restored to its original folder.",1=>b"Restored; leftover record needs manual cleanup.",-17=>b"Original name exists. Move or rename that item first; nothing overwritten.",-2=>b"Original parent or recycled data is missing. Record preserved.",-16=>b"Unfinished recycle operation; preserve this record for recovery.",-116=>b"Drive changed. Refresh before restoring.",_=>b"Restore failed; recycled data has been preserved."};}
  fn purge(&mut self){if self.count==0{return;}let r=trash::purge(self.ids[self.selected],self.volume);self.refresh();self.message=match r {0=>b"Selected item permanently deleted.",-27=>b"Folder exceeds the 32-entry deletion limit. Operation refused.",-16=>b"Unfinished recycle records are protected; preserve for recovery.",-116=>b"Drive changed. Refresh before deleting.",_=>b"Delete failed; record preserved. A marked purge can be retried."};}
- fn paint(&self,w:u32){window::draw(w,&[Draw::rect(0,0,640,400,0xf1f5f8),Draw::label(12,12,616,0,b"Recycle Bin - restore to original location"),Draw::rect(8,42,144,28,0xd0e3f0),Draw::label(18,48,124,0,b"Restore selected"),Draw::rect(160,42,144,28,0xf0d4d0),Draw::label(170,48,124,0,b"Delete forever"),Draw::rect(312,42,88,28,0xd0e3f0),Draw::label(320,48,76,0,b"Refresh"),Draw::label(410,48,222,0,b"Prev   Next   Close"),Draw::label(12,352,616,0,self.message),Draw::label(12,376,616,0x536c80,b"Enter: restore | Delete: forever | F5: refresh | Esc: close")]);
-  for i in 0..self.count {let y=84+i as u32*16;window::draw(w,&[Draw::rect(8,y,624,16,if i==self.selected {0xc4def0}else{0xffffff})]);let label=match &self.records[i] {Some(r)=>&r.path[..r.len],None=>b"Damaged record - preserved for manual recovery"};window::row(w,12,y as u32,if i==self.selected{0xc4def0}else{0xffffff},0,&label[..label.len().min(76)]);}
+ fn paint(&self,w:u32){window::draw(w,&[Draw::rect(0,0,640,400,0xf3f6f8),Draw::rect(0,0,640,32,0x203e52),Draw::label(12,8,616,0xffffff,b"Recycle Bin"),Draw::rect(8,80,624,256,0xffffff),Draw::rect(0,344,640,1,0xc6d3dc),Draw::label(12,352,616,0,self.message),Draw::label(12,376,616,0x536c80,b"Enter: restore | Delete: forever | F5: refresh | Esc: close")]);
+  for (x,width,label,primary) in [(8,144,b"Restore selected" as &[u8],true),(160,144,b"Delete forever",false),(312,88,b"Refresh",false),(408,56,b"Prev",false),(472,56,b"Next",false),(536,96,b"Close",false)] {
+   gui::button_flat(w,&Button::new(Rect::new(x,42,width,28)),label,primary);
+   if x==160 {gui::outline(w,Rect::new(x,42,width,28),0xa96c64);}
+  }
+  for i in 0..self.count {let y=84+i as u32*16;window::draw(w,&[Draw::rect(8,y,624,16,if i==self.selected {0x2b5268}else{0xffffff})]);let label=match &self.records[i] {Some(r)=>&r.path[..r.len],None=>b"Damaged record - preserved for manual recovery"};window::row(w,12,y as u32,if i==self.selected{0x2b5268}else{0xffffff},if i==self.selected {0xffffff}else {0},&label[..label.len().min(76)]);}
   if self.confirm!=0 {window::draw(w,&[Draw::rect(8,340,624,32,0xffe6bd),Draw::label(14,348,612,0,if self.confirm==1 {b"Restore selected item to its original path? Y confirms / N cancels" as &[u8]}else{b"Permanently delete selected item? Y confirms. Cannot undo. N cancels"})]);}window::present(w);
  }
 }

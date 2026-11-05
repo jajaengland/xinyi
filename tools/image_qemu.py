@@ -98,6 +98,12 @@ def main():
                 while pointer!=[x,y]:
                     dx=max(-60,min(60,x-pointer[0]));dy=max(-60,min(60,y-pointer[1]));g.call('input-send-event',{'events':[{'type':'rel','data':{'axis':'x','value':dx}},{'type':'rel','data':{'axis':'y','value':dy}}]});pointer[0]+=dx;pointer[1]+=dy;time.sleep(.02)
             def button(down):g.call('input-send-event',{'events':[{'type':'btn','data':{'button':'left','down':down}}]});time.sleep(.08)
+            move(wx+8+180,wy+34+20);button(True);move(wx+8+350,wy+34+45);button(False)
+            assert pixel(address,w,631,214)==0x00ff00,'Cancelled toolbar press changed Fit mode'
+            move(wx+8+180,wy+34+20);button(True);button(False)
+            until(lambda:pixel(address,w,508,212)==0xff0000,'1:1 toolbar button failed')
+            move(wx+8+100,wy+34+20);button(True);button(False)
+            until(lambda:pixel(address,w,631,214)==0x00ff00,'Fit toolbar button failed')
             start=len(log());move(wx+100,wy+15);button(True);button(False);button(True);button(False)
             until(lambda:'maximized=true' in log()[start:],'Image maximise')
             address,w,h,wx,wy=current(viewer);until(lambda:pixel(address,w,8,269)==0xff0000 and pixel(address,w,783,269)==0x00ff00,'Maximised image did not reflow')

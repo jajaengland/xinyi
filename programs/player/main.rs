@@ -250,8 +250,10 @@ impl Player {
         window::draw(
             w,
             &[
-                Draw::rect(0, 0, 640, 400, 0xeeeeee),
-                Draw::text(16, 16, 0, b"Audio player - sampled sound"),
+                Draw::rect(0, 0, 640, 400, 0xf3f6f8),
+                Draw::rect(0,0,640,32,0x203e52),Draw::label(16,8,608,0xffffff,b"Audio player"),
+                Draw::rect(8,88,608,160,0xffffff),
+                Draw::rect(0,352,640,1,0xc6d3dc),
                 Draw::text(
                     16,
                     104,
@@ -268,9 +270,9 @@ impl Player {
             b"-",
             b"+",
         ]) {
-            gui::button(w, b, label, false);
+            gui::button_flat(w,b,label,b.rect.x==256);
         }
-        window::row(w, 16, 136, 0xeeeeee, 0, &self.name[..self.name_len.min(76)]);
+        window::row(w, 16, 136, 0xf3f6f8, 0, &self.name[..self.name_len.min(76)]);
         let progress = if let Some(l) = self.loading.as_ref() {
             l.read as u32 * 592 / l.size as u32
         } else if self.total > 0 {
@@ -281,19 +283,19 @@ impl Player {
         window::draw(
             w,
             &[
-                Draw::rect(16, 176, 592, 24, 0x999999),
-                Draw::rect(16, 176, progress, 24, 0x247b96),
+                Draw::rect(16, 176, 592, 24, 0xe6edf2),
+                Draw::rect(16, 176, progress, 24, 0x367c85),
             ],
         );
         let mut status = *b"Volume: 000%    Buffered: 00000 frames";
         number(&mut status[8..11], self.volume);
         number(&mut status[26..31], self.queued);
-        window::row(w, 16, 224, 0xeeeeee, 0, &status);
+        window::row(w, 16, 224, 0xf3f6f8, 0, &status);
         window::row(
             w,
             16,
             272,
-            0xeeeeee,
+            0xf3f6f8,
             0,
             b"Ctrl+O: open | T: dndt.wav | Space: play | S: stop",
         );
@@ -301,11 +303,11 @@ impl Player {
             w,
             16,
             304,
-            0xeeeeee,
+            0xf3f6f8,
             0,
-            b"PCM device is shared exclusively; closing releases it.",
+            b"Player volume is separate from system sound volume.",
         );
-        window::row(w, 16, 368, 0xeeeeee, 0, self.message);
+        window::row(w, 16, 368, 0xf3f6f8, 0, self.message);
         if let Some(d) = self.dialog.as_ref() {
             d.paint(w);
         }
