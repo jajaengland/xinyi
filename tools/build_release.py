@@ -78,6 +78,7 @@ def main():
     subprocess.run([sys.executable,str(ROOT/"tools/permissions_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/memory_boundaries_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/files_browser_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/settings_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
     for display in ("std","cirrus"):
         subprocess.run([sys.executable,str(ROOT/"tools/image_qemu.py"),"--disk",str(image),"--vga",display],cwd=ROOT,env=environment,check=True)
     for display in ("std","cirrus"):

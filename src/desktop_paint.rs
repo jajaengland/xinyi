@@ -1,8 +1,19 @@
 //! Code-drawn desktop icons and chrome. All text uses shared proportional metrics.
 use crate::{canvas::{Canvas,text::{self,Font}},desktop_shell::{Shell,Hit},desktop_ui::Rect};
-const INK:u32=0x20384d;
+pub const INK:u32=0x20384d;
+pub const BORDER:u32=0x94aabb;
+pub const PANEL:u32=0xf3f6f8;
+pub const ACCENT:u32=0x8bd1cf;
 const MUTED:u32=0x536c80;
-fn tint(color:u32)->u32 {((color&0xfefefe)>>1)+0x182838}
+fn mix(a:u32,b:u32,amount:u32)->u32 {
+    let channel=|shift:u32| ->u32 {(((a>>shift)&255)*(100-amount)+((b>>shift)&255)*amount)/100};
+    channel(16)<<16|channel(8)<<8|channel(0)
+}
+fn tint(color:u32)->u32 {mix(color,crate::theme_model::ink(color),12)}
+// Small stepped corners stay crisp at every supported bitmap scale.
+fn tile(c:&mut Canvas<'_>,r:Rect,color:u32) {
+    c.rect(r.x+2,r.y,r.w-4,r.h,color);c.rect(r.x,r.y+2,r.w,r.h-4,color);
+}
 fn icon(c:&mut Canvas<'_>,x:i32,y:i32,size:i32,kind:usize) {
     let u=size/8;
     let colors=[0xe7b550,0x43879b,0x7191b9,0x83acc2,0xb38bc2,0x73ab8a,0x7694cf,0xc99875];
@@ -19,26 +30,36 @@ fn icon(c:&mut Canvas<'_>,x:i32,y:i32,size:i32,kind:usize) {
     }
 }
 fn button(c:&mut Canvas<'_>,r:Rect,active:bool,hover:bool) {
-    c.rect(r.x,r.y,r.w,r.h,if active {0x285e83}else if hover {0x28455d}else{0x1d3449});
+    tile(c,r,if active {0x2b5268}else if hover {0x28455d}else{0x1c3346});
+    if active {c.rect(r.x+8,r.y+r.h-3,r.w-16,2,ACCENT);}
 }
 pub fn background(c:&mut Canvas<'_>,s:&Shell,color:u32) {
     c.rect(0,0,crate::display_layout::width(),Shell::work_area().h,color);
     let subtle=tint(color);
-    for (x,y,w,h) in [(628,56,100,6),(722,56,6,96),(596,88,100,6),(690,88,6,96)] {c.rect(x,y,w,h,subtle);}
+    let (w,h)=(crate::display_layout::width(),Shell::work_area().h);
+    // Quiet diagonal bands follow the work area rather than a fixed resolution.
+    for y in 0..h {
+        let x=w*2/3+(y-h/2)/3;
+        c.rect(x,y,w/7,1,mix(color,0x8bd1cf,7));
+        c.rect(x+w/7,y,w/9,1,mix(color,0x8bd1cf,3));
+    }
     let ink=crate::theme_model::ink(color);
-    c.label(crate::display_layout::width()-180,212,132,ink,b"Xinyi");
+    let brand_x=w-200;let brand_y=h-100;
+    c.rect(brand_x,brand_y,24,3,mix(color,ink,45));
+    c.label(brand_x,brand_y+14,160,ink,b"Xinyi");
+    c.label(brand_x,brand_y+36,160,mix(color,ink,65),b"Your workspace");
     for i in [0,1,2,4] {
         let Some(index)=s.shortcut_app(i) else {continue;};let entry=&s.catalog.entries[index];let r=Shell::shortcut(i);
-        if s.hit()==Some(Hit::Shortcut(i)) {c.rect(r.x,r.y,r.w,r.h,subtle);}
+        if s.hit()==Some(Hit::Shortcut(i)) {tile(c,r,subtle);c.rect(r.x+30,r.y+r.h-4,36,2,ACCENT);}
         icon(c,r.x+28,r.y+8,40,entry.icon as usize);
         let width=text::width(entry.title(),Font::Ui).min(88);
         c.label(r.x+(96-width as i32)/2,r.y+60,width,ink,entry.title());
     }
-    let r=Shell::shortcut(3);if s.hit()==Some(Hit::DesktopFolder){c.rect(r.x,r.y,r.w,r.h,subtle);}
+    let r=Shell::shortcut(3);if s.hit()==Some(Hit::DesktopFolder){tile(c,r,subtle);c.rect(r.x+30,r.y+r.h-4,36,2,ACCENT);}
     icon(c,r.x+28,r.y+8,40,0);c.label(r.x+22,r.y+60,72,ink,b"Desktop");
     for i in 0..s.file_count {
         let e=&s.files[i];let r=s.file_rect(i);
-        if s.selection&(1<<i)!=0||s.hit()==Some(Hit::Desktop(i)) {c.rect(r.x,r.y,r.w,r.h,subtle);}
+        if s.selection&(1<<i)!=0||s.hit()==Some(Hit::Desktop(i)) {tile(c,r,subtle);if s.selection&(1<<i)!=0 {c.rect(r.x+2,r.y+10,2,r.h-20,ACCENT);}}
         icon(c,r.x+28,r.y+8,40,if e.folder {0}else{3});
         let label=&e.name[..e.length];let width=text::width(label,Font::Ui).min(92);
         c.label(r.x+(96-width as i32)/2,r.y+60,92,ink,label);
@@ -46,24 +67,27 @@ pub fn background(c:&mut Canvas<'_>,s:&Shell,color:u32) {
 }
 pub fn chrome(c:&mut Canvas<'_>,s:&Shell) {
     c.rect(0,Shell::bar().y,Shell::bar().w,Shell::bar().h,0x142637);c.rect(0,Shell::bar().y,Shell::bar().w,1,0x49647a);
+    c.rect(102,Shell::bar().y+20,1,24,0x365064);
     let r=Shell::apps();button(c,r,s.open,s.hit()==Some(Hit::Apps));
-    for (x,y) in [(r.x+12,r.y+9),(r.x+20,r.y+9),(r.x+12,r.y+17),(r.x+20,r.y+17)] {c.rect(x,y,5,5,0x8bd1ef);}
+    for (x,y) in [(r.x+12,r.y+9),(r.x+20,r.y+9),(r.x+12,r.y+17),(r.x+20,r.y+17)] {c.rect(x,y,5,5,ACCENT);}
     c.label(r.x+34,r.y+8,46,0xffffff,b"Apps");
     for (i,t) in s.tasks.iter().enumerate() {
         let Some(t)=t else {continue;};let r=Shell::task(i);let active=s.focused==Some(t.pid);
-        button(c,r,active,s.hit()==Some(Hit::Task(i)));c.rect(r.x+8,r.y+9,3,14,0x8bd1ef);
+        button(c,r,active,s.hit()==Some(Hit::Task(i)));
+        let kind=s.find(&t.name[..t.length]).map(|i|s.catalog.entries[i].icon as usize).unwrap_or(3);
+        icon(c,r.x+8,r.y+8,16,kind);
         let title=s.find(&t.name[..t.length]).map(|i|s.catalog.entries[i].title()).unwrap_or(&t.name[..t.length]);
-        c.label(r.x+18,r.y+8,(r.w-24) as u32,0xffffff,title);
-        if active {c.rect(r.x+10,r.y+r.h-3,r.w-20,2,0x8bd1ef);}
+        c.label(r.x+30,r.y+8,(r.w-36) as u32,0xffffff,title);
+
     }
     let r=Shell::sound();button(c,r,s.sound_open,s.hit()==Some(Hit::Sound));icon(c,r.x+6,r.y+4,24,4);
     if s.volume==0 {c.line((r.x+6,r.y+6),(r.x+29,r.y+25),0xf3b2a7);}
     c.label(Shell::bar().w-160,Shell::bar().y+14,72,0xffffff,&s.clock);c.label(Shell::bar().w-160,Shell::bar().y+32,72,0xaec3d4,b"Local");
     let r=Shell::exit();button(c,r,false,s.hit()==Some(Hit::Exit));c.label(r.x+16,r.y+8,44,0xffffff,b"Shell");
     if s.open {
-        let r=s.menu();c.rect(r.x+4,r.y+4,r.w,r.h,0x102333);c.rect(r.x,r.y,r.w,r.h,0x8299ad);c.rect(r.x+1,r.y+1,r.w-2,r.h-2,0xf1f5f8);
-        c.rect(r.x+1,r.y+1,r.w-2,50,0xe0eaf2);c.label(r.x+16,r.y+16,360,INK,b"Applications");c.label(r.x+394,r.y+16,72,MUTED,b"Xinyi");
-        c.rect(r.x+16,r.y+56,r.w-32,28,0x7099b9);c.rect(r.x+17,r.y+57,r.w-34,26,0xffffff);
+        let r=s.menu();c.rect(r.x+4,r.y+4,r.w,r.h,0x102333);c.rect(r.x,r.y,r.w,r.h,BORDER);c.rect(r.x+1,r.y+1,r.w-2,r.h-2,PANEL);
+        c.rect(r.x+1,r.y+1,r.w-2,50,0x203e52);c.rect(r.x+16,r.y+38,32,2,ACCENT);c.label(r.x+16,r.y+12,360,0xffffff,b"Applications");c.label(r.x+394,r.y+12,72,0xaecedb,b"Xinyi");
+        c.rect(r.x+16,r.y+56,r.w-32,28,0x759daa);c.rect(r.x+17,r.y+57,r.w-34,26,0xffffff);
         let label=if s.query_len==0 {b"Type to find an app..." as &[u8]}else{&s.query[..s.query_len]};
         c.label(r.x+24,r.y+62,(r.w-52) as u32,if s.query_len==0 {MUTED}else{INK},label);
         if s.query_len>0 {let x=r.x+24+text::width(label,Font::Ui) as i32;c.rect(x,r.y+62,1,16,0x2f78aa);}
@@ -71,7 +95,9 @@ pub fn chrome(c:&mut Canvas<'_>,s:&Shell) {
         if n==0 {c.paragraph(r.x+24,r.y+110,(r.w-48) as u32,64,MUTED,b"No applications match. Try a shorter name.");}
         for (slot,&index) in items[..n].iter().skip(s.app_page*16).take(16).enumerate() {
             let entry=&s.catalog.entries[index];let card=s.card(slot);
-            if s.menu_selection.map_or(s.hit()==Some(Hit::App(index)),|selected|selected==index) {c.rect(card.x,card.y,card.w,card.h,0xd9eaf6);c.rect(card.x,card.y,2,card.h,0x357da9);}
+            let selected=s.menu_selection.map_or(s.hit()==Some(Hit::App(index)),|selected|selected==index);
+            tile(c,Rect{w:card.w-3,h:card.h-3,..card},if selected {0xdceef0}else{0xffffff});
+            if selected {c.rect(card.x,card.y+5,2,card.h-13,0x367c85);}
             icon(c,card.x+8,card.y+8,24,entry.icon as usize);
             let mut version=[b'0';11];let mut value=entry.version;
             for i in (1..11).rev() {version[i]+= (value%10) as u8;value/=10;}
@@ -92,7 +118,7 @@ pub fn chrome(c:&mut Canvas<'_>,s:&Shell) {
         } else {c.label(r.x+16,r.y+r.h-20,(r.w-32) as u32,MUTED,if s.length>0 {&s.message[..s.length]}else if s.catalog.truncated {b"Catalog full: first 64 apps shown"}else{b"Enter opens  |  Arrows select  |  Escape closes"});}
     }
     if s.sound_open {
-        let r=Shell::sound_panel();c.rect(r.x+3,r.y+3,r.w,r.h,0x102333);c.rect(r.x,r.y,r.w,r.h,0x8299ad);c.rect(r.x+1,r.y+1,r.w-2,r.h-2,0xf1f5f8);
+        let r=Shell::sound_panel();c.rect(r.x+3,r.y+3,r.w,r.h,0x102333);c.rect(r.x,r.y,r.w,r.h,BORDER);c.rect(r.x+1,r.y+1,r.w-2,r.h-2,PANEL);
         c.label(r.x+12,r.y+12,190,INK,b"System sounds");
         let percent=[b'0'+(s.volume/100) as u8,b'0'+(s.volume/10%10) as u8,b'0'+(s.volume%10) as u8,b'%'];
         c.label(r.x+12,r.y+38,180,MUTED,&percent);c.rect(r.x+12,r.y+62,196,4,0xd3dfe8);c.rect(r.x+12,r.y+62,(s.volume*196/100) as i32,4,0x357da9);
@@ -101,7 +127,7 @@ pub fn chrome(c:&mut Canvas<'_>,s:&Shell) {
         }
     }
     if let Some(r)=s.context_rect() {
-        c.rect(r.x+3,r.y+3,r.w,r.h,0x102333);c.rect(r.x,r.y,r.w,r.h,0xe0eaf2);
+        c.rect(r.x+3,r.y+3,r.w,r.h,0x102333);c.rect(r.x,r.y,r.w,r.h,BORDER);c.rect(r.x+1,r.y+1,r.w-2,r.h-2,PANEL);
         for row in 0..(r.h/30) as usize {let y=r.y+row as i32*30;
             if s.hit()==Some(Hit::DesktopMenu(row)){c.rect(r.x+1,y+1,r.w-2,28,0xc6dfef);}
             let label:&[u8]=if row>=2 {if s.context.unwrap().2.is_none(){b"Paste"}else if row==2{b"Copy"}else if row==3{b"Cut"}else{b"Recycle"}}else if row==1 {b"Reset icon positions" as &[u8]}else if s.context.unwrap().2.is_some(){b"Open"}else{b"Open Desktop"};

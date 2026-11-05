@@ -60,8 +60,10 @@ def main():
                     dx=max(-80,min(80,x-pointer[0]));dy=max(-80,min(80,y-pointer[1]));g.call('input-send-event',{'events':[{'type':'rel','data':{'axis':'x','value':dx}},{'type':'rel','data':{'axis':'y','value':dy}}]});pointer[0]+=dx;pointer[1]+=dy;time.sleep(.02)
                 for down in [True,False]:g.call('input-send-event',{'events':[{'type':'btn','data':{'button':'left','down':down}}]});time.sleep(.08)
             m=re.search(r'Multiwindow: open pid='+str(files_pid)+r'.*client=(\d+)x(\d+) pos=(\d+),(\d+)',log());width,height,x,y=map(int,m.groups());x+=8;y+=34
-            def install_button():click(x+4*(width//9)+25,y+46)
-            def remove_button():click(x+5*(width//9)+25,y+46)
+            def install_button():
+                click(x+width-40,y+16);click(x+width-140,y+32+4+7*22+11)
+            def remove_button():
+                click(x+width-40,y+16);click(x+width-140,y+32+4+8*22+11)
             g.key('home');install_button();g.key('n');time.sleep(.2);assert 'APPS/SAMPLE' not in inspect_tree(image,2048)[1],'Cancelled installation wrote an app'
             install_button();g.key('y');until(lambda:'APPS/SAMPLE/ASSETS/MORE/DATA.TXT' in inspect_tree(image,2048)[0],'Files install')
             assert inspect_tree(image,2048)[0]['APPS/SAMPLE/ASSETS/EMPTY.TXT']==b''

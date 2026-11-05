@@ -9,8 +9,8 @@ use xinyi::{
     window::{self, Draw},
 };
 const COLORS: [u32; 16] = [
-    0x204a9c, 0x153e8e, 0x3268b5, 0x4b80ba, 0x277d85, 0x28634f, 0x626184, 0x854a73, 0x40464f,
-    0x707070, 0x969da5, 0xc4c4c4, 0xe8e8e8, 0x805534, 0x88473e, 0x193653,
+    0x204a9c, 0x367c85, 0x3268b5, 0x4b80ba, 0x277d85, 0x28634f, 0x626184, 0x854a73, 0x40464f,
+    0xc6d3dc, 0x969da5, 0xc4c4c4, 0xe8e8e8, 0x805534, 0x88473e, 0x193653,
 ];
 struct Settings {
     draft: Theme,
@@ -68,8 +68,12 @@ impl Settings {
         window::draw(
             w,
             &[
-                Draw::rect(0, 0, 480, 416, 0xf4f4f4),
-                Draw::label(16, 12, 448, 0, b"Appearance and sound"),
+                Draw::rect(0, 0, 480, 416, 0xf3f6f8),
+                Draw::rect(0,0,480,30,0x203e52),
+                Draw::rect(8,34,464,204,0xffffff),
+                Draw::rect(8,240,464,96,0xffffff),
+                Draw::rect(0,382,480,1,0xc6d3dc),
+                Draw::label(16, 7, 448, 0xffffff, b"Appearance"),
                 Draw::label(16, 42, 252, 0, b"Desktop background"),
                 Draw::label(16, 78, 252, 0, b"Active title bar"),
             ],
@@ -85,9 +89,9 @@ impl Settings {
                         180,
                         28,
                         if self.target == i as u8 {
-                            0x153e8e
+                            0x367c85
                         } else {
-                            0x707070
+                            0xc6d3dc
                         },
                     ),
                     Draw::rect(288, y + 4, 172, 20, *color),
@@ -105,7 +109,7 @@ impl Settings {
                         y,
                         48,
                         32,
-                        if *color == self.color() { 0 } else { 0xc4c4c4 },
+                        if *color == self.color() { 0x367c85 } else { 0xe6edf2 },
                     ),
                     Draw::rect(x + 3, y + 3, 42, 26, *color),
                 ],
@@ -122,8 +126,8 @@ impl Settings {
         window::draw(
             w,
             &[
-                Draw::text(16, 212, 0, b"RGB hex:"),
-                Draw::text(232, 212, 0, b"Enter 6 digits; Enter accepts"),
+                Draw::label(16,212,80,0x20384d,b"RGB hex:"),
+                Draw::label(232,212,232,0x536c80,b"6 hex digits; Enter to accept"),
             ],
         );
         let mut display = TextInput::<6>::new();
@@ -134,6 +138,7 @@ impl Settings {
             if self.editing { &self.hex } else { &display },
             self.editing,
         );
+        gui::outline(w,Rect::new(96,206,120,28),if self.editing {0x367c85}else{0xc6d3dc});
         let mut volume = *b"System sounds: 000%";
         volume[15] = b'0' + (self.volume / 100) as u8;
         volume[16] = b'0' + (self.volume / 10 % 10) as u8;
@@ -141,7 +146,8 @@ impl Settings {
         window::draw(
             w,
             &[
-                Draw::label(16, 246, 448, 0, &volume),
+                Draw::label(16,246,448,0x20384d,&volume),
+                Draw::rect(16,268,448,4,0xe6edf2),Draw::rect(16,268,448*self.volume/100,4,0x367c85),
                 Draw::label(16, 320, 448, 0, b"Sound volume applies now; Save keeps it."),
             ],
         );
@@ -158,7 +164,7 @@ impl Settings {
         .iter()
         .enumerate()
         {
-            gui::button(w, &self.buttons[i], label, false);
+            gui::button_flat(w,&self.buttons[i],label,i==1);
         }
         window::draw(
             w,
@@ -213,6 +219,7 @@ fn main() -> u32 {
                 for b in &mut s.buttons {
                     b.reset(e.buttons);
                 }
+                repaint=true;
             }
             window::KEY => {
                 let code = e.code as u16;
@@ -256,7 +263,7 @@ fn main() -> u32 {
                 let old_pressed = s
                     .buttons
                     .iter()
-                    .fold(0u32, |n, b| (n << 1) | u32::from(b.pressed && b.hover));
+                    .fold(0u32, |n, b| (n << 2) | u32::from(b.hover) | (u32::from(b.pressed && b.hover)<<1));
                 let mut action = None;
                 for (i, b) in s.buttons.iter_mut().enumerate() {
                     if b.pointer(e.x, e.y, e.buttons) {
@@ -296,7 +303,7 @@ fn main() -> u32 {
                 let new_pressed = s
                     .buttons
                     .iter()
-                    .fold(0u32, |n, b| (n << 1) | u32::from(b.pressed && b.hover));
+                    .fold(0u32, |n, b| (n << 2) | u32::from(b.hover) | (u32::from(b.pressed && b.hover)<<1));
                 repaint = (e.buttons & 1 != 0 && buttons & 1 == 0)
                     || action.is_some()
                     || old_pressed != new_pressed;

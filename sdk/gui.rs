@@ -153,3 +153,16 @@ pub fn dialog(w: u32, title: &[u8], r: Rect) {
         ],
     );
 }
+
+/// Flat controls for the refreshed desktop apps; input behaviour is shared with Button.
+pub fn outline(w:u32,r:Rect,color:u32) {
+    window::draw(w,&[Draw::rect(r.x as u32,r.y as u32,r.w as u32,1,color),Draw::rect(r.x as u32,r.y as u32,1,r.h as u32,color),Draw::rect(r.x as u32,(r.y+r.h-1) as u32,r.w as u32,1,color),Draw::rect((r.x+r.w-1) as u32,r.y as u32,1,r.h as u32,color)]);
+}
+pub fn button_flat(w:u32,b:&Button,label:&[u8],primary:bool) {
+    let r=b.rect;let down=b.pressed&&b.hover;
+    let background=if primary {if down {0x203e52}else if b.hover {0x367c85}else{0x2b5268}}else if down {0xc6dfe2}else if b.hover {0xdceef0}else{0xe6edf2};
+    window::draw(w,&[Draw::rect(r.x as u32,r.y as u32,r.w as u32,r.h as u32,background)]);
+    outline(w,r,if primary {0x2b5268}else{0xc6d3dc});
+    let width=super::text::width(label,super::text::Font::Ui).min((r.w-12).max(0) as u32);
+    window::draw(w,&[Draw::label((r.x+(r.w-width as i32)/2) as u32,(r.y+(r.h-16)/2) as u32,width,if primary {0xffffff}else {0x20384d},label)]);
+}

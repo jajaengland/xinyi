@@ -53,6 +53,8 @@ App titles, descriptions, icon choices and restrictive access profiles come from
 
 Use the maximize/restore title-bar button or double-click the title bar in Files, Notepad and Terminal. Maximized frames fill the work area above the taskbar, respect app layout limits and restore their previous size/position. Minimize and taskbar restore preserve maximized state.
 
+Files has a primary toolbar, Back/Forward/Places navigation and a separate address field. Use More (or right-click) for Rename, Copy, Move, Paste, Recycle, Properties and app install/remove/update. Previous/Next below the list and PgUp/PgDn browse pages. Disabled navigation controls are dimmed.
+
 Drag the lower-right grip to resize Files or Notepad; Notepad reflows text and Files shows more rows. Terminal expands its background and right-edge scrollbar horizontally and grows vertically to display up to 32 rows when maximised, while preserving the 80-column text-program layout. Apps that do not opt in remain fixed-size.
 
 Closing an app shifts the remaining taskbar buttons left; new apps append on the right.
@@ -163,6 +165,10 @@ rustc --edition=2021 --test tools/window_tests.rs -o target/window-tests.exe
 
 Desktop app loading, including automatic Terminal wrappers, shares the serialized disk worker with app file requests. Existing windows keep receiving input and drawing while an image is read. Loading messages appear in the Apps launcher; Ctrl+Alt+Esc cancels the active load at a safe read boundary. No process starts until the complete image validates and its source volume, parent and available slots are rechecked. Closing a launching Terminal cancels its pending load. Only one pending Apps-menu request and one pending command request are retained; additional requests report that a launch is already queued. Individual firmware/controller calls still block, and final bounded image/page-table setup is synchronous.
 
+
+## Shareable QEMU package
+
+Run `python tools/package_qemu.py` to build a fresh BIOS disk image with all standard apps, 1024x768 at 100% UI scale, portable Windows/Unix launchers, instructions and SHA-256 checksums. The ZIP is written under `target/releases`; the latest path is recorded in `target/latest-qemu-package.json`. Recipients need QEMU installed, but no build tools or source checkout. Windows finds QEMU on PATH or in its standard Program Files folder. The package uses SDL mouse capture (click inside; Right Ctrl+G releases), AC97 audio and disabled networking. Unix launchers require SDL support; Windows is the tested host. Packaging runs system integration, payload/app byte checks, filesystem verification and desktop/text fallback checks; this is separate from the full release test matrix.
 
 ## Graphics and fonts
 

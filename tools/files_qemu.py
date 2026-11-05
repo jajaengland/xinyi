@@ -50,20 +50,31 @@ def main():
     address,w,h=window(pid);data=array('I');data.frombytes(mem(address+w*384*4,w*16*4));return ''.join(glyphs.get(bytes(data[dy*w+col*8+dx]==0 for dy in range(16) for dx in range(8)),'?') for col in range(78))
    def selected(pid):
     address,w,h=window(pid)
-    return any(int.from_bytes(mem(address+((80+row*16)*w+8)*4,4),'little')==0x153e8e for row in range(18))
+    return any(int.from_bytes(mem(address+((80+row*16)*w+8)*4,4),'little')==0x2b5268 for row in range(18))
    files=launch('FILES')
    # Files lists the actual FAT directory, not a static app catalog.
    def tree():return inspect_tree(image,2048)[0]
    def coords(pid):
     m=re.search(r'Multiwindow: open pid='+str(pid)+r' .*pos=(\d+),(\d+)',log());return int(m[1])+8,int(m[2])+34
+   def root_row(name):
+    import struct
+    data=image.read_bytes();start=2048;boot=data[start*512:(start+1)*512];reserved=struct.unpack_from('<H',boot,14)[0];spf=struct.unpack_from('<H',boot,22)[0];count=struct.unpack_from('<H',boot,17)[0];root=(start+reserved+2*spf)*512;names=[]
+    for at in range(root,root+count*32,32):
+     e=data[at:at+32]
+     if not e[0]:break
+     if e[0]==0xe5 or e[11]&8:continue
+     names.append(e[:8].decode().rstrip()+('.'+e[8:11].decode().rstrip() if e[8:11].strip() else ''))
+    return 88+16*names.index(name)
    x,y=coords(files)
-   def tool(n):click(x+n*70+24,y+12)
+   def tool(n):
+    if n==4:g.key('delete')
+    else:click(x+8+[0,1,2,3,4,4][n]*((640-16)//7)+24,y+12)
    until(lambda:selected(files),'Initial selection missing');click(x+500,y+300);until(lambda:not selected(files),'Empty space did not clear selection')
    g.key('delete');g.key('ret');g.key('f2');g.key('ctrl-c');until(lambda:'Select ' in status(files),'Deselected actions were enabled');assert log().count('Multiwindow: open')==1 and 'APPS' in inspect_tree(image,2048)[1]
    g.key('f5');until(lambda:not selected(files),'Refresh reselected a file');click(x+32,y+88);until(lambda:selected(files),'Could not reselect');click(x+636,y+88);until(lambda:not selected(files),'Gutter click did not clear selection');g.key('down');until(lambda:selected(files),'Keyboard did not restore selection');click(x+500,y+300);until(lambda:not selected(files),'Second blank click did not clear')
    tool(3);g.type('docs\n');until(lambda:'DOCS' in inspect_tree(image,2048)[1],'Create folder')
    # A folder used by another Files process must not be renamed underneath it.
-   other=launch('FILES');ox,oy=coords(other);click(ox+32,oy+104);g.key('ret');until(lambda:'Folder opened.' in status(other),'Second Files folder');click(*task_button(0));click(x+32,y+104);g.key('f2');g.type('busy\n');until(lambda:'Folder is in use' in status(files),'Busy folder rename refusal')
+   other=launch('FILES');ox,oy=coords(other);click(ox+32,oy+root_row('DOCS'));g.key('ret');until(lambda:'Folder opened.' in status(other),'Second Files folder');click(*task_button(0));click(x+32,y+root_row('DOCS'));g.key('f2');g.type('busy\n');until(lambda:'Folder is in use' in status(files),'Busy folder rename refusal')
    assert 'DOCS' in inspect_tree(image,2048)[1] and 'BUSY' not in inspect_tree(image,2048)[1],'Renamed an active folder'
    click(*task_button(1));g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={other}' in log(),'Close second Files')
    click(*task_button(0));g.key('f2');g.type('notes\n');until(lambda:'NOTES' in inspect_tree(image,2048)[1],'Rename folder');g.key('f2');g.type('docs\n');until(lambda:'DOCS' in inspect_tree(image,2048)[1],'Rename folder back')
@@ -77,8 +88,8 @@ def main():
    g.key('f2');g.type('new.txt\n');until(lambda:tree().get('DOCS/NEW.TXT')==b'from files!' and 'DOCS/NOTE.TXT' not in tree(),'Rename file')
    g.key('ctrl-c');g.key('ctrl-v');g.type('copy.txt\n');until(lambda:tree().get('DOCS/COPY.TXT')==b'from files!','Paste As copy')
    click(x+32,y+104);g.key('ctrl-x');g.key('backspace');g.key('ctrl-v');until(lambda:tree().get('COPY.TXT')==b'from files!' and 'DOCS/COPY.TXT' not in tree(),'Move to parent')
-   click(x+32,y+104);g.key('ret');time.sleep(.2);click(x+32,y+88);g.key('f2');g.type('note.txt\n');until(lambda:tree().get('DOCS/NOTE.TXT')==b'from files!','Rename back')
-   click(*task_button(0));tool(4);g.key('n');assert tree().get('DOCS/NOTE.TXT')==b'from files!';tool(4);g.key('y');until(lambda:'DOCS/NOTE.TXT' not in tree(),'Delete file');tool(0);time.sleep(.2);click(x+32,y+104);tool(4);g.key('y');until(lambda:'DOCS' not in inspect_tree(image,2048)[1],'Remove folder')
+   click(x+32,y+root_row('DOCS'));g.key('ret');time.sleep(.2);click(x+32,y+88);g.key('f2');g.type('note.txt\n');until(lambda:tree().get('DOCS/NOTE.TXT')==b'from files!','Rename back')
+   click(*task_button(0));tool(4);g.key('n');assert tree().get('DOCS/NOTE.TXT')==b'from files!';tool(4);g.key('y');until(lambda:'DOCS/NOTE.TXT' not in tree(),'Delete file');tool(0);time.sleep(.2);click(x+32,y+root_row('DOCS'));tool(4);g.key('y');until(lambda:'DOCS' not in inspect_tree(image,2048)[1],'Remove folder')
    # Opening an executable starts a terminal, which hosts the text program.
    click(x+32,y+88);g.key('ret');time.sleep(.2)
    click(x+32,y+88);g.key('ret');time.sleep(.2);click(x+32,y+88);tool(1)

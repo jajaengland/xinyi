@@ -114,4 +114,8 @@ Keep generated artifacts out of Git. Update the relevant docs and run checks app
 
 1. [x] Higher-resolution desktop and font/UI scaling foundation.
 2. [ ] Refresh the desktop design and apply consistent controls, spacing and menus across the standard apps.
+   - [x] First shell styling pass: adaptive wallpaper, launcher cards, task icons/active indicators and coordinated panel/window colours.
+   - [x] Files: simplified primary toolbar, navigation/address row, More menu, matching selection/popup colours and separate page controls.
+   - [x] Settings: grouped appearance/sound panels, reusable flat buttons, highlighted Save, volume meter and hover feedback.
+   - [ ] Apply shared controls and spacing to editor controls and standard app dialogs.
 3. [ ] Extend the application system with richer bundles and shared app UI components.

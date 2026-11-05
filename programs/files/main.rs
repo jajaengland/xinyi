@@ -2,6 +2,7 @@
 #![no_main]
 mod selection;
 mod browser;
+mod chrome;
 use browser::{Favorites, History, Sort, View};
 #[path = "../../sdk/xinyi.rs"]
 mod xinyi;
@@ -13,6 +14,7 @@ use xinyi::{
     window::{self, Draw},
 };
 struct Files {
+    toolbar_hot:Option<usize>,
     handle: u32,
     view: View,
     favorites: Favorites,
@@ -75,8 +77,14 @@ fn error(n: i32) -> &'static [u8] {
     }
 }
 impl Files {
-    fn toolbar_cell(&self) -> u32 {
-        self.width / 9
+    fn command_enabled(&self,n:usize)->bool {
+        match n {0=>self.length>1,1=>self.selection.count==1,15=>self.history.target(false).is_some(),16=>self.history.target(true).is_some(),6=>self.offset>0,7=>self.offset as u32+(self.page() as u32)<self.list.total,_=>true}
+    }
+    fn command_button(&self,w:u32,r:chrome::Rect,n:usize,label:&[u8]) {
+        let enabled=self.command_enabled(n);let hot=enabled&&self.toolbar_hot==Some(n);
+        let bg=if hot {0xdceef0}else{0xe6edf2};let ink=if enabled {0x20384d}else {0x8293a1};
+        let length=xinyi::text::width(label,xinyi::text::Font::Ui).min(r.w-12);
+        window::draw(w,&[Draw::rect(r.x,r.y,r.w,r.h,bg),Draw::rect(r.x,r.y+r.h-1,r.w,1,if hot {0x367c85}else {0xc6d3dc}),Draw::label(r.x+(r.w-length)/2,r.y+(r.h-16)/2,length,ink,label)]);
     }
     fn page(&self) -> u16 {
         self.view.layout(self.width,self.height).3.max(1)
@@ -670,6 +678,10 @@ impl Files {
                     xinyi::sounds::play(xinyi::sounds::Event::Warning);
                 }
             }
+            20 => {
+                self.can_paste=file_clipboard::get(&mut self.pending)==0&&self.pending.count>0;
+                self.menu=Some((self.width as i32-176,32));self.last=usize::MAX;
+            },
             18 => {if self.load_favorites() {self.favorite_focus=0;self.mode=9;}},
             15 => self.history_go(false),
             16 => self.history_go(true),
@@ -705,7 +717,7 @@ impl Files {
                 return false;
             }
             if code == 10 {
-                if let Some(i) = self.hover {
+                if let Some(i) = self.hover.filter(|&i|self.enabled(i)) {
                     return self.action([1, 9, 10, 11, 12, 4, 5, 13, 14, 17, 19][i]);
                 }
             }
@@ -1003,24 +1015,14 @@ impl Files {
             self.last = usize::MAX;
             return true;
         }
-        if !left {
-            return false;
-        }
-        if (0..30).contains(&event.y) && (0..self.width as i32).contains(&event.x) {
-            return {
-                self.action((event.x as u32 / self.toolbar_cell()).min(8) as usize);
-                true
-            };
-        }
+        let hot=chrome::hit(self.width,self.height,event.x,event.y);
+        let changed=hot!=self.toolbar_hot;self.toolbar_hot=hot;
+        if !left {return changed;}
+        if let Some(action)=hot {if self.command_enabled(action) {self.action(action);}return true;}
         if self.view == View::Details && (64..80).contains(&event.y) {
             if (event.x - self.name_end as i32).abs() <= 4 { self.column_drag = Some(1); }
             else if (event.x - self.type_end as i32).abs() <= 4 { self.column_drag = Some(2); }
             else { self.choose_sort(if event.x < self.name_end as i32 { 1 } else if event.x < self.type_end as i32 { 2 } else { 3 }); }
-            return true;
-        }
-        if (34..60).contains(&event.y) && (0..self.width as i32).contains(&event.x) {
-            let index=event.x as usize / self.toolbar_cell() as usize;
-            self.action(if index>=8 {18}else{9+index});
             return true;
         }
         if (80..self.height as i32 - 32).contains(&event.y) {
@@ -1053,54 +1055,11 @@ impl Files {
     }
     fn paint(&self, w: u32) {
         window::draw(w, &[Draw::rect(0, 0, self.width, self.height, 0xf4f4f4)]);
-        let cell = self.toolbar_cell();
-        for (i, label) in [
-            b"Up" as &[u8],
-            b"Open",
-            b"New",
-            b"Folder",
-            b"Recycle",
-            b"Refresh",
-            b"<",
-            b">",
-            b"View",
-        ]
-        .iter()
-        .enumerate()
-        {
-            let x = i as u32 * cell;
-            let end = if i == 8 { self.width } else { x + cell };
-            window::draw(
-                w,
-                &[
-                    Draw::rect(x + 2, 2, end - x - 4, 26, 0xc4c4c4),
-                    Draw::text(x + (end - x - label.len() as u32 * 8) / 2, 8, 0, label),
-                ],
-            );
-        }
-        for (i, label) in [
-            b"Rename" as &[u8],
-            b"Copy",
-            b"Move",
-            b"Paste",
-            b"Install",
-            b"Remove",
-            b"Back",
-            b"Forward",
-            b"Places",
-        ]
-        .iter()
-        .enumerate()
-        {
-            let x = i as u32 * cell;
-            window::draw(
-                w,
-                &[
-                    Draw::rect(x + 2, 34, cell - 4, 26, 0xc4c4c4),
-                    Draw::text(x + (cell - label.len() as u32 * 8) / 2, 40, 0, label),
-                ],
-            );
-        }
+        window::draw(w,&[Draw::rect(0,0,self.width,64,0xf3f6f8),Draw::rect(0,63,self.width,1,0xc6d3dc)]);
+        for (i,(n,label)) in chrome::PRIMARY.iter().enumerate() {self.command_button(w,chrome::primary(self.width,i),*n,label);}
+        for (i,(n,label)) in chrome::NAV.iter().enumerate() {self.command_button(w,chrome::nav(i),*n,label);}
+        let budget=((self.width-232)/8).min(96) as usize;
+        window::draw(w,&[Draw::rect(216,36,self.width-224,24,0xffffff),Draw::text(224,40,0x20384d,&self.path[self.length.saturating_sub(budget)..self.length]),Draw::rect(216,59,self.width-224,1,0xc6d3dc)]);
         window::draw(
             w,
             &[
@@ -1120,7 +1079,7 @@ impl Files {
             let name = &e.name[..e.length as usize];
             let chosen = self.selection.contains(name);
             let (bg, fg) = if chosen {
-                (0x153e8e, 0xffffff)
+                (0x2b5268, 0xffffff)
             } else {
                 (0xffffff, 0)
             };
@@ -1184,7 +1143,7 @@ impl Files {
         window::draw(
             w,
             &[
-                Draw::text(8, self.height - 32, 0, if self.mode == 0 { &self.path[self.length.saturating_sub((((self.width - 16) / 8) as usize).min(96))..self.length] } else { hint }),
+                Draw::label(8, self.height - 32, if self.mode==0 {self.width-176}else{self.width-16}, 0x20384d, if self.mode == 0 {b"PgUp / PgDn to browse"} else {hint}),
                 Draw::text(
                     8,
                     self.height - 16,
@@ -1196,13 +1155,14 @@ impl Files {
                 ),
             ],
         );
+        if self.mode==0 {for next in [false,true] {self.command_button(w,chrome::page(self.width,self.height,next),if next {7}else{6},if next {b"Next"}else{b"Previous"});}}
         if matches!(self.mode, 1 | 2 | 4 | 5) {
             window::draw(
                 w,
                 &[Draw::text(
                     160,
                     self.height - 32,
-                    0x153e8e,
+                    0x2b5268,
                     &self.input[..self.used],
                 )],
             );
@@ -1212,7 +1172,7 @@ impl Files {
                 w,
                 &[
                     Draw::rect((x + 4) as u32, (y + 4) as u32, 164, 246, 0x404040),
-                    Draw::rect(x as u32, y as u32, 168, 250, 0xc4c4c4),
+                    Draw::rect(x as u32, y as u32, 168, 250, 0x94aabb),Draw::rect((x+1) as u32,(y+1) as u32,166,248,0xf3f6f8),
                 ],
             );
             for (i, label) in [
@@ -1241,7 +1201,7 @@ impl Files {
                             yy as u32,
                             160,
                             22,
-                            if hot { 0x153e8e } else { 0xc4c4c4 },
+                            if hot { 0x2b5268 } else { 0xf3f6f8 },
                         ),
                         Draw::text(
                             (x + 10) as u32,
@@ -1261,13 +1221,13 @@ impl Files {
         }
         if self.mode == 9 {
             window::draw(w,&[
-                Draw::rect(24,104,self.width-48,248,0xc4c4c4),Draw::text(40,120,0,b"Favourite folders - Enter or click to open"),
+                Draw::rect(24,104,self.width-48,248,0xe6edf2),Draw::text(40,120,0,b"Favourite folders - Enter or click to open"),
                 Draw::text(40,328,0,b"Ctrl+D in a folder adds/removes it. Escape closes Places."),
             ]);
             if self.favorites.count==0 {window::draw(w,&[Draw::text(40,152,0,b"No favourites yet. Close Places and press Ctrl+D.")]);}
             for i in 0..self.favorites.count {
                 let n=self.favorites.lengths[i] as usize;let selected=i==self.favorite_focus;
-                window::draw(w,&[Draw::rect(32,144+i as u32*22,self.width-64,22,if selected {0x153e8e}else{0xc4c4c4}),Draw::text(40,147+i as u32*22,if selected {0xffffff}else{0},&self.favorites.paths[i][n.saturating_sub(68)..n])]);
+                window::draw(w,&[Draw::rect(32,144+i as u32*22,self.width-64,22,if selected {0x2b5268}else{0xffffff}),Draw::text(40,147+i as u32*22,if selected {0xffffff}else{0},&self.favorites.paths[i][n.saturating_sub(68)..n])]);
             }
         }
         if self.mode == 8 {
@@ -1277,7 +1237,7 @@ impl Files {
             for d in digits.iter_mut().rev() { *d += (value % 10) as u8; value /= 10; }
             let start = digits.iter().position(|&b| b != b'0').unwrap_or(9);
             window::draw(w, &[
-                Draw::rect(24, 104, self.width - 48, 224, 0xc4c4c4),
+                Draw::rect(24, 104, self.width - 48, 224, 0xe6edf2),
                 Draw::text(40, 120, 0, b"Properties"),
                 Draw::text(40, 152, 0, name),
                 Draw::text(40, 184, 0, if self.selection.flags[0] & 1 != 0 { b"Folder" } else { b"File size (bytes):" }),
@@ -1298,7 +1258,7 @@ fn main() -> u32 {
     }
     let w = w as u32;
     let mut app = Files {
-        handle:w, view:View::Details, favorites:Favorites::new(), favorite_focus:0, transfer_total:0, transfer_done:0,
+        toolbar_hot:None,handle:w, view:View::Details, favorites:Favorites::new(), favorite_focus:0, transfer_total:0, transfer_done:0,
         width: 640,
         height: 400,
         list: Listing::new(),

@@ -56,7 +56,7 @@ def main():
     x,y=rect(pid);return x+8,y+34
    def tree():return inspect_tree(image,2048)[0]
    def chosen(pid,row):
-    addr,w,h=window(pid);return int.from_bytes(mem(addr+((80+row*16)*w+8)*4,4),'little')==0x153e8e
+    addr,w,h=window(pid);return int.from_bytes(mem(addr+((80+row*16)*w+8)*4,4),'little')==0x2b5268
    def modifier(name,down):g.call('input-send-event',{'events':[{'type':'key','data':{'down':down,'key':{'type':'qcode','data':name}}}]});time.sleep(.08)
    def right(x,y):
     move(x,y)
@@ -76,7 +76,7 @@ def main():
    def row(pid,y,n):
     address,w,h=current(pid);data=array('I');data.frombytes(mem(address+y*w*4,w*16*4));return ''.join(glyphs.get(bytes(data[dy*w+col*8+dx]==0 for dy in range(16) for dx in range(8)),'?') for col in range(n))
    note=launch('NOTEPAD');g.type('x'*100);position_top(note);resize(note,768,480);until(lambda:row(note,32,94)=='x'*94,'Notepad wide wrapping');g.key('ctrl-s');g.type('wide.txt\n');until(lambda:tree().get('WIDE.TXT')==b'x'*100,'Save after resize');resize(note,640,400);until(lambda:row(note,32,78)=='x'*78,'Notepad shrink wrapping');g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={note} code=0' in log(),'Notepad close')
-   files=launch('FILES');position_top(files);resize(files,768,480);click(40,24+34+80+20*16+8);addr,w,h=current(files);until(lambda:int.from_bytes(mem(addr+((80+20*16)*w+8)*4,4),'little')==0x153e8e,'Files did not expose additional rows');resize(files,640,400);g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={files} code=0' in log(),'Files close')
+   files=launch('FILES');position_top(files);resize(files,768,480);click(40,24+34+80+20*16+8);addr,w,h=current(files);until(lambda:int.from_bytes(mem(addr+((80+20*16)*w+8)*4,4),'little')==0x2b5268,'Files did not expose additional rows');resize(files,640,400);g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={files} code=0' in log(),'Files close')
    term=launch('TERMINAL');position_top(term);g.type('help\nhelp\n');time.sleep(.3);resize(term,656,480);g.type('help\n');time.sleep(.3);addr,w,h=current(term)
    move(8,24+34+29*16+8);button(True);move(48,24+34+29*16+8);button(False);until(lambda:int.from_bytes(mem(addr+29*16*w*4,4),'little')==0x0000aa,'Terminal last-row selection did not render');g.key('ctrl-shift-c');resize(term,656,400);g.type('echo resized\n');time.sleep(.2)
    g.call('screendump',{'filename':str(out/'resize-terminal.png'),'format':'png'});g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={term} code=0' in log(),'Terminal close');click(*SHELL_BUTTON);g.wait_for('Desktop finished.');assert frames()==baseline,'Resize leaked frames';g.command('cat wide.txt','x'*60)

@@ -64,7 +64,7 @@ def main():
     x,y=rect(pid);return x+8,y+34
    def tree():return inspect_tree(image,2048)[0]
    def chosen(pid,row):
-    addr,w,h=window(pid);return int.from_bytes(mem(addr+((80+row*16)*w+8)*4,4),'little')==0x153e8e
+    addr,w,h=window(pid);return int.from_bytes(mem(addr+((80+row*16)*w+8)*4,4),'little')==0x2b5268
    def modifier(name,down):g.call('input-send-event',{'events':[{'type':'key','data':{'down':down,'key':{'type':'qcode','data':name}}}]});time.sleep(.08)
    def right(x,y):
     move(x,y)
@@ -107,13 +107,15 @@ def main():
    g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={note} code=0' in log(),'Notepad close')
    files=launch('FILES');old=placement(files);assert toggle(files)==(0,0,800,544,True);assert current(files)[1:]==(792,512)
    # Row twenty is newly visible in the expanded client.
-   click(4+40,28+80+20*16+8);addr,w,h=current(files);until(lambda:int.from_bytes(mem(addr+((80+20*16)*w+8)*4,4),'little')==0x153e8e,'Maximized Files row input')
+   click(4+40,28+80+20*16+8);addr,w,h=current(files);until(lambda:int.from_bytes(mem(addr+((80+20*16)*w+8)*4,4),'little')==0x2b5268,'Maximized Files row input')
    addr,w,h=current(files)
-   until(lambda:int.from_bytes(mem(addr+(16*w+w-8)*4,4),'little')==0xc4c4c4,'Files toolbar does not fill expanded width')
+   until(lambda:int.from_bytes(mem(addr+(16*w+w-16)*4,4),'little')==0xe6edf2,'Files toolbar does not fill expanded width')
    g.call('screendump',{'filename':str(out/'maximize-files.png'),'format':'png'})
    assert toggle(files)==old
    assert toggle(files)==(0,0,800,544,True)
-   click(4+w-20,28+16);until(lambda:f'Scheduler: exit pid={files} code=0' in log(),'Expanded Files Quit button hit target')
+   addr,w,h=current(files)
+   click(4+w-20,28+16);until(lambda:int.from_bytes(mem(addr+(32*w+w-176)*4,4),'little')==0x94aabb,'Expanded Files More menu hit target')
+   g.key('esc');click(784,12);until(lambda:f'Scheduler: exit pid={files} code=0' in log(),'Expanded Files title close hit target')
    term=launch('TERMINAL');old=placement(term);g.type('echo normal\n');assert toggle(term)==(0,0,800,544,True);assert current(term)[1:]==(792,512),'Terminal client did not expand with the frame'
    until(lambda:pixel(5,535)==0 and pixel(770,535)==0,'Maximized client must reach within four pixels of the screen edges')
    addr,w,h=current(term)

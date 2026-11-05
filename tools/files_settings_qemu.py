@@ -58,7 +58,7 @@ def main():
     x,y=rect(pid);return x+8,y+34
    def tree():return inspect_tree(image,2048)[0]
    def chosen(pid,row):
-    addr,w,h=window(pid);return int.from_bytes(mem(addr+((80+row*16)*w+8)*4,4),'little')==0x153e8e
+    addr,w,h=window(pid);return int.from_bytes(mem(addr+((80+row*16)*w+8)*4,4),'little')==0x2b5268
    def modifier(name,down):g.call('input-send-event',{'events':[{'type':'key','data':{'down':down,'key':{'type':'qcode','data':name}}}]});time.sleep(.08)
    def right(x,y):
     move(x,y)

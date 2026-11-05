@@ -555,9 +555,10 @@ pub(crate) fn app_scene(state:&crate::app_window_ui::State,title:&[u8],surface:&
 pub(crate) struct WindowView<'a> {pub ui:crate::app_window_ui::State,pub title:&'a[u8],pub pixels:&'a[u32],pub io_blocks:Option<u32>}
 fn modern_window(c:&mut Canvas<'_>,view:&WindowView<'_>) {
     let s=&view.ui;let r=s.window.rect;let bar=s.title();
-    c.rect(r.x+3,r.y+3,r.w,r.h,0x122333);c.rect(r.x,r.y,r.w,r.h,0x8198ac);c.rect(r.x+1,r.y+1,r.w-2,r.h-2,0xe4ecf3);
+    c.rect(r.x+3,r.y+3,r.w,r.h,0x122333);c.rect(r.x,r.y,r.w,r.h,crate::desktop_paint::BORDER);c.rect(r.x+1,r.y+1,r.w-2,r.h-2,crate::desktop_paint::PANEL);
     let title=if s.focused {crate::theme::get().title}else{0x536c80};c.rect(bar.x,bar.y,bar.w,bar.h,title);draw_title(c,s,view.title,view.io_blocks);
     let ink=crate::theme_model::ink(title);
+    if s.focused {c.rect(bar.x,bar.y+bar.h-1,bar.w,1,crate::desktop_paint::ACCENT);}
     if s.minimizable {let b=s.minimize_button();if s.minimize_pressed(){c.rect(b.x,b.y,b.w,b.h,0x3b708e);}c.rect(b.x+4,b.y+12,10,2,ink);}
     if s.limits.is_some() {let b=s.maximize_button();if s.maximize_pressed(){c.rect(b.x,b.y,b.w,b.h,0x3b708e);}if s.is_maximized(){c.rect(b.x+7,b.y+4,8,8,ink);c.rect(b.x+8,b.y+6,6,5,title);}c.rect(b.x+4,b.y+6,9,8,ink);c.rect(b.x+5,b.y+8,7,5,title);}
     let b=s.window.close();if s.close_pressed(){c.rect(b.x,b.y,b.w,b.h,0xa54242);}c.line((b.x+5,b.y+5),(b.x+12,b.y+12),ink);c.line((b.x+12,b.y+5),(b.x+5,b.y+12),ink);

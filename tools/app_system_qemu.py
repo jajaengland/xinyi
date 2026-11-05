@@ -48,7 +48,7 @@ def main():
             def mem(address,n):
                 f=d/'memory.bin';g.call('human-monitor-command',{'command-line':f'pmemsave {address:#x} {n} "{f.as_posix()}"'});return f.read_bytes()
             def text(pid,y,length=78):
-                addr,w,_,_,_=window(pid);pixels=array('I');pixels.frombytes(mem(addr+y*w*4,w*16*4));fg=0xffffff if pixels[8]==0x153e8e else 0
+                addr,w,_,_,_=window(pid);pixels=array('I');pixels.frombytes(mem(addr+y*w*4,w*16*4));fg=0xffffff if pixels[8]==0x2b5268 else 0
                 return ''.join(glyphs.get(bytes(pixels[dy*w+8+col*8+dx]==fg for dy in range(16) for dx in range(8)),'?') for col in range(length)).rstrip()
             def open_file(name):
                 until(lambda:any(text(files,80+i*16,12)==name for i in range(8)),'file list '+name)
