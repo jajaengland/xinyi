@@ -2,6 +2,9 @@
 use super::{app_manifest::{self,Manifest},directory,files};
 pub const NO_HANDLER:i32=-2;
 pub const AMBIGUOUS:i32=-17;
+// Match the launcher's app capacity, with a separate bound for non-app directory entries.
+const MAX_CANDIDATES:usize=64;
+const MAX_ENTRIES:u16=256;
 pub fn open(path:&[u8],volume:u32)->i32 {
     if super::permissions::current()&super::permissions::LAUNCH as i32==0 {return -13;}
     if path.is_empty()||path.len()>105||!path.iter().all(|b|(33..=126).contains(b)) {return -22;}
@@ -31,7 +34,7 @@ pub fn open(path:&[u8],volume:u32)->i32 {
                 executable[6..6+name.len()].copy_from_slice(name);executable_len=6+name.len();
             }
             let leaf=executable[..executable_len].rsplit(|b|*b==b'/').next().unwrap();
-            candidates+=1;if candidates>16 {return -27;}
+            candidates+=1;if candidates>MAX_CANDIDATES {return -27;}
 
             let mut manifest_path=[0;30];let length=app_manifest::sidecar(&executable[..executable_len],&mut manifest_path).unwrap();
             let mut bytes=[0;app_manifest::MAX_BYTES];let count=files::stream_size_on(&manifest_path[..length],volume);
@@ -45,7 +48,7 @@ pub fn open(path:&[u8],volume:u32)->i32 {
                 selected=Some((manifest,executable,executable_len));
             }
         }
-        offset+=list.count as u16;if offset as u32>=list.total {break;}if list.count==0||offset>=64 {return -27;}
+        offset+=list.count as u16;if offset as u32>=list.total {break;}if list.count==0||offset>=MAX_ENTRIES {return -27;}
     }
     let Some((manifest,executable,executable_len))=selected else {return NO_HANDLER;};
     let mut command=[0;128];let prefix=manifest.access.prefix();

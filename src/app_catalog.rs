@@ -1,7 +1,8 @@
 // Bounded filesystem launcher catalog; names, not embedded application code.
-pub const MAX_APPS: usize = 16;
+pub const MAX_APPS: usize = 64;
 #[derive(Clone, Copy)]
 pub struct Entry {
+    pub version:u32,
     pub label: [u8; 8],
     pub label_len: usize,
     pub path: [u8; 30],
@@ -16,6 +17,7 @@ impl Entry {
         self.description_len=description.len().min(64);self.description[..self.description_len].copy_from_slice(&description[..self.description_len]);self.icon=icon.min(7);
     }
     const EMPTY: Self = Self {
+        version:0,
         label: [0; 8],
         label_len: 0,
         path: [0; 30],
@@ -27,6 +29,15 @@ pub struct Catalog {
     pub entries: [Entry; MAX_APPS],
     pub len: usize,
     pub truncated: bool,
+}
+// Large catalogues belong in owned kernel pages, rather than nested syscall/
+// scheduler stack frames. Zero is a valid empty representation of every field.
+#[cfg(not(test))]
+pub struct Storage { frames: crate::loader::Frames }
+#[cfg(not(test))]
+impl Storage {
+    pub fn new()->Option<Self> {Some(Self {frames:crate::loader::Frames::new(core::mem::size_of::<Catalog>().div_ceil(4096))?})}
+    pub fn catalog(&mut self)->&mut Catalog {unsafe {&mut *(self.frames.base() as *mut Catalog)}}
 }
 impl Catalog {
     pub const fn new() -> Self {

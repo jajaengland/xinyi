@@ -78,6 +78,40 @@ fn main() -> u32 {
         xinyi::print("Heap cap checks passed!\n");
         return 0;
     }
+    if mode == b"bounds" {
+        // Exercise the syscall checks, rather than dereferencing rejected pointers.
+        assert_eq!(xinyi::heap::program_break(0x40102000), Ok(0x40102000));
+        unsafe { core::ptr::write_bytes(0x40100000 as *mut u8, b'x', 8192); }
+        assert_eq!(xinyi::clipboard_set(b"sentinel"), 8);
+        for (pointer, length) in [
+            (0, 1), (0x100000, 1), (0xfffffff0, 32),
+            (0x403fbfff, 2), (0x403fffff, 2), (0x40400000, 1),
+            (0x40101fff, 2), (0x40200000, 1),
+        ] {
+            assert_eq!(xinyi::syscall(4, 1, pointer, length), -14);
+            assert_eq!(xinyi::syscall(67, pointer, length, 0), -14);
+        }
+        assert_eq!(xinyi::syscall(4, 1, 0x40100000, 1025), -22);
+        assert_eq!(xinyi::syscall(4, 1, u32::MAX, 0), 0);
+        assert_eq!(xinyi::syscall(68, 0x40000000, 1024, 0), -14);
+        assert_eq!(xinyi::syscall(68, 0x403ffffc, 1024, 0), -14);
+        // Logical heap limits apply even within a still-mapped physical page.
+        assert_eq!(xinyi::heap::program_break(0x40100011), Ok(0x40100011));
+        assert_eq!(xinyi::syscall(67, 0x40100010, 2, 0), -14);
+        assert_eq!(xinyi::syscall(68, 0x4010000a, 1024, 0), -14);
+        for i in 0..17 {
+            assert_eq!(unsafe { ((0x40100000 + i) as *const u8).read_volatile() }, b'x');
+        }
+        // Valid copy remains usable and rejected sets preserved the old clipboard.
+        assert_eq!(xinyi::syscall(68, 0x40100009, 1024, 0), 8);
+        assert_eq!(unsafe { core::slice::from_raw_parts(0x40100009 as *const u8, 8) }, b"sentinel");
+        assert_eq!(xinyi::heap::program_break(0x40100000), Ok(0x40100000));
+        assert_eq!(xinyi::syscall(4, 1, 0x40100000, 1), -14);
+        assert_eq!(xinyi::syscall(68, 0x40100000, 1024, 0), -14);
+        assert_eq!(xinyi::clipboard_set(b""), 0);
+        xinyi::print("Syscall boundary checks passed!\n");
+        return 0;
+    }
     let mut bytes = Vec::new();
     bytes.resize(32768, pid as u8);
     let mut words = Vec::new();

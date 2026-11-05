@@ -22,6 +22,7 @@ def main():
     parser.add_argument('--vga', default='std')
     parser.add_argument('--usb', action='store_true')
     parser.add_argument('--native', action='store_true', help='Use native IDE instead of firmware storage')
+    parser.add_argument('--termination-only', action='store_true', help='Seed two source files offline and run only owner-termination/volume checks')
     args = parser.parse_args()
     output = ROOT / 'target/smoke'
     output.mkdir(exist_ok=True)
@@ -36,6 +37,16 @@ def main():
                         '--output', str(package / 'apps/iocheck.elf')], check=True)
         (package / 'applications.json').write_text(json.dumps([{'name': 'iocheck', 'file': 'IOCHECK.ELF'}]))
         seed_apps(image, package)
+        source_names = ['A', 'B'] if args.usb or args.termination_only else list('ABCDEFGH')
+        expected = bytes(index % 95 + 32 for index in range(65536))
+        if args.termination_only:
+            source = directory / 'source'
+            (source / 'apps/nest').mkdir(parents=True)
+            for name in source_names:
+                (source / ('apps/nest/' + name.lower() + '.bin')).write_bytes(expected)
+            (source / 'applications.json').write_text(json.dumps([
+                {'directory': 'NEST', 'file': name + '.BIN'} for name in source_names]))
+            seed_apps(image, source, root_name='SOURCE')
         extra = ['-vga', args.vga]
         if args.usb:
             extra += ['-drive', f'if=none,id=stick,file={image.as_posix()},format=raw',
@@ -47,7 +58,7 @@ def main():
             def log(): return (directory / 'debug.log').read_text()
 
             def until(predicate, message, timeout=None):
-                if timeout is None: timeout = 300 if args.usb else 90
+                if timeout is None: timeout = 300
                 deadline = time.monotonic() + timeout
                 while True:
                     try:
@@ -81,7 +92,7 @@ def main():
                 guest.key('ctrl-esc'); guest.key('home')
                 for _ in range(names.index(name)): guest.key('down')
                 guest.key('ret')
-                pattern = r'Desktop: launch pid=(\d+) path=/APPS/' + name + r'\.(BIN|ELF)'
+                pattern = r'Desktop: launch pid=(\d+) path=/APPS/(?:[A-Z0-9_]+/)?' + name + r'\.(BIN|ELF)'
                 until(lambda: re.search(pattern, log()[start:]), 'Launch ' + name)
                 pid = int(re.search(pattern, log()[start:])[1])
                 until(lambda: f'Multiwindow: open pid={pid} ' in log(), 'Open ' + name)
@@ -148,50 +159,50 @@ def main():
             idle_rate=(count()-idle_count)/(time.monotonic()-idle_start)
             assert 8<=idle_rate<=12, ('Idle timer drift',idle_rate)
 
-            task(pad); guest.type('before'); guest.key('ctrl-s'); guest.type('note.txt\n')
-            until(lambda: tree().get('NOTE.TXT') == b'before', 'Initial editor save')
-            task(probe)
-            start = len(log()); guest.key('v' if args.usb else 'w')
-            until(lambda: f'Disk I/O: start pid={probe} nr=89' in log()[start:], 'Queued large save did not start')
-            pointer, cw, ch, _, _ = window(counter)
-            before = memory(pointer, cw*ch*4)
-            guest.key('alt-shift-tab'); guest.key('alt-shift-tab')
-            guest.type(' during'); guest.key('ctrl-s')
-            guest.key('alt-tab'); guest.type('echo live')
-            until(lambda: 'echo live' in screen(), 'Terminal did not render typed input during I/O')
-            assert status() == 0xaa0000, 'Save workload ended before the concurrency assertion'
-            assert memory(pointer, cw*ch*4) != before, 'Counter stopped during disk operations'
-            guest.key('ret')
-            until(lambda: '\nlive\n' in screen(), 'Non-disk terminal command stalled during I/O')
-            assert status() == 0xaa0000, 'Workload ended before the live command check'
-            until(lambda: status() == 0x00aa00, 'Large saves did not finish')
-            until(lambda: tree().get('NOTE.TXT') == b'before during', 'Queued second-app save lost data')
-            until(lambda: '\nlive\n' in screen(), 'Deferred terminal command did not finish')
-            expected = bytes(index % 95 + 32 for index in range(65536))
-            assert tree()['SOURCE/NEST/A.BIN'] == expected
-            task(probe); guest.key('r')
-            until(lambda: status() == 0x7755aa, 'Queued read/error/buffer checks failed')
-            copy_start=time.monotonic();copy_count=count()
-            start = len(log()); guest.key('c')
-            until(lambda: f'Disk I/O: start pid={probe} nr=81' in log()[start:], 'Recursive copy did not start')
-            task(pad)
-            _, _, _, x, y = window(pad)
-            move(x+100, y+15); button(True); move(x+70, y-5); button(False)
-            guest.type(' copy'); guest.key('ctrl-s')
-            assert status() == 0x0000aa, 'Copy workload ended before the drag/input check'
-            guest.key('alt-tab'); guest.type('touch waited.txt\n')
-            until(lambda: 'Waiting for disk...' in screen(), 'Filesystem shell command did not wait for the worker')
-            guest.key('alt-shift-tab')
-            until(lambda: f'Multiwindow: restored pid={pad} pos={x-30},{y-20}' in log(), 'Dragging failed during the copy')
-            until(lambda: status() == 0x00aaaa, 'Recursive copy did not finish')
-            copy_rate=(count()-copy_count)/(time.monotonic()-copy_start)
-            assert 8<=copy_rate<=12 and .8<=copy_rate/idle_rate<=1.25, ('Copying changed timer speed',idle_rate,copy_rate)
-            print(f'PASS timer rate: idle={idle_rate:.2f}/s copying={copy_rate:.2f}/s',flush=True)
-            until(lambda: tree().get('NOTE.TXT') == b'before during copy', 'Editor input during copy was lost')
-            until(lambda: 'WAITED.TXT' in tree(), 'Deferred shell operation did not run')
-            contents = tree()
-            for name in (['A', 'B'] if args.usb else ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']):
-                assert contents['DEST/NEST/' + name + '.BIN'] == expected
+            if not args.termination_only:
+                task(pad); guest.type('before'); guest.key('ctrl-s'); guest.type('note.txt\n')
+                until(lambda: tree().get('NOTE.TXT') == b'before', 'Initial editor save')
+                task(probe)
+                start = len(log()); guest.key('v' if args.usb else 'w')
+                until(lambda: f'Disk I/O: start pid={probe} nr=89' in log()[start:], 'Queued large save did not start')
+                pointer, cw, ch, _, _ = window(counter)
+                before = memory(pointer, cw*ch*4)
+                guest.key('alt-shift-tab'); guest.key('alt-shift-tab')
+                guest.type(' during'); guest.key('ctrl-s')
+                guest.key('alt-tab'); guest.type('echo live')
+                until(lambda: 'echo live' in screen(), 'Terminal did not render typed input during I/O')
+                assert status() == 0xaa0000, 'Save workload ended before the concurrency assertion'
+                assert memory(pointer, cw*ch*4) != before, 'Counter stopped during disk operations'
+                guest.key('ret')
+                until(lambda: '\nlive\n' in screen(), 'Non-disk terminal command stalled during I/O')
+                assert status() == 0xaa0000, 'Workload ended before the live command check'
+                until(lambda: status() == 0x00aa00, 'Large saves did not finish')
+                until(lambda: tree().get('NOTE.TXT') == b'before during', 'Queued second-app save lost data')
+                until(lambda: '\nlive\n' in screen(), 'Deferred terminal command did not finish')
+                assert tree()['SOURCE/NEST/A.BIN'] == expected
+                task(probe); guest.key('r')
+                until(lambda: status() == 0x7755aa, 'Queued read/error/buffer checks failed')
+                copy_start=time.monotonic();copy_count=count()
+                start = len(log()); guest.key('c')
+                until(lambda: f'Disk I/O: start pid={probe} nr=81' in log()[start:], 'Recursive copy did not start')
+                task(pad)
+                _, _, _, x, y = window(pad)
+                move(x+100, y+15); button(True); move(x+70, y-5); button(False)
+                guest.type(' copy'); guest.key('ctrl-s')
+                assert status() == 0x0000aa, 'Copy workload ended before the drag/input check'
+                guest.key('alt-tab'); guest.type('touch waited.txt\n')
+                until(lambda: 'Waiting for disk...' in screen(), 'Filesystem shell command did not wait for the worker')
+                guest.key('alt-shift-tab')
+                until(lambda: f'Multiwindow: restored pid={pad} pos={x-30},{y-20}' in log(), 'Dragging failed during the copy')
+                until(lambda: status() == 0x00aaaa, 'Recursive copy did not finish')
+                copy_rate=(count()-copy_count)/(time.monotonic()-copy_start)
+                assert 8<=copy_rate<=12 and .8<=copy_rate/idle_rate<=1.25, ('Copying changed timer speed',idle_rate,copy_rate)
+                print(f'PASS timer rate: idle={idle_rate:.2f}/s copying={copy_rate:.2f}/s',flush=True)
+                until(lambda: tree().get('NOTE.TXT') == b'before during copy', 'Editor input during copy was lost')
+                until(lambda: 'WAITED.TXT' in tree(), 'Deferred shell operation did not run')
+                contents = tree()
+                for name in source_names:
+                    assert contents['DEST/NEST/' + name + '.BIN'] == expected
             # Leave a legacy write queued behind an active copy. A deferred
             # unmount changes the epoch before that write may start.
             task(pad); guest.key('alt-f4')
@@ -199,6 +210,26 @@ def main():
             until(lambda: task_pids()==[counter,terminal,probe,0], 'Taskbar did not compact after closing the middle app')
             secondary = launch('IOCHECK')
             until(lambda: task_pids()==[counter,terminal,probe,secondary], 'New app was not appended to the taskbar')
+            # Kill a queued owner while another app still owns the worker.
+            # Its user pointers must never be used after process reclamation.
+            task(probe); queued_start = len(log()); guest.key('d')
+            until(lambda: f'Disk I/O: start pid={probe} nr=81' in log()[queued_start:], 'Cancellation copy did not start')
+            live_count = count()
+            task(secondary); guest.key('j')
+            until(lambda: f'Disk I/O: queued pid={secondary} nr=58' in log()[queued_start:], 'Secondary write was not queued')
+            guest.key('ctrl-alt-k')
+            until(lambda: f'Scheduler: forced exit pid={secondary}' in log()[queued_start:], 'Queued owner was not terminated')
+            section = log()[queued_start:]
+            assert f'Disk I/O: done pid={probe}' not in section, 'Active copy ended before queued-owner termination'
+            assert f'Disk I/O: start pid={secondary}' not in section, 'Killed queued request reached worker'
+            until(lambda: status() == 0x00aaaa, 'Copy stalled after killing queued owner')
+            assert count() > live_count, 'Counter stopped during queued-owner termination'
+            assert 'PENDING.TXT' not in tree(), 'Killed queued write changed disk'
+            assert f'Disk I/O: start pid={secondary}' not in log()[queued_start:], 'Dead process request ran later'
+            for name in source_names:
+                assert tree()['CANCEL/NEST/' + name + '.BIN'] == expected
+            secondary = launch('IOCHECK')
+            until(lambda: task_pids()==[counter,terminal,probe,secondary], 'Replacement did not reuse free task slot')
             secondary_pointer, sw, _, _, _ = window(secondary)
             task(terminal); guest.type('unmount')
             task(probe); start = len(log()); guest.key('k')
@@ -214,7 +245,7 @@ def main():
             assert 'STALE.TXT' not in tree()
             guest.type('mount\n')
             until(lambda: 'Mounted FAT16' in screen(), 'Remount after stale request')
-            for name in (['A', 'B'] if args.usb else ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']):
+            for name in source_names:
                 assert tree()['FINISH/NEST/' + name + '.BIN'] == expected
             section = log()[start:]
             assert section.index(f'Disk I/O: done pid={probe}') < section.index(f'Scheduler: forced exit pid={probe}')
@@ -238,8 +269,12 @@ def main():
             until(lambda: f'Scheduler: exit pid={terminal} code=0' in log(), 'Terminal close')
             click(*SHELL_BUTTON); guest.wait_for('Desktop finished.')
             assert frames() == baseline, 'Queued I/O leaked frames'
+            assert 'Scheduler: fault' not in log() and 'Xinyi panic:' not in log(), 'Unexpected process/kernel fault'
+            if args.termination_only:
+                print('PASS owner termination: queued request cancelled before execution, active operation completes before reclamation, Counter progress, slot reuse, stale volume rejection, exact data and frame balance', flush=True)
+                return
             print(('PASS queued I/O (' + ('native IDE' if args.native else 'BIOS USB' if args.usb else 'BIOS IDE') + '):') + ' steady timer rate, compact taskbar/click targets, live counter/editor/terminal, dragging and focus during writes/copies, '
-                  'serialized queued saves, read/error validation, deferred termination, queued volume invalidation, exact file contents and frame balance', flush=True)
+                  'serialized queued saves, read/error validation, queued-owner cancellation, deferred active-owner termination, queued volume invalidation, exact file contents and frame balance', flush=True)
         finally:
             guest.call('screendump', {'filename': str(output / 'io-last.png'), 'format': 'png'})
             guest.close()

@@ -5,3 +5,4 @@ description=Application memory demo
 icon=application
 access=trusted
 handles=
+version=1

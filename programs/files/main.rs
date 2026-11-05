@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 mod selection;
+mod browser;
+use browser::{Favorites, History, Sort, View};
 #[path = "../../sdk/xinyi.rs"]
 mod xinyi;
 use selection::Selection;
@@ -11,9 +13,22 @@ use xinyi::{
     window::{self, Draw},
 };
 struct Files {
+    handle: u32,
+    view: View,
+    favorites: Favorites,
+    favorite_focus: usize,
+    transfer_total: u16,
+    transfer_done: u16,
     width: u32,
     height: u32,
     list: Listing,
+    sort: Sort,
+    cached: usize,
+    history: History,
+    name_end: u32,
+    type_end: u32,
+    column_drag: Option<u8>,
+    property: Option<directory::Entry>,
     offset: u16,
     selection: Selection,
     path: [u8; 105],
@@ -64,11 +79,13 @@ impl Files {
         self.width / 9
     }
     fn page(&self) -> u16 {
-        ((self.height - 112) / 16) as u16
+        self.view.layout(self.width,self.height).3.max(1)
     }
     fn resize(&mut self, w: u32, e: window::Event) {
         if window::resize(w, e) == 0 {
             self.width = e.x as u32;
+            self.name_end = self.name_end.min(self.width - 200);
+            self.type_end = self.type_end.min(self.width - 104).max(self.name_end + 80);
             self.height = e.y as u32;
             self.menu = None;
             self.hover = None;
@@ -76,13 +93,80 @@ impl Files {
             self.refresh();
         }
     }
+    fn item_at(&self,x:i32,y:i32)->Option<usize> {self.view.hit(self.width,self.height,x,y,self.rows())}
+    fn set_view(&mut self,view:View) {
+        self.view=view;self.menu=None;self.press=None;self.column_drag=None;self.last=usize::MAX;
+        self.offset=self.selection.focus.unwrap_or(self.offset)/self.page()*self.page();
+        self.refresh();self.status=b"Ctrl+1 Details | Ctrl+2 Compact | Ctrl+3 Icons | Ctrl+D favourite | Ctrl+B Places";
+    }
+    fn load_favorites(&mut self)->bool {
+        if self.volume!=directory::volume() {self.status=error(-116);return false;}
+        let mut data=[0;1024];let n=xinyi::read_file(b"/FAVS.CFG",&mut data);
+        if n == -2 {self.favorites=Favorites::new();return true;}
+        if n<0 {self.status=error(n);return false;}
+        if self.volume!=directory::volume() {self.status=error(-116);return false;}
+        match Favorites::decode(&data[..n as usize]) {
+            Some(f)=>{self.favorites=f;true},
+            None=>{self.status=b"FAVS.CFG is invalid. It has been preserved.";false}
+        }
+    }
+    fn toggle_favorite(&mut self) {
+        if !self.load_favorites() {return;}
+        let mut next=self.favorites;
+        let added=match next.toggle(&self.path[..self.length]) {Ok(added)=>added,Err(())=>{self.status=b"Places holds eight folders. Remove one with Ctrl+D in that folder.";return;}};
+        let mut data=[0;1024];let n=next.encode(&mut data);
+        let result=xinyi::files::save_on(b"/FAVS.CFG",&data[..n],self.volume);
+        if result<0 {self.status=error(result);return;}
+        self.favorites=next;
+        self.status=if added {b"Favourite saved. Open Places or press Ctrl+B."}else{b"Favourite removed."};
+        self.refresh();
+    }
+    fn open_favorite(&mut self) {
+        if self.volume!=directory::volume() {self.mode=0;self.refresh();self.status=error(-116);return;}
+        if self.favorite_focus<self.favorites.count {
+            let path=self.favorites.paths[self.favorite_focus];let n=self.favorites.lengths[self.favorite_focus] as usize;
+            self.mode=0;self.navigate(&path[..n]);
+        }
+    }
+    fn transfer_progress(&self,name:&[u8]) {
+        self.paint(self.handle);
+        let mut number=[b'0';5];let mut total=[b'0';5];
+        let mut done=self.transfer_done;let mut all=self.transfer_total;
+        for i in (0..5).rev() {number[i]+= (done%10) as u8;done/=10;total[i]+=(all%10) as u8;all/=10;}
+        let a=number.iter().position(|&c|c!=b'0').unwrap_or(4);let b=total.iter().position(|&c|c!=b'0').unwrap_or(4);
+        let bar=self.width-96;let fill=bar*self.transfer_done as u32/(self.transfer_total as u32).max(1);
+        window::draw(self.handle,&[
+            Draw::rect(24,112,self.width-48,160,0xc4c4c4),
+            Draw::text(40,128,0,if self.pending.cut!=0 {b"Moving items"}else{b"Copying items"}),
+            Draw::text(40,160,0,b"Completed:"),Draw::text(136,160,0,&number[a..]),Draw::text(184,160,0,b"of"),Draw::text(216,160,0,&total[b..]),
+            Draw::text(40,192,0,&name[name.len().saturating_sub(68)..]),
+            Draw::rect(40,224,bar,12,0x888888),Draw::rect(40,224,fill,12,0x238a60),
+            Draw::text(40,248,0,b"Current item is in progress; I/O in the title shows disk activity."),
+        ]);window::present(self.handle);
+    }
     fn rows(&self) -> usize {
         (self.list.count as usize).min(self.page() as usize)
     }
     fn refresh(&mut self) {
         self.last = usize::MAX;
         let volume = directory::volume();
-        let n = directory::list(b".", self.offset, &mut self.list);
+        if self.volume != 0 && self.volume != volume {
+            self.history = History::new();
+            self.selection.clear();
+        }
+        let mut n = if self.sort.column == 0 {
+            if self.cached != 0 { xinyi::syscall(87, 0x40100000, 0, 0); }
+            self.cached = 0;
+            directory::list(b".", self.offset, &mut self.list)
+        } else { self.sorted_page() };
+        if n < 0 && self.sort.column != 0 {
+            self.sort = Sort::default();
+            self.cached = 0;
+            xinyi::syscall(87, 0x40100000, 0, 0);
+            self.selection.clear();
+            self.status = b"Sort unavailable. Showing original disk order; click a heading to retry.";
+            n = directory::list(b".", self.offset, &mut self.list);
+        }
         if n < 0 {
             self.list = Listing::new();
             self.status = error(n);
@@ -100,7 +184,74 @@ impl Files {
             self.status = error(-116);
         } else {
             self.volume = volume;
+            if self.history.count == 0 { self.history.record(&self.path[..self.length]); }
         }
+    }
+    fn sorted_page(&mut self) -> i32 {
+        let mut page = Listing::new();
+        let result = directory::list(b".", 0, &mut page);
+        if result < 0 { return result; }
+        let total = page.total as usize;
+        let bytes = match total.checked_mul(core::mem::size_of::<directory::Entry>()) {
+            Some(n) if n <= 1024 * 1024 && total <= u16::MAX as usize => n,
+            _ => return -12,
+        };
+        self.cached = 0;
+        let result = xinyi::syscall(87, 0x40100000 + bytes as u32, 0, 0);
+        if result < 0 { return result; }
+        let entries = unsafe { core::slice::from_raw_parts_mut(0x40100000 as *mut directory::Entry, total) };
+        let mut at = 0;
+        while at < total {
+            if at != 0 {
+                let n = directory::list(b".", at as u16, &mut page);
+                if n < 0 { return n; }
+            }
+            if page.total as usize != total || page.count == 0 || page.count as usize > total - at { return -116; }
+            let count = page.count as usize;
+            entries[at..at + count].copy_from_slice(&page.entries[..count]);
+            at += count;
+        }
+        let sort = self.sort;
+        entries.sort_unstable_by(|a,b| sort.compare((&a.name[..a.length as usize],a.flags,a.size), (&b.name[..b.length as usize],b.flags,b.size)));
+        self.cached = total;
+        self.list = Listing::new();
+        self.list.total = total as u32;
+        let start = (self.offset as usize).min(total);
+        let count = (total - start).min(32);
+        self.list.entries[..count].copy_from_slice(&entries[start..start + count]);
+        self.list.count = count as u32;
+        0
+    }
+    fn read_selection_page(&self, offset: u16, page: &mut Listing) -> i32 {
+        if self.sort.column == 0 { return directory::list(b".", offset, page); }
+        let start = (offset as usize).min(self.cached);
+        let count = (self.cached - start).min(32);
+        *page = Listing::new();
+        page.total = self.cached as u32;
+        page.count = count as u32;
+        let entries = unsafe { core::slice::from_raw_parts(0x40100000 as *const directory::Entry, self.cached) };
+        page.entries[..count].copy_from_slice(&entries[start..start + count]);
+        0
+    }
+    fn history_go(&mut self, forward: bool) {
+        if self.volume != directory::volume() { self.refresh(); self.status = error(-116); return; }
+        if let Some(index) = self.history.target(forward) {
+            let path = self.history.paths[index];
+            let n = directory::cd(&path[..self.history.lengths[index]]);
+            if n < 0 { self.status = error(n); return; }
+            self.history.cursor = index;
+            self.offset = 0;
+            self.selection.clear();
+            self.refresh();
+            self.status = b"History folder opened.";
+        }
+    }
+    fn choose_sort(&mut self, column: u8) {
+        self.sort.choose(column);
+        self.offset = 0;
+        self.selection.clear();
+        self.status = b"Sorted across the whole folder. Click the heading to reverse.";
+        self.refresh();
     }
     fn navigate(&mut self, name: &[u8]) {
         let n = directory::cd(name);
@@ -111,6 +262,7 @@ impl Files {
             self.selection.clear();
             self.status = b"Folder opened.";
             self.refresh();
+            self.history.record(&self.path[..self.length]);
             if self.list.total == 0 {
                 xinyi::sounds::play(xinyi::sounds::Event::Empty);
             }
@@ -169,7 +321,7 @@ impl Files {
                 return;
             }
             let mut page = Listing::new();
-            let n = directory::list(b".", a, &mut page);
+            let n = self.read_selection_page(a, &mut page);
             if n < 0 {
                 self.status = error(n);
                 return;
@@ -254,6 +406,7 @@ impl Files {
             return;
         }
         self.selection.clear();
+        self.transfer_total=self.pending.count;self.transfer_done=0;
         self.paste_next(None);
     }
     fn paste_next(&mut self, renamed: Option<&[u8]>) {
@@ -285,6 +438,7 @@ impl Files {
                 destination[self.destination_len + extra..len].copy_from_slice(name);
                 &destination[..len]
             };
+            self.transfer_progress(&path[..n]);
             let result = directory::transfer_on(
                 &path[..n],
                 dest,
@@ -312,6 +466,7 @@ impl Files {
                 self.pending.flags[i - 1] = self.pending.flags[i];
             }
             self.pending.count -= 1;
+            self.transfer_done+=1;
             if self.pending.cut != 0 && !self.drop_batch {
                 let n = file_clipboard::update(&self.pending);
                 if n < 0 {
@@ -382,9 +537,8 @@ impl Files {
         }
         self.destination = self.path;
         self.destination_len = self.length;
-        if e.y >= 80 {
-            let row = (e.y - 80) as usize / 16;
-            if row < self.rows() && self.list.entries[row].flags & 1 != 0 {
+        if let Some(row) = self.item_at(e.x,e.y) {
+            if self.list.entries[row].flags & 1 != 0 {
                 let item = self.list.entries[row];
                 let n = item.length as usize;
                 let extra = usize::from(self.destination_len > 1);
@@ -415,6 +569,7 @@ impl Files {
             return;
         }
         self.selection.clear();
+        self.transfer_total=self.pending.count;self.transfer_done=0;
         self.paste_next(None);
     }
     fn delete(&mut self) {
@@ -436,20 +591,22 @@ impl Files {
         self.selection.clear();
         self.refresh();
     }
-    fn manage_app(&mut self, remove: bool) {
+    fn manage_app(&mut self, operation: u16) {
         if self.selection.count != 1 || self.selection.flags[0] & 1 == 0 {
             self.status = b"Select one application folder.";
             return;
         }
         let name = self.selection.names[0];
         let n = self.selection.lengths[0] as usize;
-        let result = directory::app_action(&name[..n], remove as u16, self.volume);
+        let result = directory::app_action(&name[..n], operation, self.volume);
         self.status = if result < 0 {
             error(result)
         } else {
             xinyi::sounds::play(xinyi::sounds::Event::Complete);
-            if remove {
+            if operation == 1 {
                 b"App removed. Your documents are unchanged."
+            } else if operation == 2 {
+                b"App updated. Backup kept: use app rollback or app finalize in Terminal."
             } else {
                 b"App installed. Open Apps to launch it."
             }
@@ -491,10 +648,7 @@ impl Files {
                     self.refresh();
                 }
             }
-            8 => {
-                self.quit = true;
-                return true;
-            }
+            8 => self.set_view(match self.view {View::Details=>View::Compact,View::Compact=>View::Icons,View::Icons=>View::Details}),
             9 => {
                 if self.selection.count != 1 {
                     self.status = b"Select one item to rename.";
@@ -506,14 +660,35 @@ impl Files {
             10 => self.stage(false),
             11 => self.stage(true),
             12 => self.paste(),
-            13 | 14 => {
+            13 | 14 | 19 => {
                 if self.selection.count != 1 || self.selection.flags[0] & 1 == 0 {
                     self.status = b"Select one application folder.";
                 } else if n == 14 && !self.path[..self.length].eq_ignore_ascii_case(b"/APPS") {
                     self.status = b"Open /APPS and select an installed app to remove.";
                 } else {
-                    self.mode = if n == 13 { 6 } else { 7 };
+                    self.mode = if n == 13 { 6 } else if n == 19 {10} else { 7 };
                     xinyi::sounds::play(xinyi::sounds::Event::Warning);
+                }
+            }
+            18 => {if self.load_favorites() {self.favorite_focus=0;self.mode=9;}},
+            15 => self.history_go(false),
+            16 => self.history_go(true),
+            17 => {
+                if self.selection.count != 1 { self.status = b"Select one item for properties."; }
+                else if self.volume != directory::volume() { self.status = error(-116); }
+                else {
+                    let name = self.selection.names[0]; let len = self.selection.lengths[0] as usize;
+                    let mut page = Listing::new(); let mut offset = 0;
+                    self.property = None;
+                    loop {
+                        let n = directory::list(b".", offset, &mut page);
+                        if n < 0 { self.status = error(n); break; }
+                        self.property = page.entries[..page.count as usize].iter().find(|e| &e.name[..e.length as usize] == &name[..len]).copied();
+                        if self.property.is_some() { self.mode = 8; break; }
+                        let next = offset as u32 + page.count;
+                        if page.count == 0 || next >= page.total || next > u16::MAX as u32 { self.status = error(-2); break; }
+                        offset = next as u16;
+                    }
                 }
             }
             _ => (),
@@ -531,16 +706,31 @@ impl Files {
             }
             if code == 10 {
                 if let Some(i) = self.hover {
-                    return self.action([1, 9, 10, 11, 12, 4, 5, 13, 14][i]);
+                    return self.action([1, 9, 10, 11, 12, 4, 5, 13, 14, 17, 19][i]);
                 }
             }
             if matches!(code, key::UP | key::DOWN) {
                 self.hover = Some(match (self.hover, code) {
                     (Some(i), key::UP) => i.saturating_sub(1),
-                    (Some(i), _) => (i + 1).min(8),
+                    (Some(i), _) => (i + 1).min(10),
                     _ => 0,
                 });
             }
+            return false;
+        }
+        if self.mode == 9 {
+            match code {
+                27 => self.mode=0,
+                key::UP => self.favorite_focus=self.favorite_focus.saturating_sub(1),
+                key::DOWN => self.favorite_focus=(self.favorite_focus+1).min(self.favorites.count.saturating_sub(1)),
+                10 => self.open_favorite(),
+                49..=56 if ((code-49) as usize)<self.favorites.count => {self.favorite_focus=(code-49) as usize;self.open_favorite();},
+                _=>(),
+            }
+            return false;
+        }
+        if self.mode == 8 {
+            if matches!(code, 27 | 10) { self.mode = 0; }
             return false;
         }
         if self.mode != 0 {
@@ -551,14 +741,14 @@ impl Files {
                 self.status = b"Cancelled. Earlier batch items may have completed.";
                 return false;
             }
-            if matches!(self.mode, 3 | 6 | 7) {
+            if matches!(self.mode, 3 | 6 | 7 | 10) {
                 if matches!(code, 89 | 121) {
                     let mode = self.mode;
                     self.mode = 0;
                     if mode == 3 {
                         self.delete();
                     } else {
-                        self.manage_app(mode == 7);
+                        self.manage_app(if mode==7 {1}else if mode==10 {2}else{0});
                     }
                 } else if matches!(code, 78 | 110) {
                     self.mode = 0;
@@ -609,8 +799,18 @@ impl Files {
             }
             return false;
         }
+        if event & key::ALT != 0 {
+            match code { key::LEFT => self.history_go(false), key::RIGHT => self.history_go(true), 10 => { self.action(17); }, _ => () }
+            return false;
+        }
         if ctrl {
             match code {
+                49 => {self.set_view(View::Details);return false;},
+                50 => {self.set_view(View::Compact);return false;},
+                51 => {self.set_view(View::Icons);return false;},
+                68 | 100 => {self.toggle_favorite();return false;},
+                66 | 98 => {self.action(18);return false;},
+                48 => { self.sort = Sort::default(); self.selection.clear(); self.offset = 0; self.refresh(); return false; },
                 81 | 113 => return true,
                 78 | 110 => return self.action(2),
                 67 | 99 => return self.action(10),
@@ -621,7 +821,7 @@ impl Files {
                         self.status = b"Select at most 32 items at a time.";
                     } else {
                         let mut page = Listing::new();
-                        if directory::list(b".", 0, &mut page) == 0 {
+                        if self.read_selection_page(0, &mut page) == 0 {
                             self.selection.clear();
                             for e in &page.entries[..page.count as usize] {
                                 self.selection
@@ -638,16 +838,18 @@ impl Files {
             0x121 => {
                 self.action(9);
             }
-            key::UP | key::DOWN | key::HOME | key::END => {
+            key::UP | key::DOWN | key::LEFT | key::RIGHT | key::HOME | key::END => {
                 if self.rows() > 0 {
                     let old = self.selection.focus.unwrap_or(self.offset);
+                    let columns=self.view.layout(self.width,self.height).0 as u16;
                     let index = match code {
-                        key::UP => old.saturating_sub(1),
-                        key::DOWN => {
+                        key::UP => old.saturating_sub(columns),
+                        key::LEFT => old.saturating_sub(1),
+                        key::DOWN | key::RIGHT => {
                             if self.selection.focus.is_none() {
                                 self.offset
                             } else {
-                                old.saturating_add(1)
+                                old.saturating_add(if code==key::DOWN {columns}else{1})
                                     .min(self.list.total.saturating_sub(1) as u16)
                             }
                         }
@@ -685,6 +887,8 @@ impl Files {
     }
     fn enabled(&self, i: usize) -> bool {
         match i {
+            10 => self.selection.count == 1 && self.selection.flags[0] & 1 != 0,
+            9 => self.selection.count == 1,
             0 | 1 => self.selection.count == 1,
             2 | 3 | 5 => self.selection.count > 0,
             4 => self.can_paste,
@@ -698,13 +902,14 @@ impl Files {
     }
     fn menu_hit(&self, x: i32, y: i32) -> Option<usize> {
         let (a, b) = self.menu?;
-        if (a + 4..a + 164).contains(&x) && (b + 4..b + 202).contains(&y) {
+        if (a + 4..a + 164).contains(&x) && (b + 4..b + 246).contains(&y) {
             Some(((y - b - 4) / 22) as usize)
         } else {
             None
         }
     }
     fn pointer(&mut self, event: window::Event, previous: u32) -> bool {
+        if self.column_drag.is_some() && event.buttons & 1 == 0 { self.column_drag = None; return true; }
         if event.buttons & 1 == 0 && previous & 1 != 0 {
             if let Some((_, _, row, mods, selected)) = self.press.take() {
                 if !self.dragging && mods & key::SHIFT == 0 && row < self.rows() {
@@ -743,8 +948,23 @@ impl Files {
         }
         let left = event.buttons & 1 != 0 && previous & 1 == 0;
         let right = event.buttons & 2 != 0 && previous & 2 == 0;
-        if self.mode != 0 {
+        if self.mode == 9 {
+            if left && (144..320).contains(&event.y) && (24..self.width as i32-24).contains(&event.x) {
+                let index=((event.y-144)/22) as usize;
+                if index<self.favorites.count {self.favorite_focus=index;self.open_favorite();return true;}
+            }
             return false;
+        }
+        if self.mode == 8 {
+            if left { self.mode = 0; return true; }
+            return false;
+        }
+        if self.mode != 0 { return false; }
+        if let Some(column) = self.column_drag {
+            if event.buttons & 1 == 0 { self.column_drag = None; }
+            else if column == 1 { self.name_end = (event.x.max(120) as u32).min(self.type_end - 80); }
+            else { self.type_end = (event.x.max((self.name_end + 80) as i32) as u32).min(self.width - 104); }
+            return true;
         }
         if self.menu.is_some() {
             if left {
@@ -752,7 +972,7 @@ impl Files {
                 self.menu = None;
                 if let Some(i) = hit {
                     if self.enabled(i) {
-                        self.action([1, 9, 10, 11, 12, 4, 5, 13, 14][i]);
+                        self.action([1, 9, 10, 11, 12, 4, 5, 13, 14, 17, 19][i]);
                     }
                 }
                 return true;
@@ -764,18 +984,7 @@ impl Files {
                 return changed;
             }
         }
-        let row = if (8..self.width as i32 - 8).contains(&event.x)
-            && (80..self.height as i32 - 32).contains(&event.y)
-        {
-            let row = (event.y - 80) as usize / 16;
-            if row < self.rows() {
-                Some(row)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let row = self.item_at(event.x,event.y);
         if right {
             if let Some(row) = row {
                 let e = self.list.entries[row];
@@ -788,7 +997,7 @@ impl Files {
             self.can_paste = file_clipboard::get(&mut self.pending) == 0 && self.pending.count > 0;
             self.menu = Some((
                 event.x.clamp(0, self.width as i32 - 168),
-                event.y.clamp(0, self.height as i32 - 206),
+                event.y.clamp(0, self.height as i32 - 250),
             ));
             self.hover = None;
             self.last = usize::MAX;
@@ -803,8 +1012,15 @@ impl Files {
                 true
             };
         }
-        if (34..60).contains(&event.y) && (0..(self.toolbar_cell() * 6) as i32).contains(&event.x) {
-            self.action(9 + event.x as usize / self.toolbar_cell() as usize);
+        if self.view == View::Details && (64..80).contains(&event.y) {
+            if (event.x - self.name_end as i32).abs() <= 4 { self.column_drag = Some(1); }
+            else if (event.x - self.type_end as i32).abs() <= 4 { self.column_drag = Some(2); }
+            else { self.choose_sort(if event.x < self.name_end as i32 { 1 } else if event.x < self.type_end as i32 { 2 } else { 3 }); }
+            return true;
+        }
+        if (34..60).contains(&event.y) && (0..self.width as i32).contains(&event.x) {
+            let index=event.x as usize / self.toolbar_cell() as usize;
+            self.action(if index>=8 {18}else{9+index});
             return true;
         }
         if (80..self.height as i32 - 32).contains(&event.y) {
@@ -847,7 +1063,7 @@ impl Files {
             b"Refresh",
             b"<",
             b">",
-            b"Quit",
+            b"View",
         ]
         .iter()
         .enumerate()
@@ -869,6 +1085,9 @@ impl Files {
             b"Paste",
             b"Install",
             b"Remove",
+            b"Back",
+            b"Forward",
+            b"Places",
         ]
         .iter()
         .enumerate()
@@ -885,21 +1104,17 @@ impl Files {
         window::draw(
             w,
             &[
-                Draw::text(
-                    cell * 6 + 8,
-                    40,
-                    0x153e8e,
-                    &self.path[self
-                        .length
-                        .saturating_sub(((self.width - cell * 4 - 24) / 8) as usize)
-                        ..self.length],
-                ),
-                Draw::text(8, 64, 0, b"Name"),
-                Draw::text(self.width / 2, 64, 0, b"Type"),
-                Draw::text(self.width - 96, 64, 0, b"Bytes"),
+                Draw::text(8, 64, 0, if self.sort.column == 1 { if self.sort.descending { b"Name -" } else { b"Name +" } } else { b"Name" }),
+                Draw::text(self.name_end + 8, 64, 0, if self.sort.column == 2 { if self.sort.descending { b"Type -" } else { b"Type +" } } else { b"Type" }),
+                Draw::text(self.type_end + 8, 64, 0, if self.sort.column == 3 { if self.sort.descending { b"Bytes -" } else { b"Bytes +" } } else { b"Bytes" }),
+                Draw::rect(self.name_end, 64, 1, 16, 0x808080),
+                Draw::rect(self.type_end, 64, 1, 16, 0x808080),
                 Draw::rect(8, 80, self.width - 16, self.height - 112, 0xffffff),
             ],
         );
+        if self.view != View::Details {
+            window::draw(w,&[Draw::rect(0,64,self.width,16,0xf4f4f4),Draw::text(8,64,0,if self.view==View::Icons {b"Icons | Ctrl+1 Details | Ctrl+2 Compact | Ctrl+3 Icons"}else{b"Compact | Ctrl+1 Details | Ctrl+2 Compact | Ctrl+3 Icons"})]);
+        }
         for i in 0..self.rows() {
             let e = self.list.entries[i];
             let name = &e.name[..e.length as usize];
@@ -909,6 +1124,18 @@ impl Files {
             } else {
                 (0xffffff, 0)
             };
+            if self.view != View::Details {
+                let (x,y,cw,ch)=self.view.cell(self.width,self.height,i);
+                window::draw(w,&[Draw::rect(x,y,cw,ch,bg)]);
+                let (ix,iy,iw,ih)=if self.view==View::Icons {(x+cw/2-14,y+8,28,28)}else{(x+4,y+5,12,14)};
+                let folder=e.flags&1!=0;
+                window::draw(w,&[
+                    Draw::rect(ix,iy,iw,ih,if folder {0xc58e28}else{0x9aafc0}),
+                    Draw::rect(ix+2,iy+2,iw-4,ih-4,if folder {0xf4cb69}else{0xf5f8ff}),
+                    Draw::text(if self.view==View::Icons {x+(cw-name.len() as u32*8)/2}else{x+22},if self.view==View::Icons {y+48}else{y+4},fg,name),
+                ]);
+                continue;
+            }
             let y = 80 + i as u32 * 16;
             let mut digits = [b' '; 10];
             let mut value = e.size;
@@ -924,22 +1151,22 @@ impl Files {
                     Draw::rect(8, y, self.width - 16, 16, bg),
                     Draw::text(8, y, fg, name),
                     Draw::text(
-                        self.width / 2,
+                        self.name_end + 8,
                         y,
                         fg,
                         if e.flags & 1 != 0 { b"Folder" } else { b"File" },
                     ),
-                    Draw::text(self.width - 96, y, fg, &digits),
+                    Draw::text(self.type_end + 8, y, fg, &digits),
                 ],
             );
         }
         if let Some(row) = self.drop_row {
-            let y = 80 + row as u32 * 16;
+            let (x,y,cw,ch) = self.view.cell(self.width,self.height,row);
             window::draw(
                 w,
                 &[
-                    Draw::rect(8, y, self.width - 16, 2, 0x238a60),
-                    Draw::rect(8, y + 14, self.width - 16, 2, 0x238a60),
+                    Draw::rect(x, y, cw, 2, 0x238a60),
+                    Draw::rect(x, y + ch - 2, cw, 2, 0x238a60),
                 ],
             );
         }
@@ -951,12 +1178,13 @@ impl Files {
             5 => b"Paste as (8.3): ",
             6 => b"Install selected app folder? Y confirms / N cancels",
             7 => b"Remove app and its bundled files? Y confirms / N cancels",
+            10 => b"Update installed app from this folder? Y confirms / N cancels",
             _ => b"Ctrl/Shift select | Ctrl+C/X/V | F2 rename | Right-click actions",
         };
         window::draw(
             w,
             &[
-                Draw::text(8, self.height - 32, 0, hint),
+                Draw::text(8, self.height - 32, 0, if self.mode == 0 { &self.path[self.length.saturating_sub((((self.width - 16) / 8) as usize).min(96))..self.length] } else { hint }),
                 Draw::text(
                     8,
                     self.height - 16,
@@ -983,8 +1211,8 @@ impl Files {
             window::draw(
                 w,
                 &[
-                    Draw::rect((x + 4) as u32, (y + 4) as u32, 164, 202, 0x404040),
-                    Draw::rect(x as u32, y as u32, 168, 206, 0xc4c4c4),
+                    Draw::rect((x + 4) as u32, (y + 4) as u32, 164, 246, 0x404040),
+                    Draw::rect(x as u32, y as u32, 168, 250, 0xc4c4c4),
                 ],
             );
             for (i, label) in [
@@ -997,6 +1225,8 @@ impl Files {
                 b"Refresh",
                 b"Install app",
                 b"Remove app",
+                b"Properties",
+                b"Update app",
             ]
             .iter()
             .enumerate()
@@ -1029,6 +1259,35 @@ impl Files {
                 );
             }
         }
+        if self.mode == 9 {
+            window::draw(w,&[
+                Draw::rect(24,104,self.width-48,248,0xc4c4c4),Draw::text(40,120,0,b"Favourite folders - Enter or click to open"),
+                Draw::text(40,328,0,b"Ctrl+D in a folder adds/removes it. Escape closes Places."),
+            ]);
+            if self.favorites.count==0 {window::draw(w,&[Draw::text(40,152,0,b"No favourites yet. Close Places and press Ctrl+D.")]);}
+            for i in 0..self.favorites.count {
+                let n=self.favorites.lengths[i] as usize;let selected=i==self.favorite_focus;
+                window::draw(w,&[Draw::rect(32,144+i as u32*22,self.width-64,22,if selected {0x153e8e}else{0xc4c4c4}),Draw::text(40,147+i as u32*22,if selected {0xffffff}else{0},&self.favorites.paths[i][n.saturating_sub(68)..n])]);
+            }
+        }
+        if self.mode == 8 {
+            let name = &self.selection.names[0][..self.selection.lengths[0] as usize];
+            let size = self.property.map_or(0, |e| e.size);
+            let mut digits = [b'0'; 10]; let mut value = size;
+            for d in digits.iter_mut().rev() { *d += (value % 10) as u8; value /= 10; }
+            let start = digits.iter().position(|&b| b != b'0').unwrap_or(9);
+            window::draw(w, &[
+                Draw::rect(24, 104, self.width - 48, 224, 0xc4c4c4),
+                Draw::text(40, 120, 0, b"Properties"),
+                Draw::text(40, 152, 0, name),
+                Draw::text(40, 184, 0, if self.selection.flags[0] & 1 != 0 { b"Folder" } else { b"File size (bytes):" }),
+                Draw::text(208, 184, 0, if self.selection.flags[0] & 1 != 0 { b"Not calculated" } else { &digits[start..] }),
+                Draw::text(40, 216, 0, b"Location:"),
+                Draw::text(40, 240, 0, &self.path[..self.length.min(68)]),
+                Draw::text(40, 256, 0, &self.path[self.length.min(68)..self.length]),
+                Draw::text(40, 296, 0, b"Enter / Escape / click to close"),
+            ]);
+        }
         window::present(w);
     }
 }
@@ -1039,9 +1298,12 @@ fn main() -> u32 {
     }
     let w = w as u32;
     let mut app = Files {
+        handle:w, view:View::Details, favorites:Favorites::new(), favorite_focus:0, transfer_total:0, transfer_done:0,
         width: 640,
         height: 400,
         list: Listing::new(),
+        sort: Sort::default(), cached: 0, history: History::new(),
+        name_end: 320, type_end: 536, column_drag: None, property: None,
         offset: 0,
         selection: Selection::new(),
         path: [0; 105],
@@ -1067,7 +1329,7 @@ fn main() -> u32 {
         destination_len: 0,
         drop_row: None,
     };
-    window::resizable(w, 640, 400, 792, 544);
+    window::resizable(w, 640, 400, 1280, 1024);
     let mut args=[0;128];let argc=xinyi::arguments(&mut args);
     let mut paste_version=0;let mut recycle=false;
     if argc>0 {
@@ -1087,6 +1349,7 @@ fn main() -> u32 {
         }
     }
     app.refresh();
+    app.history.record(&app.path[..app.length]);
     if app.rows() > 0 {
         app.select(0, false, false);
     }
@@ -1110,16 +1373,7 @@ fn main() -> u32 {
                 true
             }
             window::DRAG_OVER => {
-                app.drop_row = if e.y >= 80 {
-                    let row = (e.y - 80) as usize / 16;
-                    if row < app.rows() && app.list.entries[row].flags & 1 != 0 {
-                        Some(row)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
+                app.drop_row = app.item_at(e.x,e.y).filter(|&row|app.list.entries[row].flags&1!=0);
                 true
             }
             window::DRAG_END => {

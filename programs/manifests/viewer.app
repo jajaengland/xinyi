@@ -5,3 +5,4 @@ description=Inspect file bytes
 icon=document
 access=read-only
 handles=dat,raw,hex
+version=1

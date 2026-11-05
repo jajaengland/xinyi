@@ -33,6 +33,8 @@ def main():
     subprocess.run([sys.executable,str(ROOT/"tools/build_apps.py"),"--output-dir",str(directory)],cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/system_qemu.py"),"--package",str(directory),"--kernel",str(kernel),
                     "--qemu",qemu,"--output",str(image)],cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/desktop_boot_qemu.py"),"--disk",str(image),"--qemu",qemu],
+                   cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/firmware_qemu.py"),"--package",str(directory),"--kernel",str(kernel)],
                    cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/mouse_qemu.py"),"--kernel",str(kernel),"--disk",str(image),"--vga","cirrus"],
@@ -63,6 +65,7 @@ def main():
     subprocess.run([sys.executable,str(ROOT/"tools/desktop_redesign_qemu.py"),"--disk",str(image),"--vga","cirrus","--usb"],cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/app_system_qemu.py"),"--disk",str(image),"--kernel",str(kernel)],cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/app_install_qemu.py"),"--disk",str(image),"--package",str(directory),"--kernel",str(kernel)],cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/app_updates_qemu.py"),"--disk",str(image),"--package",str(directory)],cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/desktop_recycle_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/trash_purge_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/trash_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
@@ -73,6 +76,16 @@ def main():
     subprocess.run([sys.executable,str(ROOT/"tools/async_load_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/large_apps_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/permissions_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/memory_boundaries_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
+    subprocess.run([sys.executable,str(ROOT/"tools/files_browser_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
+    for display in ("std","cirrus"):
+        subprocess.run([sys.executable,str(ROOT/"tools/image_qemu.py"),"--disk",str(image),"--vga",display],cwd=ROOT,env=environment,check=True)
+    for display in ("std","cirrus"):
+        for mode in ("1024x768","1280x1024"):
+            subprocess.run([sys.executable,str(ROOT/"tools/display_qemu.py"),"--disk",str(image),"--vga",display,"--mode",mode],cwd=ROOT,env=environment,check=True)
+    for display in ("std","cirrus"):
+        for scale in ("125","150"):
+            subprocess.run([sys.executable,str(ROOT/"tools/scaling_qemu.py"),"--disk",str(image),"--vga",display,"--scale",scale],cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/stream_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/fsck_qemu.py"),"--disk",str(image)],cwd=ROOT,env=environment,check=True)
     subprocess.run([sys.executable,str(ROOT/"tools/power_qemu.py"),"--disk",str(image),"--kernel",str(kernel)],cwd=ROOT,env=environment,check=True)
@@ -101,9 +114,10 @@ def main():
         "Ping runs in the background; use ping to see its results. net dhcp requests a new lease.\n"
         "Initial networking uses RTL8139 Ethernet; Wi-Fi, DNS lookup, TCP and downloads are not implemented.\n"
         "QEMU speaker sound is enabled by Launch-Xinyi.cmd. Games: P pauses, R restarts, Escape quits.\n"
-        "Graphics: QEMU std VGA, or BIOS VESA 800x600 RGB565/24/32-bit on supported cards. Type bios for diagnostics.\n"
+        "Graphics: QEMU std VGA, or BIOS VESA RGB565/24/32-bit on supported cards. Type bios for diagnostics. Use display 1280x1024 and uiscale 125, then restart the desktop for larger text and controls.\n"
         "Type mouse for the blue-screen PS/2 pointer/buttons/menu test; Escape exits.\n"
-        "Type desktop for concurrent graphical applications from /APPS and running-app buttons in the bottom taskbar.\n"
+        "Startup opens the desktop automatically, with applications from /APPS and running-app buttons in the bottom taskbar.\n"
+        "Choose Shell with no apps running, or press Escape on an empty desktop with no selection, for the console; type desktop to reopen.\n"
         "Apps opens text programs in Terminal automatically. The _ button minimizes; taskbar buttons restore.\n"
         "Windows can move partly off-screen; the bottom taskbar remains accessible.\n"
         "Type multitask for two concurrent protected counter windows; Q quits the focused app, C crashes it, Escape exits the demo.\n"

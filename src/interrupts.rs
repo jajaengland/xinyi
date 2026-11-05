@@ -269,7 +269,7 @@ pub extern "C" fn xinyi_syscall_handler(frame: &crate::syscall_frame::SyscallFra
             crate::usermode::getpid()
         }
         50..=56 => crate::terminal::syscall(frame.cs, syscall_num, arg1, arg2, arg3),
-        60..=65|85..=86 => if crate::multitask::active() {crate::multi_window::syscall(frame.cs,syscall_num,arg1,arg2,arg3)}else{crate::window_api::syscall(frame.cs,syscall_num,arg1,arg2,arg3)},
+        60..=65|85..=86|104 => if crate::multitask::active() {crate::multi_window::syscall(frame.cs,syscall_num,arg1,arg2,arg3)}else{crate::window_api::syscall(frame.cs,syscall_num,arg1,arg2,arg3)},
         67..=68=>crate::clipboard::syscall(frame.cs,syscall_num,arg1,arg2,arg3),
         72..=77=>crate::pty::syscall(frame.cs,syscall_num,arg1,arg2,arg3),
         96..=99=>crate::audio::syscall(frame.cs,syscall_num,arg1,arg2,arg3),

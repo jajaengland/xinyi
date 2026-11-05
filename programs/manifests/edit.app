@@ -5,3 +5,4 @@ description=Console text editor
 icon=terminal
 access=trusted
 handles=
+version=1

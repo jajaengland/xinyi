@@ -5,3 +5,4 @@ description=Text and layout demo
 icon=font
 access=trusted
 handles=
+version=1

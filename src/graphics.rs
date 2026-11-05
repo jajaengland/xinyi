@@ -3,8 +3,11 @@
 // The kernel owns VRAM; user programs retain their supervisor-only VGA mapping.
 use crate::{canvas::Canvas,loader::Frames};
 use core::{arch::asm,ptr::{read_volatile,write_volatile}};
-const WIDTH:usize=800;
-const HEIGHT:usize=600;
+pub fn active()->bool {unsafe {(&*core::ptr::addr_of!(SESSION)).is_some()}}
+pub fn width()->usize {crate::display_layout::width() as usize}
+pub fn height()->usize {crate::display_layout::height() as usize}
+fn physical_width()->usize {crate::display_layout::physical_width() as usize}
+fn physical_height()->usize {crate::display_layout::physical_height() as usize}
 const LEGACY_BYTES:usize=256*1024;
 unsafe fn input(port:u16)->u8 {let value:u8;asm!("in al, dx",in("dx")port,out("al")value,options(nomem,nostack,preserves_flags));value}
 unsafe fn output(port:u16,value:u8) {asm!("out dx, al",in("dx")port,in("al")value,options(nomem,nostack,preserves_flags));}
@@ -48,19 +51,32 @@ fn device()->Option<u32> {
         let command=crate::pci::read(bus as u8,slot,0,4);
         let bar=crate::pci::read(bus as u8,slot,0,0x10);
         let base=bar&!15;
-        if command&3!=3||bar&7!=0||base<0x80000000||base.checked_add((WIDTH*HEIGHT*4) as u32).is_none() {return None;}
+        if command&3!=3||bar&7!=0||base<0x80000000||base.checked_add((physical_width()*physical_height()*4) as u32).is_none() {return None;}
         // No native framebuffer pages may overlap the allocator's user window.
         return Some(base);
     }}None
 }
-pub(crate) fn start()->Result<(),&'static str> {
+pub(crate) fn start()->Result<(),&'static str> {start_size(800,600)}
+pub(crate) fn start_desktop()->Result<(),&'static str> {
+    let (w,h)=crate::display::requested();
+    match start_scaled(w,h,crate::display::requested_scale()) {Ok(())=>{crate::debug::write_fmt(format_args!("Display: active {}x{}, scale {}%, logical {}x{}\n",physical_width(),physical_height(),crate::display_layout::scale(),width(),height()));Ok(())},Err(e) if (w,h)!=(800,600)=>{
+        crate::debug::write_fmt(format_args!("Display: {}x{} unavailable: {}; falling back to 800x600\n",w,h,e));
+        start_size(800,600)
+    },Err(e)=>Err(e)}
+}
+pub(crate) fn start_size(w:u16,h:u16)->Result<(),&'static str> {start_scaled(w,h,100)}
+pub(crate) fn start_scaled(w:u16,h:u16,percent:u16)->Result<(),&'static str> {
     if unsafe {(*core::ptr::addr_of!(SESSION)).is_some()} {return Err("Graphics already active.");}
+    let percent=if crate::display_layout::logical_size(w,h,percent).is_some() {percent}else {
+        crate::debug::write_str("Display: scaling unavailable at this mode; using 100%\n");100
+    };
+    crate::display_layout::set_scaled(w,h,percent);
     if !crate::paging::status().enabled {return Err("Graphics requires protected paging.");}
     let Some(base)=device() else{return start_native();};
     if !(0xb0c2..=0xb0c5).contains(&dispi(0))||dispi(4)&1!=0 {return Err("Display is not in a supported text state.");}
-    if dispi(10) as usize*65536<WIDTH*HEIGHT*4 {return Err("Not enough video memory.");}
+    if dispi(10) as usize*65536<physical_width()*physical_height()*4 {return Err("Not enough video memory.");}
     let saved=Frames::new(LEGACY_BYTES/4096).ok_or("Not enough memory for text recovery.")?;
-    let back=Frames::new((WIDTH*HEIGHT*4).div_ceil(4096)).ok_or("Not enough memory for a back buffer.")?;
+    let back=Frames::new((width()*height()*4).div_ceil(4096)).ok_or("Not enough memory for a back buffer.")?;
     let font=Frames::new(1).ok_or("Not enough memory for the bitmap font.")?;
     if unsafe {input(0x3cc)}&1==0 {return Err("Monochrome text mode is unsupported.");}
     let registers=unsafe {Registers::save()};
@@ -70,17 +86,17 @@ pub(crate) fn start()->Result<(),&'static str> {
         unsafe {write_volatile((font.base() as *mut u8).add(glyph*16+row),read_volatile((saved.base() as *const u8).add((glyph*32+row)*4+2)));}
     }}
     unsafe {*core::ptr::addr_of_mut!(SESSION)=Some(Session{base,saved,back,registers:Some(registers),font,native:None,cursor:crate::vga::cursor_position(),visible:crate::vga::cursor_visible()});}
-    set_dispi(4,0);set_dispi(1,WIDTH as u16);set_dispi(2,HEIGHT as u16);set_dispi(3,32);
-    set_dispi(6,WIDTH as u16);set_dispi(8,0);set_dispi(9,0);set_dispi(4,0xc1);
-    if dispi(1)!=WIDTH as u16||dispi(2)!=HEIGHT as u16||dispi(3)!=32||dispi(4)&1==0 {
+    set_dispi(4,0);set_dispi(1,physical_width() as u16);set_dispi(2,physical_height() as u16);set_dispi(3,32);
+    set_dispi(6,physical_width() as u16);set_dispi(8,0);set_dispi(9,0);set_dispi(4,0xc1);
+    if dispi(1)!=physical_width() as u16||dispi(2)!=physical_height() as u16||dispi(3)!=32||dispi(4)&1==0 {
         restore();return Err("The display refused the requested mode.");
     }
     Ok(())
 }
 fn start_native()->Result<(),&'static str> {
-    let mode=crate::vbe::find_mode()?;
+    let mode=crate::vbe::find_mode_for(physical_width() as u16,physical_height() as u16)?;
     let saved=Frames::new(1).ok_or("Not enough memory to save the text console.")?;
-    let back=Frames::new((WIDTH*HEIGHT*4).div_ceil(4096)).ok_or("Not enough memory for graphics.")?;
+    let back=Frames::new((width()*height()*4).div_ceil(4096)).ok_or("Not enough memory for graphics.")?;
     let font=crate::vbe::font()?;
     unsafe {for index in 0..4000 {write_volatile((saved.base() as *mut u8).add(index),read_volatile((0xb8000 as *const u8).add(index)));}}
     unsafe {*core::ptr::addr_of_mut!(SESSION)=Some(Session{base:mode.base,saved,back,registers:None,font,native:Some(mode),cursor:crate::vga::cursor_position(),visible:crate::vga::cursor_visible()});}
@@ -106,8 +122,16 @@ pub fn restore() {
     }
 }
 fn put_pixel(session:&Session,index:usize,color:u32) {
+    let (x,y)=(index%width(),index/width());
+    for py in crate::display_layout::edge(y,physical_height(),height())..crate::display_layout::edge(y+1,physical_height(),height()) {
+        for px in crate::display_layout::edge(x,physical_width(),width())..crate::display_layout::edge(x+1,physical_width(),width()) {
+            put_physical_pixel(session,py*physical_width()+px,color);
+        }
+    }
+}
+fn put_physical_pixel(session:&Session,index:usize,color:u32) {
     if let Some(mode)=session.native {
-        let offset=(index/WIDTH)*mode.pitch as usize+(index%WIDTH)*(mode.bpp as usize/8);
+        let offset=(index/physical_width())*mode.pitch as usize+(index%physical_width())*(mode.bpp as usize/8);
         let address=(mode.base as *mut u8).wrapping_add(offset);
         unsafe {match mode.bpp {
             32=>write_volatile(address as *mut u32,color),
@@ -119,10 +143,10 @@ fn put_pixel(session:&Session,index:usize,color:u32) {
 }
 fn draw_scene() {
     let session=unsafe {(&mut *core::ptr::addr_of_mut!(SESSION)).as_mut().unwrap()};
-    let data=unsafe {core::slice::from_raw_parts_mut(session.back.base() as *mut u32,WIDTH*HEIGHT)};
+    let data=unsafe {core::slice::from_raw_parts_mut(session.back.base() as *mut u32,width()*height())};
     let font=unsafe {&*(session.font.base() as *const [u8;4096])};
-    let mut canvas=Canvas::new(data,WIDTH,HEIGHT,WIDTH).unwrap();
-    canvas.rect(0,0,800,600,0x176c70);
+    let mut canvas=Canvas::new(data,width(),height(),width()).unwrap();
+    canvas.rect(0,0,width() as i32,height() as i32,0x176c70);
     canvas.rect(0,0,800,30,0xc4c4c4);canvas.rect(10,6,80,18,0xaaaaaa);
     canvas.text(22,7,0,b"XINYI",font);
     canvas.text(110,7,0x303030,b"Graphics foundation - keyboard demo",font);
@@ -149,7 +173,7 @@ fn box_pixels(x:i32,y:i32,restore_background:bool) {
     // The RAM buffer contains the immutable scene, including triangles. Restore
     // only the old box footprint, then paint the new one directly to VRAM.
     for row in y as usize..y as usize+40 {for column in x as usize..x as usize+48 {
-        let index=row*WIDTH+column;
+        let index=row*width()+column;
         let value=if restore_background {unsafe {read_volatile((session.back.base() as *const u32).add(index))}}else{0x58ccd0};
         put_pixel(session,index,value);
     }}
@@ -196,10 +220,12 @@ unsafe fn copy_video(source:*const u8,destination:*mut u8,length:usize) {
     asm!("push esi", "mov esi, eax", "cld", "rep movsd", "pop esi",in("eax")source,inout("edi")destination=>_,inout("ecx")words=>_);
     for i in words*4..length {write_volatile(destination.add(i),core::ptr::read(source.add(i)));}
 }
-fn transfer_span(session:&Session,y:usize,left:usize,right:usize,row:&mut [u8;3200]) {
-    if left>=right {return;}let count=right-left;
-    let source=unsafe {(session.back.base() as *const u32).add(y*WIDTH+left)};
-    let Some(mode)=session.native else {unsafe {copy_video(source as *const u8,(session.base as *mut u8).add((y*WIDTH+left)*4),count*4);}return;};
+fn transfer_span(session:&Session,y:usize,left:usize,right:usize,row:&mut [u8;5120]) {
+    if left>=right {return;}
+    if crate::display_layout::scale()!=100 {transfer_scaled_span(session,y,left,right,row);return;}
+    let count=right-left;
+    let source=unsafe {(session.back.base() as *const u32).add(y*width()+left)};
+    let Some(mode)=session.native else {unsafe {copy_video(source as *const u8,(session.base as *mut u8).add((y*width()+left)*4),count*4);}return;};
     let bytes=mode.bpp as usize/8;let destination=(mode.base as *mut u8).wrapping_add(y*mode.pitch as usize+left*bytes);
     if bytes==4 {unsafe {copy_video(source as *const u8,destination,count*4);}return;}
     for x in 0..count {let color=unsafe {core::ptr::read(source.add(x))};let at=x*bytes;
@@ -208,12 +234,35 @@ fn transfer_span(session:&Session,y:usize,left:usize,right:usize,row:&mut [u8;32
     }
     unsafe {copy_video(row.as_ptr(),destination,count*bytes);}
 }
+// Scale composition as one surface: the app ABI, font metrics, layout and
+// hit testing all stay in logical pixels. No app can access the framebuffer.
+fn transfer_scaled_span(session:&Session,y:usize,left:usize,right:usize,row:&mut [u8;5120]) {
+    use crate::display_layout::{edge,sample};
+    let (pw,ph)=(physical_width(),physical_height());let (lw,lh)=(width(),height());
+    let (first,last)=(edge(left,pw,lw),edge(right,pw,lw));
+    let bytes=session.native.map_or(4,|m|m.bpp as usize/8);
+    let pitch=session.native.map_or(pw*4,|m|m.pitch as usize);
+    for px in first..last {
+        let color=unsafe {core::ptr::read((session.back.base() as *const u32).add(y*lw+sample(px,pw,lw)))};
+        let at=(px-first)*bytes;
+        if bytes==2 {
+            let packed=(((color>>19)&31)<<11|((color>>10)&63)<<5|((color>>3)&31)) as u16;
+            row[at..at+2].copy_from_slice(&packed.to_le_bytes());
+        }else {
+            row[at]=color as u8;row[at+1]=(color>>8) as u8;row[at+2]=(color>>16) as u8;
+            if bytes==4 {row[at+3]=0;}
+        }
+    }
+    for py in edge(y,ph,lh)..edge(y+1,ph,lh) {
+        unsafe {copy_video(row.as_ptr(),(session.base as *mut u8).add(py*pitch+first*bytes),(last-first)*bytes);}
+    }
+}
 fn present_area(x:i32,y:i32,w:i32,h:i32,cursor:Option<(i32,i32)>) {
     if w<=0||h<=0 {return;}
     let session=unsafe {(&*core::ptr::addr_of!(SESSION)).as_ref().unwrap()};
-    let left=x.clamp(0,WIDTH as i32) as usize;let right=x.saturating_add(w).clamp(0,WIDTH as i32) as usize;
-    let mut buffer=[0u8;3200];
-    for row in y.max(0)..y.saturating_add(h).min(HEIGHT as i32) {
+    let left=x.clamp(0,width() as i32) as usize;let right=x.saturating_add(w).clamp(0,width() as i32) as usize;
+    let mut buffer=[0u8;5120];
+    for row in y.max(0)..y.saturating_add(h).min(height() as i32) {
         if let Some((cx,cy))=cursor {if row>=cy&&row<cy+24 {
             transfer_span(session,row as usize,left,right.min(cx.max(0) as usize),&mut buffer);
             transfer_span(session,row as usize,left.max((cx+16).max(0) as usize),right,&mut buffer);continue;
@@ -242,8 +291,8 @@ pub(crate) fn pointer(x:i32,y:i32) {
     let session=unsafe {(&*core::ptr::addr_of!(SESSION)).as_ref().unwrap()};
     for (row,pattern) in POINTER.iter().enumerate() {for (column,&pixel) in pattern.iter().enumerate() {
         let(px,py)=(x+column as i32,y+row as i32);
-        if pixel!=b'.'&&px>=0&&py>=0&&px<WIDTH as i32&&py<HEIGHT as i32 {
-            put_pixel(session,py as usize*WIDTH+px as usize,if pixel==b'W' {0xffffff}else{0});
+        if pixel!=b'.'&&px>=0&&py>=0&&px<width() as i32&&py<height() as i32 {
+            put_pixel(session,py as usize*width()+px as usize,if pixel==b'W' {0xffffff}else{0});
         }
     }}
 }
@@ -256,10 +305,10 @@ fn bevel(canvas:&mut Canvas,x:i32,y:i32,w:i32,h:i32,pressed:bool) {
 fn mouse_scene(state:&crate::mouse_ui::State) {
     use crate::mouse_ui::{Target,MENU_W,MENU_H};
     let session=unsafe {(&*core::ptr::addr_of!(SESSION)).as_ref().unwrap()};
-    let data=unsafe {core::slice::from_raw_parts_mut(session.back.base() as *mut u32,WIDTH*HEIGHT)};
+    let data=unsafe {core::slice::from_raw_parts_mut(session.back.base() as *mut u32,width()*height())};
     let font=&crate::ui_font::FONT;
-    let mut canvas=Canvas::new(data,WIDTH,HEIGHT,WIDTH).unwrap();
-    canvas.rect(0,0,800,600,0x000080);
+    let mut canvas=Canvas::new(data,width(),height(),width()).unwrap();
+    canvas.rect(0,0,width() as i32,height() as i32,0x000080);
     canvas.text(24,24,0xffffff,b"Xinyi mouse test",font);
     canvas.text(24,52,0xffffff,b"Left-click the buttons. Right-click for a menu. ESC exits.",font);
     for i in 0..2 {
@@ -326,10 +375,10 @@ pub fn mouse_demo() {
 fn desktop_scene(state:&crate::desktop_ui::State,catalog:&crate::app_catalog::Catalog,message:&[u8]) {
     use crate::desktop_ui::{Target,MENU_W,MENU_H};
     let session=unsafe {(&*core::ptr::addr_of!(SESSION)).as_ref().unwrap()};
-    let data=unsafe {core::slice::from_raw_parts_mut(session.back.base() as *mut u32,WIDTH*HEIGHT)};
+    let data=unsafe {core::slice::from_raw_parts_mut(session.back.base() as *mut u32,width()*height())};
     let font=&crate::ui_font::FONT;
-    let mut canvas=Canvas::new(data,WIDTH,HEIGHT,WIDTH).unwrap();
-    canvas.rect(0,0,800,600,crate::theme::get().desktop);
+    let mut canvas=Canvas::new(data,width(),height(),width()).unwrap();
+    canvas.rect(0,0,width() as i32,height() as i32,crate::theme::get().desktop);
     canvas.text(24,40,0xffffff,b"Xinyi desktop test",font);
     canvas.text(24,64,0xffffff,b"Drag title bars. Click to focus. Right-click to restore windows.",font);
     canvas.rect(0,0,800,24,0xc4c4c4);canvas.rect(0,22,800,2,0xffffff);
@@ -490,9 +539,9 @@ fn draw_title(c:&mut Canvas<'_>,state:&crate::app_window_ui::State,title:&[u8],b
 }
 pub(crate) fn app_scene(state:&crate::app_window_ui::State,title:&[u8],surface:&[u32]) {
     let session=unsafe {(&*core::ptr::addr_of!(SESSION)).as_ref().unwrap()};
-    let data=unsafe {core::slice::from_raw_parts_mut(session.back.base() as *mut u32,WIDTH*HEIGHT)};
-    let font=&crate::ui_font::FONT;let mut canvas=Canvas::new(data,WIDTH,HEIGHT,WIDTH).unwrap();
-    canvas.rect(0,0,800,600,crate::theme::get().desktop);canvas.rect(0,0,800,24,0xc4c4c4);canvas.rect(0,22,800,2,0xffffff);
+    let data=unsafe {core::slice::from_raw_parts_mut(session.back.base() as *mut u32,width()*height())};
+    let font=&crate::ui_font::FONT;let mut canvas=Canvas::new(data,width(),height(),width()).unwrap();
+    canvas.rect(0,0,width() as i32,height() as i32,crate::theme::get().desktop);canvas.rect(0,0,800,24,0xc4c4c4);canvas.rect(0,22,800,2,0xffffff);
     canvas.text(12,5,0,b"Xinyi | Foreground application",font);
     let r=state.window.rect;canvas.rect(r.x+6,r.y+6,r.w,r.h,0x000040);bevel(&mut canvas,r.x,r.y,r.w,r.h,false);
     let bar=state.window.title();canvas.rect(bar.x,bar.y,bar.w,bar.h,if state.focused {crate::theme::get().title}else{0x707070});draw_title(&mut canvas,state,title,None);
@@ -515,22 +564,22 @@ fn modern_window(c:&mut Canvas<'_>,view:&WindowView<'_>) {
 }
 pub(crate) fn multi_scene(views:&[Option<WindowView<'_>>;4],order:&[usize;4],shell:Option<&crate::desktop_shell::Shell>) {
     let session=unsafe {(&*core::ptr::addr_of!(SESSION)).as_ref().unwrap()};
-    let data=unsafe {core::slice::from_raw_parts_mut(session.back.base() as *mut u32,WIDTH*HEIGHT)};let font=&crate::ui_font::FONT;
-    if let Some(shell)=shell {let mut c=Canvas::new(data,WIDTH,HEIGHT,WIDTH).unwrap();crate::desktop_paint::background(&mut c,shell,crate::theme::get().desktop);}else {let mut c=Canvas::new(data,WIDTH,HEIGHT,WIDTH).unwrap();c.rect(0,0,800,600,crate::theme::get().desktop);c.text(24,40,crate::theme_model::ink(crate::theme::get().desktop),if shell.is_some() {b"Xinyi desktop"}else{b"Xinyi multitasking"},font);c.text(24,64,crate::theme_model::ink(crate::theme::get().desktop),shell.map_or(b"Drag windows. ESC exits demo. Ctrl+Alt+K stops focused app." as &[u8],|s|&s.message[..s.length]),font);c.rect(0,0,800,24,0xc4c4c4);c.rect(0,22,800,2,0xffffff);c.text(12,5,0,b"Independent programs | Keyboard goes to the focused window",font);}
+    let data=unsafe {core::slice::from_raw_parts_mut(session.back.base() as *mut u32,width()*height())};let font=&crate::ui_font::FONT;
+    if let Some(shell)=shell {let mut c=Canvas::new(data,width(),height(),width()).unwrap();crate::desktop_paint::background(&mut c,shell,crate::theme::get().desktop);}else {let mut c=Canvas::new(data,width(),height(),width()).unwrap();c.rect(0,0,width() as i32,height() as i32,crate::theme::get().desktop);c.text(24,40,crate::theme_model::ink(crate::theme::get().desktop),if shell.is_some() {b"Xinyi desktop"}else{b"Xinyi multitasking"},font);c.text(24,64,crate::theme_model::ink(crate::theme::get().desktop),shell.map_or(b"Drag windows. ESC exits demo. Ctrl+Alt+K stops focused app." as &[u8],|s|&s.message[..s.length]),font);c.rect(0,0,800,24,0xc4c4c4);c.rect(0,22,800,2,0xffffff);c.text(12,5,0,b"Independent programs | Keyboard goes to the focused window",font);}
     for &index in order {let Some(view)=views[index] else{continue;};if !view.ui.window.visible {continue;}let r=view.ui.window.rect;
-        if shell.is_some() {let mut c=Canvas::new(data,WIDTH,HEIGHT,WIDTH).unwrap();modern_window(&mut c,&view);}else {let mut c=Canvas::new(data,WIDTH,HEIGHT,WIDTH).unwrap();c.rect(r.x+6,r.y+6,r.w,r.h,0x000040);bevel(&mut c,r.x,r.y,r.w,r.h,false);let bar=view.ui.title();c.rect(bar.x,bar.y,bar.w,bar.h,if view.ui.focused {crate::theme::get().title}else{0x707070});draw_title(&mut c,&view.ui,view.title,view.io_blocks);
+        if shell.is_some() {let mut c=Canvas::new(data,width(),height(),width()).unwrap();modern_window(&mut c,&view);}else {let mut c=Canvas::new(data,width(),height(),width()).unwrap();c.rect(r.x+6,r.y+6,r.w,r.h,0x000040);bevel(&mut c,r.x,r.y,r.w,r.h,false);let bar=view.ui.title();c.rect(bar.x,bar.y,bar.w,bar.h,if view.ui.focused {crate::theme::get().title}else{0x707070});draw_title(&mut c,&view.ui,view.title,view.io_blocks);
         if view.ui.minimizable {let m=view.ui.minimize_button();bevel(&mut c,m.x,m.y,m.w,m.h,view.ui.minimize_pressed());c.rect(m.x+4,m.y+12,10,2,0);}
         if view.ui.limits.is_some(){let m=view.ui.maximize_button();bevel(&mut c,m.x,m.y,m.w,m.h,view.ui.maximize_pressed());let d=if view.ui.maximize_pressed(){1}else{0};if view.ui.is_maximized(){c.rect(m.x+7+d,m.y+4+d,8,8,0);c.rect(m.x+8+d,m.y+6+d,6,5,0xc4c4c4);}c.rect(m.x+4+d,m.y+6+d,9,8,0);c.rect(m.x+5+d,m.y+8+d,7,5,0xc4c4c4);}
         let close=view.ui.window.close();bevel(&mut c,close.x,close.y,close.w,close.h,view.ui.close_pressed());c.line((close.x+5,close.y+5),(close.x+12,close.y+12),0);c.line((close.x+12,close.y+5),(close.x+5,close.y+12),0);}
 
         let client=view.ui.client();copy_client(data,client,view.pixels);
-        if view.ui.limits.is_some() && !view.ui.is_maximized(){let mut c=Canvas::new(data,WIDTH,HEIGHT,WIDTH).unwrap();let g=view.ui.grip();for d in [3,7,11]{c.line((g.x+13-d,g.y+13),(g.x+13,g.y+13-d),0x404040);}}
-        if let Some(p)=view.ui.preview(){let mut c=Canvas::new(data,WIDTH,HEIGHT,WIDTH).unwrap();c.rect(p.x,p.y,p.w,2,0xffffff);c.rect(p.x,p.y,2,p.h,0xffffff);c.rect(p.x,p.y+p.h-2,p.w,2,0xffffff);c.rect(p.x+p.w-2,p.y,2,p.h,0xffffff);}
+        if view.ui.limits.is_some() && !view.ui.is_maximized(){let mut c=Canvas::new(data,width(),height(),width()).unwrap();let g=view.ui.grip();for d in [3,7,11]{c.line((g.x+13-d,g.y+13),(g.x+13,g.y+13-d),0x404040);}}
+        if let Some(p)=view.ui.preview(){let mut c=Canvas::new(data,width(),height(),width()).unwrap();c.rect(p.x,p.y,p.w,2,0xffffff);c.rect(p.x,p.y,2,p.h,0xffffff);c.rect(p.x,p.y+p.h-2,p.w,2,0xffffff);c.rect(p.x+p.w-2,p.y,2,p.h,0xffffff);}
 
     }
-    if let Some(shell)=shell {let mut c=Canvas::new(data,WIDTH,HEIGHT,WIDTH).unwrap();crate::desktop_paint::chrome(&mut c,shell);}
+    if let Some(shell)=shell {let mut c=Canvas::new(data,width(),height(),width()).unwrap();crate::desktop_paint::chrome(&mut c,shell);}
 
-    {let mut c=Canvas::new(data,WIDTH,HEIGHT,WIDTH).unwrap();crate::multi_window::paint_drag(&mut c);}
+    {let mut c=Canvas::new(data,width(),height(),width()).unwrap();crate::multi_window::paint_drag(&mut c);}
 
 }
 
@@ -544,7 +593,7 @@ pub(crate) fn terminal_cells(pixels:&mut[u32],width:usize,height:usize,cells:&[c
 pub(crate) fn font_address()->u32 {unsafe {(&*core::ptr::addr_of!(SESSION)).as_ref().map_or(0,|s|s.font.base())}}
 
 fn copy_client(data:&mut[u32],r:crate::desktop_ui::Rect,pixels:&[u32]) {
- let left=r.x.max(0);let right=(r.x+r.w).min(800);let top=r.y.max(24);let bottom=(r.y+r.h).min(600);
+ let left=r.x.max(0);let right=(r.x+r.w).min(width() as i32);let top=r.y.max(24);let bottom=(r.y+r.h).min(height() as i32);
  if left>=right||top>=bottom{return;}let n=(right-left) as usize;
- for y in top..bottom {let dst=y as usize*800+left as usize;let src=((y-r.y)*r.w+left-r.x) as usize;data[dst..dst+n].copy_from_slice(&pixels[src..src+n]);}
+ for y in top..bottom {let dst=y as usize*width()+left as usize;let src=((y-r.y)*r.w+left-r.x) as usize;data[dst..dst+n].copy_from_slice(&pixels[src..src+n]);}
 }

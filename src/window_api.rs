@@ -12,7 +12,7 @@ struct App {
     title: [u8; 48],
     title_len: usize,
     surface: Frames,
-    dirty: u32,
+    dirty: u64,
     width: u32,
     height: u32,
 }
@@ -220,6 +220,12 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
     };
     if first != app.id || app.owner != usermode::getpid() {
         return (-9i32) as u32;
+    }
+    if number==104 {
+        let (r,storage,count)=match crate::pixel_copy::request(second,third,app.width,app.height) {Ok(v)=>v,Err(e)=>return e};
+        crate::pixel_copy::apply(app.surface.base(),app.width,r,&storage);
+        for row in r.y/16..=(r.y+r.height-1)/16 {app.dirty|=1<<row;}
+        return count;
     }
     match number {
         61 => {

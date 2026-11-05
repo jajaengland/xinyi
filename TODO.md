@@ -9,7 +9,8 @@
 4. [ ] Application system (installation, metadata, associations and permissions UX).
    - [x] Filesystem manifests, metadata-driven launcher, restrictive loader profiles, TXT/WAV/data associations and bundle-preserving OS installation.
    - [x] Per-app folders and confirmed Files installation/removal, staged publication, asset copying and running-app refusal.
-   - [ ] Updates, permissions review UI, launcher pagination and app package distribution.
+   - [x] Versioned staged updates, explicit rollback/finalize, and a 64-app paged/searchable launcher.
+   - [ ] Permissions review UI and app package distribution.
    - [ ] App manager for install/update/remove, default-app selection and permission controls.
 
 ## Foundation phase before broader feature work
@@ -19,9 +20,12 @@ External review reinforces the need to consolidate the existing OS before expand
 1. [ ] Make the existing build/test pipeline reproducible: document/pin the supported toolchain and dependencies, add one discoverable host-test entry point, and separate quick checks from full disposable-image release checks.
    - [x] One native host-test entry point (`tools/test_host.py`), suite selection, timeouts, failure exit codes and per-run logs/JSON results.
 2. [ ] Add GitHub Actions for host tests and a practical headless QEMU smoke subset, retaining failure logs and captures. Full release/hardware coverage remains separate; do not imply all tests run in CI.
-   - [x] Host-only Windows/Ubuntu workflow with pinned compiler/Python, commit-pinned actions, read-only permissions and failure artifacts. First GitHub execution remains pending until pushed.
-   - [ ] Headless kernel/QEMU smoke job after validating its toolchain and portable entry point.
+   - [x] Host-only Windows/Ubuntu workflow with pinned compiler/Python, commit-pinned actions, read-only permissions and failure artifacts. Windows and Ubuntu host jobs passed on commit 6015e6a.
+   - [x] Headless kernel/QEMU smoke workflow with pinned nightly/Python, matching nested app toolchain and failure/startup evidence.
+   - [ ] Verify the first QEMU GitHub run after pushing the new workflow.
 3. [ ] Review syscall/user-memory boundaries systematically: overflow and range checks, readable/writable mappings, ownership, capability checks, deferred-request lifetimes, IRQ/preemption assumptions and process cleanup. Record verified findings and add targeted regression tests for fixes.
+   - [x] First bounded source review and adversarial console/clipboard/heap tests in foreground and scheduled processes; scope, evidence and remaining work recorded in `SECURITY_REVIEW.md`. No new defect confirmed in this pass.
+   - [x] Focused queued-owner cancellation and active-owner deferred-termination checks, with exact data, live Counter, slot reuse, stale-volume rejection and frame balance; native IDE and BIOS IDE passed locally. Broader coverage remains outstanding.
 4. [ ] Inventory the existing syscall numbers, argument layouts, errors and capability rules in the SDK documentation; add ABI/layout and compatibility checks before promising a stable ABI.
 5. [ ] Extract shell dispatch/diagnostics from main.rs in small behaviour-preserving steps after a reliable test baseline. Avoid a broad kernel rewrite alongside security fixes.
 
@@ -42,8 +46,11 @@ Networking development is deferred; it remains off by default behind the develop
 - [x] Initial Recycle Bin and confirmed restore with collision refusal.
 - [x] Confirmed permanent deletion of selected Recycle Bin records, bounded preflight and marked deletion retry.
 - [ ] Empty Bin and unfinished/corrupt recycle-record recovery UX.
-- [ ] Files icon/compact views, sorting and clearer transfer progress.
-- [ ] Safe app updates/recovery and launcher pagination beyond 16 apps.
+- [x] Files whole-folder Name/Type/Bytes sorting, reversible headings, draggable columns, Back/Forward history and file properties.
+- [x] Files icon/compact views with shared selection/drop geometry, persistent favourite folders and per-item copy/move progress.
+- [x] Read-only BMP Image viewer, bounded RGB pixel tiles, fit/native panning, associations and file drops.
+- [ ] PNG/JPEG decoding, image thumbnails and wallpaper import.
+- [x] Versioned app updates with an app-bound retained backup, rollback/finalize, and launcher pagination beyond 16 apps.
 - [ ] Further app isolation and kernel hardening before downloadable apps.
 
 - [x] Alt+Tab / Shift+Alt+Tab window switching, Alt+F4 close requests and Ctrl+Esc Apps keyboard navigation.
@@ -97,3 +104,14 @@ Keep generated artifacts out of Git. Update the relevant docs and run checks app
 
 - [x] Desktop Files drag/drop: multi-selection, folder targets, Copy/Shift-move, feedback, cancellation and clipboard independence.
 - [x] Persistent wallpaper file/folder icons, Files/wallpaper transfers, and drops into Notepad/Player.
+
+- [x] Selectable desktop resolutions, persisted preference, VBE fallback and dynamic desktop/window geometry; Files and Image use the larger work area.
+- [x] Desktop font/UI scaling at 100%, 125% and 150%, shared logical input/rendering, saved preference and safe fallback.
+- [ ] Graphics/display follow-up: graphical mode/scale selection, vector/anti-aliased fonts and broader hardware validation.
+
+
+## Current visual upgrade sequence
+
+1. [x] Higher-resolution desktop and font/UI scaling foundation.
+2. [ ] Refresh the desktop design and apply consistent controls, spacing and menus across the standard apps.
+3. [ ] Extend the application system with richer bundles and shared app UI components.

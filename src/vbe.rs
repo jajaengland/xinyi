@@ -10,8 +10,9 @@ fn video(ax:u32,bx:u32,cx:u32,dx:u32,es:u16,di:u32)->Option<Registers> {
 }
 fn word(data:&[u8],at:usize)->u16 {u16::from_le_bytes([data[at],data[at+1]])}
 fn dword(data:&[u8],at:usize)->u32 {u32::from_le_bytes([data[at],data[at+1],data[at+2],data[at+3]])}
-pub fn find_mode()->Result<Mode,&'static str> {
-    if let Some(mode)=unsafe {*core::ptr::addr_of!(CACHED)} {return Ok(mode);}
+pub fn find_mode()->Result<Mode,&'static str> {find_mode_for(800,600)}
+pub fn find_mode_for(width:u16,height:u16)->Result<Mode,&'static str> {
+    if let Some(mode)=unsafe {*core::ptr::addr_of!(CACHED)}.filter(|m|m.width==width&&m.height==height) {return Ok(mode);}
     if !bios::available() {return Err("Graphics backend unavailable: boot the BIOS disk/USB image for VESA support.");}
     unsafe {core::ptr::write_bytes(0x18000 as *mut u8,0,768);core::ptr::copy_nonoverlapping(b"VBE2".as_ptr(),0x18000 as *mut u8,4);}
     let result=video(0x4f00,0,0,0,0x1800,0).ok_or("BIOS video bridge unavailable.")?;
@@ -28,12 +29,12 @@ pub fn find_mode()->Result<Mode,&'static str> {
         unsafe {core::ptr::write_bytes(0x18200 as *mut u8,0,256);}
         if video(0x4f01,0,number as u32,0,0x1800,512).is_some_and(|r|r.eax&0xffff==0x4f) {
             let data=unsafe {&*(0x18200 as *const [u8;256])};
-            if let Some(mode)=parse_mode(number,version,data) {
+            if let Some(mode)=parse_mode(number,version,data).filter(|m|m.width==width&&m.height==height) {
                 if best.is_none_or(|old|mode.bpp>old.bpp) {best=Some(mode);}
             }
         }
     }
-    let mode=best.ok_or("BIOS has no supported 800x600 linear RGB mode (16/24/32 bpp).")?;
+    let mode=best.ok_or("BIOS has no supported requested linear RGB mode (16/24/32 bpp).")?;
     unsafe {*core::ptr::addr_of_mut!(CACHED)=Some(mode);}
     Ok(mode)
 }

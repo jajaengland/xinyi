@@ -2,6 +2,16 @@
 #[path="../src/app_manifest.rs"]mod app_manifest;
 use app_manifest::*;
 const VALID:&[u8]=b"XINYI-APP 1\nexec=TEST.ELF\ntitle=Example\ndescription=A test app\nicon=document\naccess=read-only\nhandles=txt,log,-\n";
+#[test]fn update_versions_are_monotonic_and_never_expand_permissions() {
+ let old=Manifest::parse(VALID,b"TEST.ELF").unwrap();assert_eq!(old.version,0);
+ let versioned=|v:&str,access:&str| Manifest::parse(format!("{}version={}\n",std::str::from_utf8(VALID).unwrap().replace("access=read-only",&format!("access={access}")),v).as_bytes(),b"TEST.ELF");
+ let v1=versioned("1","read-only").unwrap();let v2=versioned("2","read-only").unwrap();
+ assert!(permits_update(&old,&v1));assert!(permits_update(&v1,&v2));assert!(!permits_update(&v1,&v1));assert!(!permits_update(&v2,&v1));
+ assert!(!permits_update(&v1,&versioned("2","trusted").unwrap()));assert!(!permits_update(&v1,&versioned("2","media").unwrap()));
+ assert!(permits_update(&v1,&versioned("2","isolated").unwrap()));
+ for v in ["0","-1","1.2","4294967296","","1x"] {assert!(versioned(v,"read-only").is_err());}
+ assert_eq!(versioned("4294967295","read-only").unwrap().version,u32::MAX);
+}
 #[test]fn manifest_fields_aliases_and_binding_are_bounded() {
  let m=Manifest::parse(VALID,b"test.elf").unwrap();assert_eq!(m.title(),b"Example");assert_eq!(m.description(),b"A test app");
  assert_eq!(m.access,Access::ReadOnly);assert_eq!(m.access.prefix(),b"--read-only ");assert_eq!(m.icon,3);

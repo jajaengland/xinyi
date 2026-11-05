@@ -1,0 +1,85 @@
+name: QEMU smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qemu-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qemu-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      XINYI_RUST_TOOLCHAIN: nightly-2026-10-08
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.14.2'
+
+      - name: Check smoke harness failure handling
+        run: python -m unittest discover -s tools -p test_smoke_harness.py
+
+      - name: Install NASM and QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y nasm qemu-system-x86
+
+      - name: Install kernel Rust compiler
+        run: rustup toolchain install "$XINYI_RUST_TOOLCHAIN" --profile minimal --component rust-src
+
+      - name: Record tool versions
+        run: |
+          mkdir -p target/ci
+          rustc "+$XINYI_RUST_TOOLCHAIN" -vV > target/ci/tool-versions.txt
+          python --version >> target/ci/tool-versions.txt
+          nasm -v >> target/ci/tool-versions.txt
+          qemu-system-i386 --version >> target/ci/tool-versions.txt
+
+      - name: Build kernel and standard applications
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo "+$XINYI_RUST_TOOLCHAIN" build --release -Z build-std=core 2>&1 | tee target/ci/build.log
+
+      - name: Check desktop startup and console fallback
+        shell: bash
+        run: |
+          set -o pipefail
+          python tools/desktop_boot_qemu.py --qemu qemu-system-i386 --kernel target/i686-unknown-none/release/rust-os 2>&1 | tee target/ci/desktop-boot.log
+
+      - name: Boot and check kernel
+        shell: bash
+        run: |
+          set -o pipefail
+          python tools/smoke.py --qemu qemu-system-i386 --kernel target/i686-unknown-none/release/rust-os 2>&1 | tee target/ci/qemu-smoke.log
+
+      - name: Preserve build and emulator evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: qemu-smoke
+          path: |
+            target/ci/*.log
+            target/ci/tool-versions.txt
+            target/smoke/transcript.txt
+            target/smoke/*-debug.log
+            target/smoke/*-qemu.stderr
+            target/desktop-boot/*-debug.log
+            target/desktop-boot/*-qemu.stderr
+          if-no-files-found: warn
+          retention-days: 7

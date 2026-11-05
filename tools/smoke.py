@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class Guest:
     def __init__(self, qemu, kernel, directory, disk=None, attach_disk=True,
                  boot_message="Welcome to Xinyi.", memory_mib=128,
-                 disk_index=0, extra_args=None, disk_format="raw"):
+                 disk_index=0, extra_args=None, disk_format="raw", start_desktop=False):
         self.directory = directory
         # The fixture is private to this run. Never attach a developer disk.
         if disk is None:
@@ -29,18 +29,22 @@ class Guest:
             reservation.bind(("127.0.0.1", 0))
             port = reservation.getsockname()[1]
         self.stderr = (directory / "qemu.stderr").open("w")
-        self.process = subprocess.Popen([
-            qemu, *(["-kernel", str(kernel)] if kernel is not None else ["-boot", "c"]),
-            "-m", f"{memory_mib}M",
-            *(extra_args or []),
-            "-display", "none", "-monitor", "none", "-serial", "none",
-            "-no-reboot", "-nic", "none",
-            *(["-drive", f"file={disk.as_posix()},format={disk_format},if=ide,index={disk_index}"] if attach_disk else []),
-            "-qmp", f"tcp:127.0.0.1:{port},server=on,wait=off",
-            "-debugcon", f"file:{(directory / 'debug.log').as_posix()}",
-            "-global", "isa-debugcon.iobase=0xe9",
-        ], stdout=subprocess.DEVNULL, stderr=self.stderr,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        try:
+            self.process = subprocess.Popen([
+                qemu, *(["-kernel", str(kernel)] if kernel is not None else ["-boot", "c"]),
+                "-m", f"{memory_mib}M",
+                *(extra_args or []),
+                "-display", "none", "-monitor", "none", "-serial", "none",
+                "-no-reboot", "-nic", "none",
+                *(["-drive", f"file={disk.as_posix()},format={disk_format},if=ide,index={disk_index}"] if attach_disk else []),
+                "-qmp", f"tcp:127.0.0.1:{port},server=on,wait=off",
+                "-debugcon", f"file:{(directory / 'debug.log').as_posix()}",
+                "-global", "isa-debugcon.iobase=0xe9",
+            ], stdout=subprocess.DEVNULL, stderr=self.stderr,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except OSError:
+            self.stderr.close()
+            raise
         self.connection = None
         try:
             deadline = time.monotonic() + 10
@@ -55,9 +59,26 @@ class Guest:
             self.reader = self.connection.makefile("rb")
             self.reader.readline()  # QMP greeting
             self.call("qmp_capabilities")
-            self.wait_for(boot_message, timeout=45)  # USB EDD loads one sector per BIOS call.
             if boot_message=="Welcome to Xinyi.":
-                self.wait_for("xinyi:/",timeout=30)
+                # Graphics mode may overwrite VGA text memory before QMP connects.
+                deadline = time.monotonic() + 45  # USB BIOS loading can be slow.
+                while True:
+                    log = (directory / 'debug.log').read_text(errors='replace')
+                    if 'Desktop: ready' in log:
+                        if not start_desktop:
+                            self.key('esc')
+                        break
+                    if 'Boot: console ready' in log:
+                        if start_desktop:
+                            raise AssertionError('Boot fell back to the console:\n' + log)
+                        break
+                    if time.monotonic() > deadline:
+                        raise AssertionError('Boot did not finish:\n' + log)
+                    time.sleep(0.05)
+                if not start_desktop:
+                    self.wait_for("xinyi:/",timeout=30)
+            else:
+                self.wait_for(boot_message, timeout=45)
         except BaseException:
             self.close()
             raise
@@ -144,10 +165,12 @@ def main():
     transcript = []
     try:
         with tempfile.TemporaryDirectory(prefix="run-", dir=output) as temporary:
-            directory = Path(temporary)
             for mode in ("shell", "breakpoint", "panic", "usermode"):
-                guest = Guest(args.qemu, args.kernel.resolve(), directory)
+                directory = Path(temporary) / mode
+                directory.mkdir()
+                guest = None
                 try:
+                    guest = Guest(args.qemu, args.kernel.resolve(), directory)
                     if mode == "shell":
                         for command, expected in [
                             ("version", "Xinyi kernel version 0.1.0"),
@@ -216,10 +239,19 @@ def main():
                             print("OBSERVED saved-frame getpid and validated zero-byte write", flush=True)
                         print(f"PASS {mode} diagnostics", flush=True)
                 except BaseException:
-                    transcript.append(f"[FAILED: {mode}]\n{guest.screen()}\n")
+                    try:
+                        screen = guest.screen() if guest else "Guest failed during startup"
+                    except Exception as error:
+                        screen = f"Cannot read screen: {error}"
+                    transcript.append(f"[FAILED: {mode}]\n{screen}\n")
                     raise
                 finally:
-                    guest.close()
+                    if guest:
+                        guest.close()
+                    for filename in ("debug.log", "qemu.stderr"):
+                        source = directory / filename
+                        if source.exists():
+                            shutil.copyfile(source, output / f"{mode}-{filename}")
     finally:
         (output / "transcript.txt").write_text("\n".join(transcript), encoding="utf-8")
     print(f"Transcript: {output / 'transcript.txt'}")

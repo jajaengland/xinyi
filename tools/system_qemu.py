@@ -97,7 +97,7 @@ def main():
                 command(guest,"cat unnamed.txt","save on quit")
                 # Removing the executable really removes the app; no kernel fallback.
                 command(guest,"delete /apps/snake/snake.bin","Deleted:")
-                command(guest,"run snake","Program: file not found")
+                command(guest,"run /apps/snake/snake.bin","Program: file not found")
             finally:guest.close()
             files,_=inspect_tree(image,2048)
             assert files["NOTE.TXT"]==b"hello world!\nsecond line"

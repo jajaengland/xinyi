@@ -5,3 +5,4 @@ description=Browse files and folders
 icon=folder
 access=trusted
 handles=
+version=1

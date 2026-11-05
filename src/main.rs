@@ -46,6 +46,8 @@ mod vbe;
 mod vbe_mode;
 mod canvas;
 mod graphics;
+mod display;
+mod display_layout;
 mod ps2;
 mod mouse;
 mod mouse_packet;
@@ -64,6 +66,8 @@ mod multitask;
 mod multi_window;
 mod ui_font;
 mod window_protocol;
+mod pixel_protocol;
+mod pixel_copy;
 mod window_queue;
 mod app_window_ui;
 mod window_api;
@@ -112,6 +116,8 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("settings", "settings", "Open appearance settings"),
     ("sounds", "sounds [list|test NAME|volume N|mute|unmute|save]", "System voice sounds and volume"),
     ("terminal", "terminal", "Open a graphical terminal window"),
+    ("uiscale", "uiscale [100|125|150]", "Save font and UI scaling for the next desktop session"),
+    ("display", "display [WIDTHxHEIGHT]", "Save a resolution for the next desktop session"),
     ("desktop", "desktop", "Open the multitasking desktop and Apps menu"),
     ("windowtest", "windowtest", "Run the legacy window/launcher diagnostic"),
     ("mouse", "mouse", "Test PS/2 mouse, buttons and right-click menu; Escape exits"),
@@ -135,7 +141,7 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("usermode", "usermode [probe]", "Test protected ring 3 execution"),
     ("ps", "ps", "Show running processes"),
     ("apps", "apps", "List programs installed in /APPS"),
-    ("app", "app install FOLDER | app remove /APPS/ID", "Install or remove an app folder"),
+    ("app", "app install/update FOLDER | app remove/rollback/finalize /APPS/ID", "Install, update, remove or recover an app folder"),
     ("notepad", "notepad [FILE]", "Open a file in graphical Notepad"),
     ("edit", "edit [FILE]", "Open a text file in the editor"),
     ("disks", "disks", "List available numbered drives"),
@@ -502,8 +508,8 @@ fn run_command(input: &str) {
         "mouse"=>graphics::mouse_demo(),
         "graphics"=>graphics::demo(),
         "apps" => {
-            let mut catalog=app_catalog::Catalog::new();
-            match multi_window::collect_catalog(&mut catalog) {
+            let Some(mut storage)=app_catalog::Storage::new() else {println!("Not enough memory for app catalogue.");return;};let catalog=storage.catalog();
+            match multi_window::collect_catalog(catalog) {
                 Ok(())=>for entry in &catalog.entries[..catalog.len] {
                     let path=core::str::from_utf8(&entry.path[..entry.path_len]).unwrap();
                     println!("  {} - {}",path.rsplit('/').next().unwrap(),core::str::from_utf8(entry.title()).unwrap_or("Application"));
@@ -516,10 +522,15 @@ fn run_command(input: &str) {
             let result=match operation {
                 "install" if !path.is_empty()=>app_install::install(path.trim()),
                 "remove" if !path.is_empty()=>app_install::remove(path.trim()),
-                _=>{println!("Usage: app install FOLDER | app remove /APPS/ID");return;},
+                "update" if !path.is_empty()=>app_install::update(path.trim()),
+                "rollback" if !path.is_empty()=>app_install::finish_update(path.trim(),true),
+                "finalize" if !path.is_empty()=>app_install::finish_update(path.trim(),false),
+                _=>{println!("Usage: app install/update FOLDER | app remove/rollback/finalize /APPS/ID");return;},
             };
             match result {Ok(())=>println!("Application {} complete.",operation),Err(e)=>println!("Application: {}",e.message())}
         }
+        "uiscale" => display::scale_command(argument),
+        "display" => display::command(argument),
         "sounds" => system_sounds::command(argument),
         "edit" => {launch_program("edit", argument);},
         "notepad" => {launch_program("notepad", argument);},
@@ -897,6 +908,7 @@ pub extern "C" fn rust_main(magic: u32, info_addr: u32) -> ! {
     println!("Type 'help' to see commands.");
     diskfs::startup_mount();
     theme::load();
+    display::load();
     power::init();
     audio::init();
     network::init();
@@ -904,6 +916,9 @@ pub extern "C" fn rust_main(magic: u32, info_addr: u32) -> ! {
     system_sounds::play(system_sounds::Event::Startup);
     println!();
 
+    multitask::desktop();
+    // Returning from the desktop (or unsupported graphics) keeps diagnostics usable.
+    debug::write_str("Boot: console ready\n");
     shell::Shell::physical()
 }
 

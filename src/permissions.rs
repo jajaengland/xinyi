@@ -46,7 +46,7 @@ impl Profile {
         }
         match number {
             // Own process, window, console, memory, time and policy query.
-            1 | 4 | 20 | 50..=56 | 59..=66 | 70 | 85..=87 | 95 => true,
+            1 | 4 | 20 | 50..=56 | 59..=66 | 70 | 85..=87 | 95 | 104 => true,
             57 | 78 | 79 | 82 | 88 | 90 | 91 | 93 => matches!(self, Self::ReadOnly | Self::Media),
             103 => matches!(self,Self::ReadOnly|Self::Media)&&matches!(first,2|3|4),
             96 => first == 0,

@@ -5,3 +5,4 @@ description=Commands and text apps
 icon=terminal
 access=trusted
 handles=
+version=1

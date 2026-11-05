@@ -5,3 +5,4 @@ description=Game
 icon=game
 access=trusted
 handles=
+version=1

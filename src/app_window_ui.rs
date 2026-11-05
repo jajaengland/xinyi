@@ -48,7 +48,7 @@ impl State {
             minimizable: false,
             buttons,
             limits: None,
-            work_area:Rect{x:0,y:24,w:800,h:576},
+            work_area:Rect{x:0,y:24,w:crate::display_layout::width(),h:crate::display_layout::height()-24},
             preview: None,
             capture: None,
             offset: (0, 0),
@@ -90,7 +90,7 @@ impl State {
         self.window.visible = true;
         let r = &mut self.window.rect;
         if self.maximized.is_none() {
-            r.x = r.x.clamp(0, (800 - r.w - 6).max(0));
+            r.x = r.x.clamp(0, (self.work_area.w - r.w - 6).max(0));
             r.y = r.y.clamp(self.work_area.y, (self.work_area.y+self.work_area.h-6-r.h).max(self.work_area.y));
         }
         self.capture = None;
@@ -133,10 +133,14 @@ impl State {
             normal.h = nh + 38;
             (normal, false, nw, nh)
         } else {
+            let mut area=self.work_area;
+            if area.w>800 || area.h>600 {
+                area.w=area.w.min(w+8);area.h=area.h.min(h+32);
+            }
             (
-                self.work_area,
+                area,
                 true,
-                w.min(792),
+                w.min(((self.work_area.w-8)/8)*8),
                 h.min(usable_height),
             )
         };
@@ -201,8 +205,8 @@ impl State {
             self.preview,
         );
         let captured = self.capture;
-        self.x = (self.x + input.dx as i32).clamp(0, 799);
-        self.y = (self.y + input.dy as i32).clamp(0, 599);
+        self.x = (self.x + input.dx as i32).clamp(0, crate::display_layout::width()-1);
+        self.y = (self.y + input.dy as i32).clamp(0, crate::display_layout::height()-1);
         let pressed = input.buttons & !self.buttons;
         let released = self.buttons & !input.buttons;
         self.buttons = input.buttons;
@@ -253,7 +257,7 @@ impl State {
                     (self.x - self.press_at.0).abs() > 4 || (self.y - self.press_at.1).abs() > 4;
                 if self.dragged && !self.is_maximized() && self.placement.is_none() {
                     let r = &mut self.window.rect;
-                    r.x = (self.x - self.offset.0).clamp(32 - r.w, 768);
+                    r.x = (self.x - self.offset.0).clamp(32 - r.w, self.work_area.x+self.work_area.w-32);
                     r.y = (self.y - self.offset.1).clamp(self.work_area.y,self.work_area.y+self.work_area.h-32);
                 }
             }

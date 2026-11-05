@@ -36,7 +36,8 @@ def main():
         if not 0<len(content)<=512 or content.splitlines()[0]!=b"XINYI-APP 1":raise ValueError(f"Invalid manifest: {manifest}")
         pairs=[line.split("=",1) for line in content.decode('ascii').splitlines()[1:] if line and not line.startswith('#')]
         properties=dict(pairs)
-        if len(pairs)!=6 or set(properties)!={'exec','title','description','icon','access','handles'}:raise ValueError(f"Duplicate, missing or unknown manifest fields: {manifest}")
+        if len(pairs)!=len(properties) or not {'exec','title','description','icon','access','handles'}<=set(properties) or set(properties)-{'exec','title','description','icon','access','handles','version'}:raise ValueError(f"Duplicate, missing or unknown manifest fields: {manifest}")
+        if 'version' in properties and (len(properties['version'])>10 or not properties['version'].isascii() or not properties['version'].isdigit() or not 1<=int(properties['version'])<=0xffffffff):raise ValueError(f"Invalid version: {manifest}")
         if not properties['title'].strip() or len(properties['title'])>32 or len(properties['description'])>64:raise ValueError(f"Invalid manifest text: {manifest}")
         if properties['access'] not in ('trusted','read-only','media','isolated') or properties['icon'] not in ('folder','terminal','settings','document','audio','game','font','application'):raise ValueError(f"Invalid manifest policy/icon: {manifest}")
         types=properties['handles'].lower().split(',') if properties['handles'] else []

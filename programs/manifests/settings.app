@@ -5,3 +5,4 @@ description=Colours and system sounds
 icon=settings
 access=trusted
 handles=
+version=1

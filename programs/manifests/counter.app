@@ -5,3 +5,4 @@ description=Process and timing demo
 icon=application
 access=trusted
 handles=
+version=1

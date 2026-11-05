@@ -5,3 +5,4 @@ description=WAV and voice playback
 icon=audio
 access=media
 handles=wav
+version=1

@@ -185,6 +185,12 @@ pub mod window {
         super::syscall(61, handle, event as *mut _ as u32, wait as u32)
     }
     /// Text pointers in Draw commands must remain valid for this call.
+    /// Packed 0x00RRGGBB pixels, at most 2048 per call. Present separately.
+    pub fn pixels(handle:u32,x:u32,y:u32,width:u32,height:u32,data:&[u32])->i32 {
+        if width.checked_mul(height)!=Some(data.len() as u32) {return -22;}
+        let r=[x,y,width,height,data.as_ptr() as u32];
+        super::syscall(104,handle,r.as_ptr() as u32,20)
+    }
     pub fn draw(handle: u32, commands: &[Draw]) -> i32 {
         super::syscall(62, handle, commands.as_ptr() as u32, commands.len() as u32)
     }
@@ -293,7 +299,7 @@ pub mod directory {
     }
     /// Install a selected bundle (0), or remove an installed bundle (1).
     pub fn app_action(path:&[u8],operation:u16,volume:u32)->i32 {
-        if path.is_empty()||path.len()>105||operation>1 {return -22;}
+        if path.is_empty()||path.len()>105||operation>4 {return -22;}
         let mut r=super::directory_protocol::Transfer{source:[0;105],destination:[0;105],source_length:path.len() as u16,destination_length:0,operation,volume};
         r.source[..path.len()].copy_from_slice(path);
         super::syscall(102,&r as *const _ as u32,220,0)

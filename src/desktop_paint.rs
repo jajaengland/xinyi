@@ -22,11 +22,11 @@ fn button(c:&mut Canvas<'_>,r:Rect,active:bool,hover:bool) {
     c.rect(r.x,r.y,r.w,r.h,if active {0x285e83}else if hover {0x28455d}else{0x1d3449});
 }
 pub fn background(c:&mut Canvas<'_>,s:&Shell,color:u32) {
-    c.rect(0,0,800,544,color);
+    c.rect(0,0,crate::display_layout::width(),Shell::work_area().h,color);
     let subtle=tint(color);
     for (x,y,w,h) in [(628,56,100,6),(722,56,6,96),(596,88,100,6),(690,88,6,96)] {c.rect(x,y,w,h,subtle);}
     let ink=crate::theme_model::ink(color);
-    c.label(620,212,132,ink,b"Xinyi");
+    c.label(crate::display_layout::width()-180,212,132,ink,b"Xinyi");
     for i in [0,1,2,4] {
         let Some(index)=s.shortcut_app(i) else {continue;};let entry=&s.catalog.entries[index];let r=Shell::shortcut(i);
         if s.hit()==Some(Hit::Shortcut(i)) {c.rect(r.x,r.y,r.w,r.h,subtle);}
@@ -45,7 +45,7 @@ pub fn background(c:&mut Canvas<'_>,s:&Shell,color:u32) {
     }
 }
 pub fn chrome(c:&mut Canvas<'_>,s:&Shell) {
-    c.rect(0,544,800,56,0x142637);c.rect(0,544,800,1,0x49647a);
+    c.rect(0,Shell::bar().y,Shell::bar().w,Shell::bar().h,0x142637);c.rect(0,Shell::bar().y,Shell::bar().w,1,0x49647a);
     let r=Shell::apps();button(c,r,s.open,s.hit()==Some(Hit::Apps));
     for (x,y) in [(r.x+12,r.y+9),(r.x+20,r.y+9),(r.x+12,r.y+17),(r.x+20,r.y+17)] {c.rect(x,y,5,5,0x8bd1ef);}
     c.label(r.x+34,r.y+8,46,0xffffff,b"Apps");
@@ -58,7 +58,7 @@ pub fn chrome(c:&mut Canvas<'_>,s:&Shell) {
     }
     let r=Shell::sound();button(c,r,s.sound_open,s.hit()==Some(Hit::Sound));icon(c,r.x+6,r.y+4,24,4);
     if s.volume==0 {c.line((r.x+6,r.y+6),(r.x+29,r.y+25),0xf3b2a7);}
-    c.label(640,558,72,0xffffff,&s.clock);c.label(640,576,72,0xaec3d4,b"Local");
+    c.label(Shell::bar().w-160,Shell::bar().y+14,72,0xffffff,&s.clock);c.label(Shell::bar().w-160,Shell::bar().y+32,72,0xaec3d4,b"Local");
     let r=Shell::exit();button(c,r,false,s.hit()==Some(Hit::Exit));c.label(r.x+16,r.y+8,44,0xffffff,b"Shell");
     if s.open {
         let r=s.menu();c.rect(r.x+4,r.y+4,r.w,r.h,0x102333);c.rect(r.x,r.y,r.w,r.h,0x8299ad);c.rect(r.x+1,r.y+1,r.w-2,r.h-2,0xf1f5f8);
@@ -69,14 +69,27 @@ pub fn chrome(c:&mut Canvas<'_>,s:&Shell) {
         if s.query_len>0 {let x=r.x+24+text::width(label,Font::Ui) as i32;c.rect(x,r.y+62,1,16,0x2f78aa);}
         let(items,n)=s.filtered();
         if n==0 {c.paragraph(r.x+24,r.y+110,(r.w-48) as u32,64,MUTED,b"No applications match. Try a shorter name.");}
-        for (slot,&index) in items[..n].iter().enumerate() {
+        for (slot,&index) in items[..n].iter().skip(s.app_page*16).take(16).enumerate() {
             let entry=&s.catalog.entries[index];let card=s.card(slot);
             if s.menu_selection.map_or(s.hit()==Some(Hit::App(index)),|selected|selected==index) {c.rect(card.x,card.y,card.w,card.h,0xd9eaf6);c.rect(card.x,card.y,2,card.h,0x357da9);}
             icon(c,card.x+8,card.y+8,24,entry.icon as usize);
-            c.label(card.x+42,card.y+3,(card.w-48) as u32,INK,entry.title());
+            let mut version=[b'0';11];let mut value=entry.version;
+            for i in (1..11).rev() {version[i]+= (value%10) as u8;value/=10;}
+            let at=version[1..].iter().position(|b|*b!=b'0').map_or(10,|i|i+1);version[at-1]=b'v';
+            let label=&version[at-1..];let vw=if entry.version>0 {text::width(label,Font::Ui) as i32+8}else{0};
+            c.label(card.x+42,card.y+3,(card.w-48-vw) as u32,INK,entry.title());
+            if vw>0 {c.label(card.x+card.w-vw,card.y+3,vw as u32,MUTED,label);}
             c.label(card.x+42,card.y+21,(card.w-48) as u32,MUTED,entry.description());
         }
-        c.label(r.x+16,r.y+r.h-20,(r.w-32) as u32,MUTED,if s.length>0 {&s.message[..s.length]}else if s.catalog.truncated {b"Catalog full: first 16 apps shown"}else{b"Enter opens  |  Arrows select  |  Escape closes"});
+        if n>16 {
+            for next in [false,true] {
+                let rect=s.page_button(next);let enabled=if next {(s.app_page+1)*16<n}else{s.app_page>0};
+                if enabled {button(c,rect,false,s.hit()==Some(if next {Hit::NextPage}else{Hit::PreviousPage}));}else{c.rect(rect.x,rect.y,rect.w,rect.h,0xcbd6df);}
+                c.label(rect.x+8,rect.y+2,52,if enabled {0xffffff}else{0x708493},if next {b"Next"}else{b"Prev"});
+            }
+            let page=[b'1'+s.app_page as u8,b'/',b'0'+n.div_ceil(16) as u8];c.rect(r.x+394,r.y+12,72,28,0xe0eaf2);c.label(r.x+406,r.y+16,48,INK,&page);
+            c.label(r.x+88,r.y+442,304,MUTED,if s.length>0 {&s.message[..s.length]}else if s.catalog.truncated {b"First 64 apps shown"}else{b"PgUp/PgDn | Enter opens"});
+        } else {c.label(r.x+16,r.y+r.h-20,(r.w-32) as u32,MUTED,if s.length>0 {&s.message[..s.length]}else if s.catalog.truncated {b"Catalog full: first 64 apps shown"}else{b"Enter opens  |  Arrows select  |  Escape closes"});}
     }
     if s.sound_open {
         let r=Shell::sound_panel();c.rect(r.x+3,r.y+3,r.w,r.h,0x102333);c.rect(r.x,r.y,r.w,r.h,0x8299ad);c.rect(r.x+1,r.y+1,r.w-2,r.h-2,0xf1f5f8);

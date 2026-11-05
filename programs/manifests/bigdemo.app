@@ -5,3 +5,4 @@ description=Large image and heap demo
 icon=application
 access=isolated
 handles=
+version=1

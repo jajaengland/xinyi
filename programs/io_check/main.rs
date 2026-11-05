@@ -72,6 +72,15 @@ fn main() -> u32 {
                 assert_eq!(xinyi::save_file(b"/STALE.TXT", b"wrong volume"), -116);
                 status(handle, 0xaa00aa);
             }
+            68 | 100 => {
+                status(handle, 0x0000aa);
+                assert_eq!(directory::transfer(b"/SOURCE", b"/CANCEL", 1), 0);
+                status(handle, 0x00aaaa);
+            }
+            74 | 106 => {
+                assert_eq!(xinyi::save_file(b"/PENDING.TXT", b"must not run"), 12);
+                status(handle, 0xff0000);
+            }
             81 | 113 => return 0,
             _ => (),
         }

@@ -23,13 +23,15 @@ fn main() {
     // Nested Cargo uses a separate target directory in build_program.py, so it
     // never waits on this kernel build's target lock. Build apps from source
     // for every kernel build as separate files for filesystem packaging.
+    println!("cargo:rerun-if-env-changed=PYTHON");
+    println!("cargo:rerun-if-env-changed=XINYI_RUST_TOOLCHAIN");
     let python = env::var("PYTHON").unwrap_or_else(|_| "python".into());
     let status = Command::new(python)
         .arg(manifest_dir.join("tools/build_apps.py"))
         .arg("--output-dir").arg(&out_dir)
         .status().expect("Standard applications require Python 3 on PATH (or PYTHON)");
     assert!(status.success(), "Application build failed");
-    for path in ["programs", "sdk", "src/window_protocol.rs", "src/ui_font.rs", "src/text_layout.rs", "src/directory_protocol.rs", "tools/build_apps.py", "tools/build_program.py", "i686-unknown-none.json"] {
+    for path in ["programs", "sdk", "assets", "src", "tools/build_apps.py", "tools/build_program.py", "i686-unknown-none.json"] {
         println!("cargo:rerun-if-changed={path}");
     }
 

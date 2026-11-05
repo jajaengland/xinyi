@@ -7,8 +7,9 @@ impl Access {
 }
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum Error {Size,Header,Field,Duplicate,Value,Executable}
-#[derive(Clone,Copy)]
+#[derive(Clone,Copy,PartialEq,Eq)]
 pub struct Manifest {
+    pub version:u32,
     pub executable:[u8;12],pub executable_len:usize,
     title:[u8;32],title_len:usize,description:[u8;64],description_len:usize,
     pub icon:u8,pub access:Access,types:[[u8;3];8],lengths:[u8;8],count:usize,
@@ -25,14 +26,15 @@ impl Manifest {
         let mut lines=bytes.split(|b|*b==b'\n');
         fn line(b:&[u8])->&[u8] {if b.ends_with(b"\r"){&b[..b.len()-1]}else{b}}
         if line(lines.next().unwrap())!=b"XINYI-APP 1" {return Err(Error::Header);}
-        let mut out=Self{executable:[0;12],executable_len:0,title:[0;32],title_len:0,description:[0;64],description_len:0,icon:7,access:Access::Trusted,types:[[0;3];8],lengths:[0;8],count:0};
+        let mut out=Self{version:0,executable:[0;12],executable_len:0,title:[0;32],title_len:0,description:[0;64],description_len:0,icon:7,access:Access::Trusted,types:[[0;3];8],lengths:[0;8],count:0};
         let mut seen=0u8;
         for raw in lines {
             let raw=line(raw);if raw.contains(&b'\r') {return Err(Error::Value);}if raw.is_empty()||raw.starts_with(b"#") {continue;}
             let at=raw.iter().position(|b|*b==b'=').ok_or(Error::Field)?;let(key,value)=(&raw[..at],&raw[at+1..]);
-            let flag=match key {b"exec"=>1,b"title"=>2,b"description"=>4,b"icon"=>8,b"access"=>16,b"handles"=>32,_=>return Err(Error::Field)};
+            let flag=match key {b"exec"=>1,b"title"=>2,b"description"=>4,b"icon"=>8,b"access"=>16,b"handles"=>32,b"version"=>64,_=>return Err(Error::Field)};
             if seen&flag!=0 {return Err(Error::Duplicate);}seen|=flag;
             match flag {
+                64=>{out.version=parse_version(value).ok_or(Error::Value)?;},
                 1=>{if !executable(value)||!value.eq_ignore_ascii_case(expected) {return Err(Error::Executable);}out.executable_len=value.len();out.executable[..value.len()].copy_from_slice(value);},
                 2=>{if value.is_empty()||value.len()>32||value.iter().all(|b|*b==b' ') {return Err(Error::Value);}out.title_len=value.len();out.title[..value.len()].copy_from_slice(value);},
                 4=>{if value.len()>64 {return Err(Error::Value);}out.description_len=value.len();out.description[..value.len()].copy_from_slice(value);},
@@ -46,7 +48,7 @@ impl Manifest {
                 _=>unreachable!(),
             }
         }
-        if seen!=63 {return Err(Error::Field);}Ok(out)
+        if seen&63!=63 {return Err(Error::Field);}Ok(out)
     }
     pub fn title(&self)->&[u8] {&self.title[..self.title_len]}
     pub fn description(&self)->&[u8] {&self.description[..self.description_len]}
@@ -59,4 +61,15 @@ pub fn sidecar(executable:&[u8],output:&mut[u8])->Option<usize> {
     let leaf=executable.rsplit(|b|matches!(*b,b'/'|b'\\')).next()?;
     if !self::executable(leaf)||output.len()<executable.len() {return None;}
     output[..executable.len()].copy_from_slice(executable);let n=executable.len();output[n-3..n].copy_from_slice(b"APP");Some(n)
+}
+
+/// Version zero denotes an older manifest without a version field.
+pub fn parse_version(bytes:&[u8])->Option<u32> {
+    if bytes.is_empty() || bytes.len()>10 || !bytes.iter().all(u8::is_ascii_digit) {return None;}
+    let mut value=0u32;for &digit in bytes {value=value.checked_mul(10)?.checked_add((digit-b'0') as u32)?;}
+    (value>0).then_some(value)
+}
+pub fn permits_update(old:&Manifest,new:&Manifest)->bool {
+    fn mask(a:Access)->u32 {match a {Access::Trusted=>63,Access::ReadOnly=>1,Access::Media=>33,Access::Isolated=>0}}
+    new.version>old.version && mask(new.access)&!mask(old.access)==0
 }

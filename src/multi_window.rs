@@ -34,6 +34,7 @@ static mut WINDOWS: [Option<Window>; N] = [const { None }; N];
 static mut ORDER: [usize; N] = [0, 1, 2, 3];
 static mut FOCUS: Option<usize> = None;
 static mut CAPTURE: Option<usize> = None;
+static mut MOTION:crate::display_layout::PointerMotion=crate::display_layout::PointerMotion::new();
 static mut POINTER: (i32, i32) = (400, 300);
 static mut DRAWN: (i32, i32) = (400, 300);
 static mut BUTTONS: u8 = 0;
@@ -69,9 +70,9 @@ pub fn status(text: &[u8]) {
 pub fn collect_catalog(catalog:&mut crate::app_catalog::Catalog)->crate::fat16::Result<()> {
     let mut folders=[[0;11];64];let mut count=0;let mut overflow=false;
     crate::diskfs::list("/APPS", |name,_,directory| {
-        if directory {if count<folders.len() {folders[count]=*name;count+=1;}else{overflow=true;}}else{catalog.add(name,false);}
+        if directory {if !name[0].is_ascii_alphabetic() {return;}if count<folders.len() {folders[count]=*name;count+=1;}else{overflow=true;}}else{catalog.add(name,false);}
     })?;
-    if overflow {return Err(crate::fat16::Error::TooLarge);}
+    if overflow {catalog.truncated=true;}
     for name in &folders[..count] {
         let mut id=[0;12];let n=crate::fat16::display_name(name,&mut id);
         if !crate::app_install::valid_id(&id[..n]) {continue;}
@@ -88,15 +89,17 @@ pub fn collect_catalog(catalog:&mut crate::app_catalog::Catalog)->crate::fat16::
 }
 pub fn refresh_catalog() {
     if crate::disk_io::busy() { return; }
-    let mut catalog = crate::app_catalog::Catalog::new();
-    let result=collect_catalog(&mut catalog);
+    let Some(mut storage)=crate::app_catalog::Storage::new() else {status(b"Apps unavailable: not enough memory.");return;};
+    let catalog=storage.catalog();
+    let result=collect_catalog(catalog);
     for entry in &mut catalog.entries[..catalog.len] {
         let path=core::str::from_utf8(&entry.path[..entry.path_len]).unwrap();
-        if let Ok(Some(metadata))=crate::app_metadata::load(path) {entry.metadata(metadata.title(),metadata.description(),metadata.icon);}
+        if let Ok(Some(metadata))=crate::app_metadata::load(path) {entry.metadata(metadata.title(),metadata.description(),metadata.icon);entry.version=metadata.version;}
     }
     unsafe {
         if let Some(shell) = &mut *core::ptr::addr_of_mut!(SHELL) {
-            shell.catalog = catalog;
+            shell.catalog.entries[..catalog.len].copy_from_slice(&catalog.entries[..catalog.len]);
+            shell.catalog.len=catalog.len;shell.catalog.truncated=catalog.truncated;
             shell.catalog_changed();
         }
     }
@@ -136,26 +139,31 @@ pub fn set_tasks(tasks: [Option<crate::desktop_shell::Task>; 4]) {
     }
 }
 pub fn begin_desktop() -> Result<(), &'static str> {
-    begin()?;
+    begin_mode(true)?;
     unsafe {
         SHELL = Some(crate::desktop_shell::Shell::new());
         (*core::ptr::addr_of_mut!(SHELL)).as_mut().unwrap().volume=crate::audio::system_volume(None);
     }
     refresh_catalog();
+    if crate::display::requested()!=(crate::display_layout::physical_width() as u16,crate::display_layout::physical_height() as u16) {status(b"Requested resolution unavailable; using 800x600. Type display in Terminal.");}
     if crate::diskfs::is_mounted()&&!crate::disk_io::busy() {let _=crate::diskfs::mkdir("/DESKTOP");}
     refresh_desktop();
     unsafe {
         damage(Rect {
             x: 0,
             y: 0,
-            w: 800,
-            h: 600,
+            w: crate::display_layout::width(),
+            h: crate::display_layout::height(),
         });
     }
     flush();
+    crate::debug::write_str("Desktop: ready\n");
     Ok(())
 }
+static mut SUSPENDED_SCALE:u16=100;
+static mut SUSPENDED_SIZE:(u16,u16)=(800,600);
 pub fn suspend() {
+    unsafe {SUSPENDED_SCALE=crate::display_layout::scale();SUSPENDED_SIZE=(crate::display_layout::physical_width() as u16,crate::display_layout::physical_height() as u16);}
     unsafe {
         CAPTURE = None;
         if let Some(shell) = &mut *core::ptr::addr_of_mut!(SHELL) {
@@ -166,7 +174,7 @@ pub fn suspend() {
     crate::mouse::discard();
 }
 pub fn resume() -> Result<(), &'static str> {
-    graphics::start()?;
+    let (w,h)=unsafe {SUSPENDED_SIZE};graphics::start_scaled(w,h,unsafe {SUSPENDED_SCALE})?;
     unsafe {
         BUTTONS = crate::mouse::discard();
         CAPTURE = None;
@@ -191,8 +199,8 @@ pub fn resume() -> Result<(), &'static str> {
         damage(Rect {
             x: 0,
             y: 0,
-            w: 800,
-            h: 600,
+            w: crate::display_layout::width(),
+            h: crate::display_layout::height(),
         });
     }
     flush();
@@ -218,7 +226,7 @@ unsafe fn chrome(x: i32, y: i32, buttons: u8, lost: bool) -> bool {
                 }
                 if payload.count==0 {return true;}payload.volume=shell.file_volume;
                 let token=DRAG_TOKEN;DRAG_TOKEN=DRAG_TOKEN.wrapping_add(1).max(1);payload.version=token;
-                shell.reset(buttons);DRAG=Some(Drag{source:0,target:0,token,active:true,taken:false,payload});damage(Rect{x:0,y:0,w:800,h:544});crate::debug::write_fmt(format_args!("Drag: begin desktop\n"));return true;
+                shell.reset(buttons);DRAG=Some(Drag{source:0,target:0,token,active:true,taken:false,payload});damage(Rect{x:0,y:0,w:crate::display_layout::width(),h:crate::display_layout::taskbar()});crate::debug::write_fmt(format_args!("Drag: begin desktop\n"));return true;
             }
         }
     }
@@ -227,10 +235,10 @@ unsafe fn chrome(x: i32, y: i32, buttons: u8, lost: bool) -> bool {
     let old_menu = shell.menu();
     shell.background=!(&*core::ptr::addr_of!(WINDOWS)).iter().flatten().any(|w|w.ui.window.visible&&w.ui.window.rect.contains(x,y));
     shell.modifiers=crate::keyboard::modifiers();
-    let focus_desktop=buttons&!BUTTONS&3!=0&&shell.background&&y<544&&!shell.open&&!shell.sound_open;
+    let focus_desktop=buttons&!BUTTONS&3!=0&&shell.background&&y<crate::display_layout::taskbar()&&!shell.open&&!shell.sound_open;
     let (consumed, action, changed) = shell.input(x, y, buttons, lost);
     if changed {
-        damage(Rect{x:0,y:0,w:800,h:544});
+        damage(Rect{x:0,y:0,w:crate::display_layout::width(),h:crate::display_layout::taskbar()});
         if old_sound||shell.sound_open {damage(crate::desktop_shell::Shell::sound_panel());}
         damage(crate::desktop_shell::Shell::bar());
         if old_open {
@@ -257,7 +265,7 @@ unsafe fn chrome(x: i32, y: i32, buttons: u8, lost: bool) -> bool {
             else { status(b"An app launch is already queued. Please wait."); }
         }
         Some(crate::desktop_shell::Action::OpenDesktop(i)) => {
-            if i==21 {for j in 0..shell.file_count {shell.slots[j]=j as u8;}shell.layout_dirty=true;damage(Rect{x:0,y:0,w:800,h:544});return consumed;}
+            if i==21 {for j in 0..shell.file_count {shell.slots[j]=j as u8;}shell.layout_dirty=true;damage(Rect{x:0,y:0,w:crate::display_layout::width(),h:crate::display_layout::taskbar()});return consumed;}
             if i==20 {queue_desktop(b"/DESKTOP",crate::diskfs::volume_epoch(),true);return consumed;}
             let e=shell.files[i];let volume=shell.file_volume;let mut path=[0;128];path[..9].copy_from_slice(b"/DESKTOP/");path[9..9+e.length].copy_from_slice(&e.name[..e.length]);queue_desktop(&path[..9+e.length],volume,e.folder);
         }
@@ -367,15 +375,17 @@ unsafe fn focus(index: Option<usize>) {
         }
     }
 }
-pub fn begin() -> Result<(), &'static str> {
+pub fn begin() -> Result<(), &'static str> {begin_mode(false)}
+fn begin_mode(desktop:bool)->Result<(), &'static str> {
     let _ = crate::mouse::init();
-    graphics::start()?;
+    if desktop {graphics::start_desktop()?;}else{graphics::start()?;}
     unsafe {
         DRAG=None;DESKTOP_DROP=false;
         WINDOWS = [const { None }; N];
         ORDER = [0, 1, 2, 3];
         FOCUS = None;
         CAPTURE = None;
+        MOTION.reset();
         POINTER = (400, 300);
         DRAWN = POINTER;
         BUTTONS = crate::mouse::discard();
@@ -386,8 +396,8 @@ pub fn begin() -> Result<(), &'static str> {
         DAMAGE = Some(Rect {
             x: 0,
             y: 0,
-            w: 800,
-            h: 600,
+            w: crate::display_layout::width(),
+            h: crate::display_layout::height(),
         });
     }
     flush();
@@ -551,7 +561,7 @@ pub fn pump() -> bool {
                     if let Some(r)=shell.context_rect(){damage(Rect{w:r.w+4,h:r.h+4,..r});}
                     let (consumed, action) = shell.key(code);
                     if consumed {
-                        if shell.keyboard {damage(Rect{x:0,y:0,w:800,h:544});}
+                        if shell.keyboard {damage(Rect{x:0,y:0,w:crate::display_layout::width(),h:crate::display_layout::taskbar()});}
                         damage(Rect { w: menu.w + 6, h: menu.h + 6, ..menu });
                         damage(crate::desktop_shell::Shell::bar());
                         if let Some(crate::desktop_shell::Action::Launch(index)) = action {
@@ -600,14 +610,17 @@ pub fn pump() -> bool {
             }
             continue;
         }
-        let Some(event) = crate::mouse::poll() else {
+        let Some(mut event) = crate::mouse::poll() else {
             continue;
         };
         unsafe {
+            if event.lost {MOTION.reset();}
+            let (dx,dy)=MOTION.delta(event.dx,event.dy);
+            event.dx=dx as i16;event.dy=dy as i16;
             let old = POINTER;
             POINTER = (
-                (old.0 + event.dx as i32).clamp(0, 799),
-                (old.1 + event.dy as i32).clamp(0, 599),
+                (old.0 + event.dx as i32).clamp(0, crate::display_layout::width()-1),
+                (old.1 + event.dy as i32).clamp(0, crate::display_layout::height()-1),
             );
             if DRAG.as_ref().is_some_and(|d|d.active) {drag_pointer(event.buttons,event.lost,old);BUTTONS=event.buttons;continue;}
             if chrome(POINTER.0, POINTER.1, event.buttons, event.lost) {
@@ -749,10 +762,10 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
                 return (-24i32) as u32;
             }
             NEXT += 1;
-            let x = (56 + index as i32 * 352).min(800 - width as i32 - 22);
+            let x = (56 + index as i32 * 352).min(crate::display_layout::width() - width as i32 - 22);
             let y = (124 + index as i32 * 96).min(530 - height as i32);
             let mut ui = State::sized(BUTTONS, width as i32, height as i32, x, y.max(24));
-            if desktop_mode() {ui.work_area=crate::desktop_shell::Shell::work_area();ui.window.rect.y=ui.window.rect.y.min((crate::desktop_shell::TASKBAR_Y-ui.window.rect.h-8).max(8));}
+            if desktop_mode() {ui.work_area=crate::desktop_shell::Shell::work_area();ui.window.rect.y=ui.window.rect.y.min((crate::desktop_shell::taskbar_y()-ui.window.rect.h-8).max(8));}
             ui.x = POINTER.0;
             ui.y = POINTER.1;
             crate::debug::write_fmt(format_args!(
@@ -822,6 +835,12 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
         }
         w.ui.resized(size.0 as i32,size.1 as i32);w.requested=None;w.dirty=None;
         let bounds=old.union(w.ui.window.bounds());crate::debug::write_fmt(format_args!("Multiwindow: resized pid={} surface={:08x} client={}x{} pos={},{} maximized={}\n",owner,w.surface.base(),w.width,w.height,w.ui.window.rect.x,w.ui.window.rect.y,w.ui.is_maximized()));unsafe{damage(bounds);asm!("sti",options(nostack));}flush();unsafe{asm!("cli",options(nostack));}return 0;
+    }
+    if number==104 {
+        let (r,storage,count)=match crate::pixel_copy::request(second,third,w.width,w.height) {Ok(v)=>v,Err(e)=>return e};
+        crate::pixel_copy::apply(w.surface.base(),w.width,r,&storage);
+        let changed=Rect{x:r.x as i32,y:r.y as i32,w:r.width as i32,h:r.height as i32};
+        w.dirty=Some(w.dirty.map_or(changed,|old|old.union(changed)));return count;
     }
     match number {
         61 => {
@@ -988,7 +1007,7 @@ pub fn terminal_present(owner:u32,handle:u32,cells:&[crate::pty_model::Cell;2720
  for y in 0..w.height/16 {if w.ui.window.visible&&rows&(1<<y)!=0 {damage(Rect{x:client.x,y:client.y+y as i32*16,w:640,h:16});}}flush();asm!("cli",options(nostack));}0
 }
 
-pub fn redraw(){unsafe {damage(Rect{x:0,y:0,w:800,h:600});}flush();}
+pub fn redraw(){unsafe {damage(Rect{x:0,y:0,w:crate::display_layout::width(),h:crate::display_layout::height()});}flush();}
 
 struct Drag {source:u32,target:u32,token:u32,active:bool,taken:bool,payload:crate::directory_protocol::FileClipboard}
 static mut DRAG:Option<Drag>=None;
@@ -1004,7 +1023,7 @@ unsafe fn cancel_drag() {
     if let Some(d)=DRAG.take() {for w in WINDOWS.iter_mut().flatten() {if w.owner==d.source||w.owner==d.target {w.push(api::Event{kind:api::DRAG_END,..api::Event::default()});}}}
     DESKTOP_DROP=false;
     CAPTURE=None;for w in WINDOWS.iter_mut().flatten(){w.ui.update(crate::mouse_packet::Event{lost:true,buttons:BUTTONS,..crate::mouse_packet::Event::default()});}
-    damage(Rect{x:0,y:0,w:800,h:544});
+    damage(Rect{x:0,y:0,w:crate::display_layout::width(),h:crate::display_layout::taskbar()});
 }
 unsafe fn drop_hit()->Option<usize> {
     ORDER.iter().rev().copied().find(|&i|WINDOWS[i].as_ref().is_some_and(|w|w.ui.window.visible&&w.ui.window.rect.contains(POINTER.0,POINTER.1)))
@@ -1041,7 +1060,7 @@ unsafe fn drag_pointer(buttons:u8,lost:bool,previous:(i32,i32)) {
             if queue_desktop(&destination[..n],d.payload.volume,true) {LAUNCH.as_mut().unwrap().4=d.token;d.active=false;DESKTOP_DROP=true;CAPTURE=None;if let Some(s)=SHELL.as_mut(){s.reset(0);}crate::debug::write_fmt(format_args!("Drag: queued desktop transfer\n"));}else{cancel_drag();}
         }else {cancel_drag();}
     }else if let Some(i)=target {let w=WINDOWS[i].as_mut().unwrap();let c=w.ui.client();w.events.push(api::Event{kind:api::DRAG_OVER,code:d.payload.cut as u32,x:POINTER.0-c.x,y:POINTER.1-c.y,buttons:buttons as u32},true);}
-    if buttons&1==0||DRAG.as_ref().is_none_or(|d|d.target!=old) {damage(Rect{x:0,y:0,w:800,h:544});}
+    if buttons&1==0||DRAG.as_ref().is_none_or(|d|d.target!=old) {damage(Rect{x:0,y:0,w:crate::display_layout::width(),h:crate::display_layout::taskbar()});}
     else {let badge=|p:(i32,i32)|Rect{x:(p.0+16).min(680),y:(p.1+18).min(516),w:116,h:24};damage(badge(previous).union(badge(POINTER)));}
 }
 pub fn paint_drag(canvas:&mut crate::canvas::Canvas<'_>) {
@@ -1066,7 +1085,7 @@ pub fn drag_syscall(cs:u32,op:u32,pointer:u32,size:u32)->u32 {
             if payload.volume!=crate::diskfs::volume_epoch(){return (-116i32) as u32;}
             if let Err(e)=crate::file_clipboard::validate(&mut payload){return e;}
             let token=DRAG_TOKEN;DRAG_TOKEN=DRAG_TOKEN.wrapping_add(1).max(1);payload.version=token;
-            DRAG=Some(Drag{source:owner,target:0,token,active:true,taken:false,payload});damage(Rect{x:0,y:0,w:800,h:544});
+            DRAG=Some(Drag{source:owner,target:0,token,active:true,taken:false,payload});damage(Rect{x:0,y:0,w:crate::display_layout::width(),h:crate::display_layout::taskbar()});
             crate::debug::write_fmt(format_args!("Drag: begin source={} count={}\n",owner,payload.count));return 0;
         }
         if !user_buffer::writable(pointer,size){return (-14i32) as u32;}
@@ -1102,7 +1121,7 @@ unsafe fn queue_desktop(path:&[u8],volume:u32,folder:bool)->bool {
     LAUNCH=Some((shell.catalog.entries[i],volume,args,prefix.len()+path.len(),0));true
 }
 unsafe fn wallpaper_hit()->bool {
-    SHELL.as_ref().is_some_and(|s|!s.open&&!s.sound_open&&s.context.is_none())&&POINTER.1<544&&
+    SHELL.as_ref().is_some_and(|s|!s.open&&!s.sound_open&&s.context.is_none())&&POINTER.1<crate::display_layout::taskbar()&&
     !WINDOWS.iter().flatten().any(|w|w.ui.window.visible&&w.ui.window.rect.contains(POINTER.0,POINTER.1))
 }
 

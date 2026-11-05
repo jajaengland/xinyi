@@ -1,5 +1,10 @@
+#[path="../src/display_layout.rs"]mod display_layout;
 #[path="../src/vbe_mode.rs"] mod vbe_mode;
 use vbe_mode::parse_mode;
+#[test]fn higher_resolution_modes_validate_real_pitch_and_extents() {
+    for (w,h) in display_layout::MODES {let mut d=info(32);d[18..20].copy_from_slice(&w.to_le_bytes());d[20..22].copy_from_slice(&h.to_le_bytes());d[16..18].copy_from_slice(&(w*4).to_le_bytes());let m=parse_mode(1,0x200,&d).unwrap();assert_eq!((m.width,m.height),(w,h));}
+    let mut d=info(32);d[18..20].copy_from_slice(&1024u16.to_le_bytes());assert!(parse_mode(1,0x200,&d).is_none());
+}
 fn info(bpp:u8)->[u8;256] {
     let mut d=[0;256];
     d[0..2].copy_from_slice(&0x91u16.to_le_bytes());

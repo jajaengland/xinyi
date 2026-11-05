@@ -1,9 +1,21 @@
 #![allow(dead_code)]
+#[path="../src/display_layout.rs"]mod display_layout;
 #[path="../src/mouse_packet.rs"]mod mouse_packet;
 #[path="../src/desktop_ui.rs"]mod desktop_ui;
 #[path="../src/app_catalog.rs"]mod app_catalog;
 #[path="../src/desktop_shell.rs"]mod desktop_shell;
 use desktop_shell::{Shell,Task,Action};
+#[test] fn pages_cover_the_catalog_and_search_and_keyboard_follow_selection() {
+ let mut s=Shell::new();
+ for i in 0..40u8 {let mut name=*b"APP00   BIN";name[3]=b'0'+i/10;name[4]=b'0'+i%10;s.catalog.add(&name,false);}
+ s.key((1<<17)|27);assert!(s.open);
+ s.key(0x108);assert_eq!(s.app_page,1);assert_eq!(s.menu_selection,Some(16));
+ assert_eq!(click(&mut s,40,188),Some(Action::Launch(16)));
+ s.key((1<<17)|27);s.key(0x105);assert_eq!(s.app_page,2);assert_eq!(s.menu_selection,Some(39));
+ s.key(0x101);assert_eq!(s.app_page,0);assert_eq!(s.menu_selection,Some(0));
+ for b in b"APP39" {s.key(*b as u32);}assert_eq!(s.filtered().1,1);assert_eq!(s.app_page,0);
+ assert_eq!(s.key(10).1,Some(Action::Launch(39)));
+}
 fn click(s:&mut Shell,x:i32,y:i32)->Option<Action> {s.input(x,y,1,false);s.input(x,y,0,false).1}
 #[test] fn menu_consumes_outside_click_and_opens_above_taskbar() {
  let mut s=Shell::new();s.catalog.add(b"COUNTER BIN",false);click(&mut s,40,576);assert!(s.open);assert_eq!(s.menu().y,80);

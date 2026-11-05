@@ -5,3 +5,4 @@ description=Rust greeting
 icon=application
 access=trusted
 handles=
+version=1

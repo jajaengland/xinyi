@@ -1,6 +1,7 @@
 """Build freestanding Rust as a Xinyi flat BIN or static ELF32 executable."""
 import argparse
 import json
+import os
 from pathlib import Path
 import struct
 import subprocess
@@ -60,8 +61,9 @@ def main():
         parser.error("Output exists; use --force to replace it")
     def run(*command):
         return subprocess.check_output(command, text=True)
-    sysroot = Path(run("rustc", "+nightly", "--print", "sysroot").strip())
-    host = next(line.split(": ", 1)[1] for line in run("rustc", "+nightly", "-vV").splitlines() if line.startswith("host: "))
+    toolchain = "+" + os.environ.get("XINYI_RUST_TOOLCHAIN", "nightly")
+    sysroot = Path(run("rustc", toolchain, "--print", "sysroot").strip())
+    host = next(line.split(": ", 1)[1] for line in run("rustc", toolchain, "-vV").splitlines() if line.startswith("host: "))
     linker = sysroot / "lib/rustlib" / host / "bin" / ("rust-lld.exe" if host.endswith("windows-msvc") or host.endswith("windows-gnu") else "rust-lld")
     (ROOT / "target").mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="xinyi-program-", dir=ROOT / "target") as temporary:
@@ -69,7 +71,7 @@ def main():
         manifest.write_text('[package]\nname="xinyi-user-program"\nversion="0.1.0"\nedition="2021"\n'
                             '[workspace]\n[[bin]]\nname="xinyi-user-program"\npath=' + json.dumps(args.source.resolve().as_posix()) +
                             '\n[profile.release]\npanic="abort"\nopt-level="s"\n', encoding="utf-8")
-        built = subprocess.run(["cargo", "+nightly", "rustc", "--manifest-path", str(manifest),
+        built = subprocess.run(["cargo", toolchain, "rustc", "--manifest-path", str(manifest),
                         "--target", str(ROOT / "i686-unknown-none.json"), "--target-dir", str(ROOT / "target/user-build"),
                         "--release", "--offline", "-Z", "build-std=core,alloc" if args.format=="elf" else "build-std=core", "--message-format=json", "--",
                         "-C", "relocation-model=static",

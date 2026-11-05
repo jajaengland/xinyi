@@ -812,6 +812,7 @@ fn run(mut jobs: [Option<Job>; LIMIT], desktop: bool) {
                 job.state = match reason {
                     Some(Pause::Io(request)) => {
                         job.io = Some(request);
+                        crate::debug::write_fmt(format_args!("Disk I/O: queued pid={} nr={}\n",job.pid,request.number));
                         State::Waiting
                     }
                     Some(Pause::Sleep(deadline)) => {

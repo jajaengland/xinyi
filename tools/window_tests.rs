@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#[path="../src/display_layout.rs"]mod display_layout;
 #[path="../src/mouse_packet.rs"]mod mouse_packet;
 #[path="../src/desktop_ui.rs"]mod desktop_ui;
 #[path="../src/window_protocol.rs"]mod window_protocol;
@@ -46,7 +47,7 @@ fn at(s:&mut State,x:i32,y:i32,buttons:u8)->(bool,Option<Event>) {s.update(mouse
 
 #[test] fn sized_surfaces_validate_and_drag_with_their_own_bounds() {
     assert!(window_protocol::valid_size(320,144));assert!(window_protocol::valid_size(656,400));
-    for (w,h) in [(0,144),(800,144),(320,545),(321,144),(320,143)] {assert!(!window_protocol::valid_size(w,h));}
+    for (w,h) in [(0,144),(1288,144),(320,545),(321,144),(320,143)] {assert!(!window_protocol::valid_size(w,h));}
     assert!(Draw::rect(319,143,1,1,0).valid_for(320,144));
     assert!(!Draw::rect(320,143,1,1,0).valid_for(320,144));
     assert!(!Draw::text(313,0,0,b"a").valid_for(320,144));
