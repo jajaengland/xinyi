@@ -16,6 +16,7 @@ static TAIL: AtomicUsize = AtomicUsize::new(0);
 static LOST: AtomicBool = AtomicBool::new(false);
 static BUTTONS: AtomicU8 = AtomicU8::new(0);
 static mut QUEUE: [Event; SIZE] = [Event {
+    wheel:0,
     dx: 0,
     dy: 0,
     buttons: 0,
@@ -72,7 +73,7 @@ pub fn motion_before(buttons:u8,keyboard:Option<u32>)->bool {
     let order=unsafe {core::ptr::addr_of!(EVENT_ORDER).cast::<u32>().add(tail).read()};
     if keyboard.is_some_and(|key|!crate::input_order::before(order,key)) {return false;}
     let event=unsafe {core::ptr::addr_of!(QUEUE).cast::<Event>().add(tail).read()};
-    !event.lost&&event.buttons==buttons
+    !event.lost&&event.wheel==0&&event.buttons==buttons
 }
 pub fn pending() -> bool {
     LOST.load(Ordering::Acquire) || HEAD.load(Ordering::Acquire) != TAIL.load(Ordering::Acquire)
@@ -161,6 +162,14 @@ pub fn init() -> bool {
             if !ps2::command(0xa8) || !device_command(0xf5) || !device_command(0xf6) {
                 return false;
             }
+            // IntelliMouse negotiation; ordinary three-byte devices remain supported.
+            let mut wheel=false;
+            if device_command(0xf3)&&device_command(200)&&device_command(0xf3)&&device_command(100)&&device_command(0xf3)&&device_command(80)&&device_command(0xf2) {
+                wheel=matches!(ps2::response(true),Some(3)|Some(4));
+            }
+            if !wheel {if !device_command(0xf6)||!device_command(0xf2){return false;}match ps2::response(true){Some(0)=>(),Some(3)|Some(4)=>wheel=true,_=>return false,}}
+            (*core::ptr::addr_of_mut!(DECODER)).wheel_mode(wheel);
+            if wheel{crate::debug::write_str("Mouse: IntelliMouse wheel enabled\n");}
             // Preserve translation and unrelated controller settings; enable both
             // clocks and AUX IRQ. Keyboard IRQ remains in its original state.
             if !ps2::command(0x60) || !ps2::data((value | 2) & !0x30) {

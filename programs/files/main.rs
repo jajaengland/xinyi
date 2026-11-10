@@ -60,23 +60,22 @@ struct Files {
     drop_row: Option<usize>,
 }
 fn error(n: i32) -> &'static [u8] {
-    xinyi::sounds::play(xinyi::sounds::Event::Error);
     match n {
-        -2 => b"Item no longer exists. Refresh the folder.",
-        -8 => b"Invalid app folder. Check its executable and matching .APP manifest.",
-        -13 => b"Read-only item or folder.",
-        -17 => b"That name already exists.",
-        -20 => b"Not a folder.",
-        -21 => b"Expected a regular file.",
-        -22 => b"Invalid 8.3 path, or destination is inside the source.",
+        -2 => xinyi::gui::report(2,b"Item no longer exists. Refresh the folder."),
+        -8 => xinyi::gui::report(2,b"Invalid app folder. Check its executable and matching .APP manifest."),
+        -13 => xinyi::gui::report(2,b"Read-only item or folder."),
+        -17 => xinyi::gui::report(1,b"That name already exists."),
+        -20 => xinyi::gui::report(2,b"Not a folder."),
+        -21 => xinyi::gui::report(2,b"Expected a regular file."),
+        -22 => xinyi::gui::report(2,b"Invalid 8.3 path, or destination is inside the source."),
         -24 => b"Close another window before opening this item.",
-        -27 => b"File/tree exceeds the supported size or depth.",
-        -28 => b"The disk is full.",
-        -39 => b"Folder is not empty.",
-        -16 => b"Folder is in use. Close the app or leave its folder first.",
-        -116 => b"Drive or file selection changed. Refresh and select again.",
-        -12 => b"Not enough memory.",
-        _ => b"Disk operation failed. Check remaining items.",
+        -27 => xinyi::gui::report(1,b"File/tree exceeds the supported size or depth."),
+        -28 => xinyi::gui::report(2,b"The disk is full."),
+        -39 => xinyi::gui::report(1,b"Folder is not empty."),
+        -16 => xinyi::gui::report(1,b"Folder is in use. Close the app or leave its folder first."),
+        -116 => xinyi::gui::report(1,b"Drive or file selection changed. Refresh and select again."),
+        -12 => xinyi::gui::report(2,b"Not enough memory."),
+        _ => xinyi::gui::report(2,b"Disk operation failed. Check remaining items."),
     }
 }
 impl Files {
@@ -118,13 +117,13 @@ impl Files {
         if self.volume!=directory::volume() {self.status=error(-116);return false;}
         match Favorites::decode(&data[..n as usize]) {
             Some(f)=>{self.favorites=f;true},
-            None=>{self.status=b"FAVS.CFG is invalid. It has been preserved.";false}
+            None=>{self.status=xinyi::gui::report(1,b"FAVS.CFG is invalid. It has been preserved.");false}
         }
     }
     fn toggle_favorite(&mut self) {
         if !self.load_favorites() {return;}
         let mut next=self.favorites;
-        let added=match next.toggle(&self.path[..self.length]) {Ok(added)=>added,Err(())=>{self.status=b"Places holds eight folders. Remove one with Ctrl+D in that folder.";return;}};
+        let added=match next.toggle(&self.path[..self.length]) {Ok(added)=>added,Err(())=>{self.status=xinyi::gui::report(1,b"Places holds eight folders. Remove one with Ctrl+D in that folder.");return;}};
         let mut data=[0;1024];let n=next.encode(&mut data);
         let result=xinyi::files::save_on(b"/FAVS.CFG",&data[..n],self.volume);
         if result<0 {self.status=error(result);return;}
@@ -175,7 +174,7 @@ impl Files {
             self.cached = 0;
             xinyi::syscall(87, 0x40100000, 0, 0);
             self.selection.clear();
-            self.status = b"Sort unavailable. Showing original disk order; click a heading to retry.";
+            self.status = xinyi::gui::report(2,b"Sort unavailable. Showing original disk order; click a heading to retry.");
             n = directory::list(b".", self.offset, &mut self.list);
         }
         if n < 0 {
@@ -293,7 +292,7 @@ impl Files {
     }
     fn open(&mut self) {
         if self.selection.count != 1 {
-            self.status = b"Select one item to open.";
+            self.status = xinyi::gui::report(1,b"Select one item to open.");
             return;
         }
         if self.volume != directory::volume() {
@@ -311,11 +310,13 @@ impl Files {
             self.status = match result {
                 0 => b"Opened with its associated application.",
                 xinyi::associations::NO_HANDLER => {
-                    b"No installed application handles this file type."
+                    xinyi::gui::report(2,b"No installed application handles this file type.")
                 }
                 xinyi::associations::AMBIGUOUS => {
-                    b"More than one app handles this type. Open the app explicitly."
+                    xinyi::gui::report(1,b"More than one app handles this type. Open the app explicitly.")
                 }
+                xinyi::associations::UNAVAILABLE_DEFAULT => xinyi::gui::report(2,b"Default app unavailable. Choose or reset it in Applications > Defaults."),
+                -8 => xinyi::gui::report(2,b"Invalid /DEFAULTS.CFG. Inspect the configuration in Files."),
                 _ => error(result),
             };
         }
@@ -328,7 +329,7 @@ impl Files {
             let a = anchor.min(index);
             let b = anchor.max(index);
             if b - a >= 32 {
-                self.status = b"Select at most 32 items at a time.";
+                self.status = xinyi::gui::report(1,b"Select at most 32 items at a time.");
                 return;
             }
             let mut page = Listing::new();
@@ -338,7 +339,7 @@ impl Files {
                 return;
             }
             if page.count < (b - a + 1) as u32 {
-                self.status = b"Folder changed. Refresh before selecting.";
+                self.status = xinyi::gui::report(1,b"Folder changed. Refresh before selecting.");
                 return;
             }
             self.selection.clear();
@@ -353,7 +354,7 @@ impl Files {
                 .selection
                 .toggle(&e.name[..e.length as usize], e.flags as u8, index)
             {
-                self.status = b"Select at most 32 items at a time.";
+                self.status = xinyi::gui::report(1,b"Select at most 32 items at a time.");
             }
         } else {
             self.selection
@@ -362,7 +363,7 @@ impl Files {
     }
     fn payload(&mut self, cut: bool) -> bool {
         if self.selection.count == 0 {
-            self.status = b"Select files or folders first.";
+            self.status = xinyi::gui::report(1,b"Select files or folders first.");
             return false;
         }
         let r = &mut self.pending;
@@ -413,7 +414,7 @@ impl Files {
         }
         if expected!=0&&self.pending.version!=expected {self.status=error(-116);return;}
         if self.pending.count == 0 {
-            self.status = b"Copy or Move files first.";
+            self.status = xinyi::gui::report(1,b"Copy or Move files first.");
             return;
         }
         self.selection.clear();
@@ -496,7 +497,7 @@ impl Files {
             self.selection.clear();
         }
         self.finish_drop();
-        self.status = b"Paste complete.";
+        self.status = xinyi::gui::report(0,b"Paste complete.");
         xinyi::sounds::play(xinyi::sounds::Event::Complete);
         self.refresh();
     }
@@ -521,12 +522,12 @@ impl Files {
             if !parent.eq_ignore_ascii_case(&self.path[..self.length])||name.is_empty()||name.len()>12 {self.status=error(-22);self.selection.clear();return;}
             self.selection.add(name,payload.flags[i]);
         }
-        if self.selection.count>0 {self.mode=3;self.status=b"Confirm recycling this desktop selection. Y continues / N cancels.";xinyi::sounds::play(xinyi::sounds::Event::Warning);}
+        if self.selection.count>0 {if !self.recycle_allowed(){return;}self.mode=3;for b in &mut self.review_buttons{b.reset(1);}self.status=b"Confirm recycling this desktop selection. Y continues / N cancels.";xinyi::sounds::play(xinyi::sounds::Event::Warning);}
     }
     fn receive_drop(&mut self, e: window::Event) {
         if self.mode != 0 {
             xinyi::drag_drop::finish();
-            self.status = b"Drop cancelled. Finish the current dialog first.";
+            self.status = xinyi::gui::report(1,b"Drop cancelled. Finish the current dialog first.");
             return;
         }
         self.pending = FileClip::new();
@@ -542,7 +543,7 @@ impl Files {
         self.press = None;
         self.drop_row = None;
         if self.mode != 0 || self.volume != directory::volume() {
-            self.status = b"Drop cancelled: folder or dialog changed.";
+            self.status = xinyi::gui::report(1,b"Drop cancelled: folder or dialog changed.");
             self.finish_drop();
             return;
         }
@@ -583,7 +584,18 @@ impl Files {
         self.transfer_total=self.pending.count;self.transfer_done=0;
         self.paste_next(None);
     }
+    fn recycle_allowed(&mut self)->bool {
+        for i in 0..self.selection.count {
+            let mut path=[0;105];let extra=usize::from(self.length>1);let len=self.length+extra+self.selection.lengths[i] as usize;
+            if len>105{self.status=error(-22);return false;}
+            path[..self.length].copy_from_slice(&self.path[..self.length]);if extra!=0{path[self.length]=b'/';}path[self.length+extra..len].copy_from_slice(&self.selection.names[i][..self.selection.lengths[i] as usize]);
+            if !xinyi::trash::model::valid_path(&path[..len]) {
+                self.status=xinyi::gui::report(1,b"The Recycle Bin and its contents cannot be recycled. Open Recycle Bin to restore or permanently delete items.");return false;
+            }
+        }true
+    }
     fn delete(&mut self) {
+        if !self.recycle_allowed(){return;}
         let s = self.selection;
         for i in 0..s.count {
             let mut path=[0;105];let extra=usize::from(self.length>1);let len=self.length+extra+s.lengths[i] as usize;
@@ -597,20 +609,20 @@ impl Files {
                 return;
             }
         }
-        self.status = b"Moved to Recycle Bin. Open Recycle Bin from Apps to restore.";
+        self.status = xinyi::gui::report(0,b"Moved to Recycle Bin. Open Recycle Bin from Apps to restore.");
         xinyi::sounds::play(xinyi::sounds::Event::Complete);
         self.selection.clear();
         self.refresh();
     }
     fn manage_app(&mut self, operation: u16) {
         if self.selection.count != 1 || self.selection.flags[0] & 1 == 0 {
-            self.status = b"Select one application folder.";
+            self.status = xinyi::gui::report(1,b"Select one application folder.");
             return;
         }
         let name = self.selection.names[0];
         let n = self.selection.lengths[0] as usize;
         if operation!=1 && self.review.is_some() {
-            if app_review::load(&name[..n],self.volume).ok()!=self.review {self.review=None;self.status=b"App metadata changed. Review the package again before continuing.";return;}
+            if app_review::load(&name[..n],self.volume).ok()!=self.review {self.review=None;self.status=xinyi::gui::report(1,b"App metadata changed. Review the package again before continuing.");return;}
         }
         let result = directory::app_action(&name[..n], operation, self.volume);
         self.status = if result < 0 {
@@ -618,11 +630,11 @@ impl Files {
         } else {
             xinyi::sounds::play(xinyi::sounds::Event::Complete);
             if operation == 1 {
-                b"App removed. Your documents are unchanged."
+                xinyi::gui::report(0,b"App removed. Your documents are unchanged.")
             } else if operation == 2 {
-                b"App updated. Backup kept: use app rollback or app finalize in Terminal."
+                xinyi::gui::report(0,b"App updated. Backup kept: use app rollback or app finalize in Terminal.")
             } else {
-                b"App installed. Open Apps to launch it."
+                xinyi::gui::report(0,b"App installed. Open Apps to launch it.")
             }
         };
         if result >= 0 {
@@ -634,7 +646,7 @@ impl Files {
         self.menu = None;
         self.hover = None;
         if matches!(n, 4 | 10 | 11) && self.selection.count == 0 {
-            self.status = b"Select files or folders first.";
+            self.status = xinyi::gui::report(1,b"Select files or folders first.");
             return false;
         }
         match n {
@@ -645,7 +657,8 @@ impl Files {
                 self.used = 0;
             }
             4 => {
-                self.mode = 3;
+                if !self.recycle_allowed(){return false;}
+                self.mode = 3;for b in &mut self.review_buttons{b.reset(1);}
                 xinyi::sounds::play(xinyi::sounds::Event::Warning);
             }
             5 => {
@@ -665,7 +678,7 @@ impl Files {
             8 => self.set_view(match self.view {View::Details=>View::Compact,View::Compact=>View::Icons,View::Icons=>View::Details}),
             9 => {
                 if self.selection.count != 1 {
-                    self.status = b"Select one item to rename.";
+                    self.status = xinyi::gui::report(1,b"Select one item to rename.");
                 } else {
                     self.mode = 4;
                     self.used = 0;
@@ -676,7 +689,7 @@ impl Files {
             12 => self.paste(),
             13 | 14 | 19 => {
                 if self.selection.count != 1 || self.selection.flags[0] & 1 == 0 {
-                    self.status = b"Select one application folder.";
+                    self.status = xinyi::gui::report(1,b"Select one application folder.");
                 } else if n == 14 && !self.path[..self.length].eq_ignore_ascii_case(b"/APPS") {
                     self.status = b"Open /APPS and select an installed app to remove.";
                 } else {
@@ -699,7 +712,7 @@ impl Files {
             15 => self.history_go(false),
             16 => self.history_go(true),
             17 => {
-                if self.selection.count != 1 { self.status = b"Select one item for properties."; }
+                if self.selection.count != 1 { self.status = xinyi::gui::report(1,b"Select one item for properties."); }
                 else if self.volume != directory::volume() { self.status = error(-116); }
                 else {
                     let name = self.selection.names[0]; let len = self.selection.lengths[0] as usize;
@@ -792,7 +805,7 @@ impl Files {
                         1 => self.launch(b"notepad ", &name[..used]),
                         2 => {
                             let n = directory::action_on(&name[..used], 0, self.volume);
-                            self.status = if n < 0 { error(n) } else { b"Folder created." };
+                            self.status = if n < 0 { error(n) } else { xinyi::gui::report(0,b"Folder created.") };
                             self.refresh();
                         }
                         4 => {
@@ -803,7 +816,7 @@ impl Files {
                                 0,
                                 self.volume,
                             );
-                            self.status = if n < 0 { error(n) } else { b"Renamed." };
+                            self.status = if n < 0 { error(n) } else { xinyi::gui::report(0,b"Renamed.") };
                             if n == 0 {
                                 self.selection.clear();
                                 self.selection.add(&name[..used], s.flags[0]);
@@ -843,7 +856,7 @@ impl Files {
                 86 | 118 => return self.action(12),
                 65 | 97 => {
                     if self.list.total > 32 {
-                        self.status = b"Select at most 32 items at a time.";
+                        self.status = xinyi::gui::report(1,b"Select at most 32 items at a time.");
                     } else {
                         let mut page = Listing::new();
                         if self.read_selection_page(0, &mut page) == 0 {
@@ -934,7 +947,7 @@ impl Files {
         }
     }
     fn pointer(&mut self, event: window::Event, previous: u32) -> bool {
-        if matches!(self.mode,6|7|10) {
+        if matches!(self.mode,1|2|3|4|5|6|7|10) {
             let mut clicked=None;let mut changed=false;
             for (i,button) in self.review_buttons.iter_mut().enumerate() {
                 button.rect=xinyi::widgets::Rect::new(self.width as i32-if i==0 {232}else{128},312,88,24);
@@ -942,7 +955,7 @@ impl Files {
                 if button.pointer(event.x,event.y,event.buttons) {clicked=Some(i);}
                 changed|=before!=(button.hover,button.pressed);
             }
-            if let Some(i)=clicked {self.key(if i==0 {b'y' as u32}else{b'n' as u32});return true;}
+            if let Some(i)=clicked {if matches!(self.mode,1|2|4|5){if i==0&&self.used==0{self.status=xinyi::gui::report(1,b"Enter a name first.");}else{self.key(if i==0{10}else{27});}}else{self.key(if i==0 {b'y' as u32}else{b'n' as u32});}return true;}
             return changed;
         }
         if self.column_drag.is_some() && event.buttons & 1 == 0 { self.column_drag = None; return true; }
@@ -1164,32 +1177,32 @@ impl Files {
             10 => b"Update installed app from this folder? Y confirms / N cancels",
             _ => b"Ctrl/Shift select | Ctrl+C/X/V | F2 rename | Right-click actions",
         };
+        let dialog_open=matches!(self.mode,1|2|3|4|5|6|7|10);
+        let footer=if dialog_open{b"" as &[u8]}else{self.status};
         window::draw(
             w,
             &[
-                Draw::label(8, self.height - 32, if self.mode==0 {self.width-176}else{self.width-16}, 0x20384d, if self.mode == 0 {b"PgUp / PgDn to browse"} else {hint}),
+                Draw::label(8, self.height - 32, if self.mode==0 {self.width-176}else{self.width-16}, 0x20384d, if self.mode == 0 {b"PgUp / PgDn to browse"} else if dialog_open{b""}else{hint}),
                 Draw::text(
                     8,
                     self.height - 16,
                     0,
-                    &self.status[..self
-                        .status
-                        .len()
+                    &footer[..footer.len()
                         .min(((self.width as usize - 16) / 8).min(96))],
                 ),
             ],
         );
         if self.mode==0 {for next in [false,true] {self.command_button(w,chrome::page(self.width,self.height,next),if next {7}else{6},if next {b"Next"}else{b"Previous"});}}
-        if matches!(self.mode, 1 | 2 | 4 | 5) {
-            window::draw(
-                w,
-                &[Draw::text(
-                    160,
-                    self.height - 32,
-                    0x2b5268,
-                    &self.input[..self.used],
-                )],
-            );
+        if matches!(self.mode,1|2|4|5) {
+            let title=match self.mode{1=>b"New file" as &[u8],2=>b"New folder",4=>b"Rename item",_=>b"Paste using another name"};
+            xinyi::gui::dialog_flat(w,title,xinyi::widgets::Rect::new(24,96,self.width as i32-48,248));
+            window::draw(w,&[Draw::label(40,140,self.width-80,0x20384d,b"Name (8.3 format):"),Draw::rect(40,168,self.width-80,30,0xffffff),Draw::text(48,175,0x20384d,&self.input[..self.used]),Draw::label(40,224,self.width-80,0x536c80,b"Enter confirms. Escape cancels.")]);
+            xinyi::gui::outline(w,xinyi::widgets::Rect::new(40,168,self.width as i32-80,30),0x367c85);
+        }
+        if self.mode==3 {
+            xinyi::gui::dialog_flat(w,b"Move to Recycle Bin?",xinyi::widgets::Rect::new(24,96,self.width as i32-48,248));
+            let count=[b'0'+(self.selection.count/10) as u8,b'0'+(self.selection.count%10) as u8];
+            window::draw(w,&[Draw::label(40,140,self.width-80,0x20384d,if self.selection.count==1{&self.selection.names[0][..self.selection.lengths[0] as usize]}else{b"Multiple selected items"}),Draw::paragraph(40,176,self.width-80,64,0x20384d,b"Move these files and folders to Recycle Bin. You can restore them later."),Draw::text(40,256,0,b"Items:"),Draw::text(104,256,0,&count),Draw::label(40,288,self.width-80,0x536c80,b"Y confirms. N or Escape cancels.")]);
         }
         if matches!(self.mode,6|7|10) {
             use xinyi::widgets::Rect;
@@ -1204,10 +1217,10 @@ impl Files {
             window::draw(w,&[Draw::text(40,204,0,b"Target:"),Draw::text(104,204,0,&destination[..6+id.len()])]);
             window::draw(w,&[Draw::paragraph(40,276,self.width-80,32,0x536c80,if self.mode==7 {b"Removes the app bundle from /APPS. Your documents remain."}else if self.mode==10 {b"Updates require a newer version and cannot add access. Profiles are not a complete sandbox."}else {b"Profiles limit OS services; they are not a complete security sandbox."}),Draw::label(40,320,self.width-296,0x20384d,b"Y: confirm  N / Escape: cancel")]);
         }
-        if matches!(self.mode,6|7|10) {
+        if matches!(self.mode,1|2|3|4|5|6|7|10) {
             for (i,button) in self.review_buttons.iter().enumerate() {
                 let mut button=*button;button.rect=xinyi::widgets::Rect::new(self.width as i32-if i==0 {232}else{128},312,88,24);
-                xinyi::gui::button_flat(w,&button,if i==1 {b"Cancel"}else if self.mode==6 {b"Install"}else if self.mode==10 {b"Update"}else{b"Remove"},i==0);
+                xinyi::gui::button_flat(w,&button,if i==1 {b"Cancel"}else if self.mode==6 {b"Install"}else if self.mode==10 {b"Update"}else if self.mode==3 {b"Recycle"}else if self.mode==4 {b"Rename"}else if self.mode==5 {b"Paste"}else if matches!(self.mode,1|2){b"Create"}else{b"Remove"},i==0);
             }
         }
         if let Some((x, y)) = self.menu {
@@ -1369,6 +1382,7 @@ fn main() -> u32 {
         if n == 0 {
             continue;
         }
+        let previous_mode=app.mode;
         let repaint = match e.kind {
             window::DROP => {
                 buttons = 0;
@@ -1393,6 +1407,7 @@ fn main() -> u32 {
                 true
             }
             window::CLOSE => return 0,
+            window::SCROLL=>{if app.mode==0 {let delta=(e.code as i32).clamp(-8,8)*3;app.offset=(app.offset as i32+delta).clamp(0,app.list.total.saturating_sub(app.page() as u32) as i32) as u16;app.refresh();}true},
             window::KEY => {
                 if app.key(e.code) {
                     return 0;
@@ -1400,7 +1415,7 @@ fn main() -> u32 {
                 true
             }
             window::RESET => {
-                buttons = e.buttons;
+                buttons = e.buttons;for b in &mut app.review_buttons{b.reset(e.buttons);}
                 app.menu = None;
                 app.press = None;
                 app.dragging = false;
@@ -1416,6 +1431,7 @@ fn main() -> u32 {
             }
             _ => false,
         };
+        if app.mode!=previous_mode{for b in &mut app.review_buttons{b.reset(buttons);}}
         if app.quit {
             return 0;
         }

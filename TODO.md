@@ -11,9 +11,13 @@
    - [x] Per-app folders and confirmed Files installation/removal, staged publication, asset copying and running-app refusal.
    - [x] Versioned staged updates, explicit rollback/finalize, and a 64-app paged/searchable launcher.
    - [x] Files install/update/removal review: identity, version, target, access explanation, captured confirm/cancel and metadata-change refusal.
-   - [ ] App package distribution and further isolation review.
+   - [x] Initial offline .XAP package builder and manager install/update review, bounded corruption/path checks and temporary extraction cleanup.
+   - [ ] Further app isolation review and publisher authentication before downloadable apps.
    - [x] Initial Applications manager: installed-bundle list, versions/access details, paging, launch, folder inspection and confirmed removal.
-   - [ ] Manager install/update workflows, default-app selection and permission controls.
+   - [x] Manager install/update review and retained-backup restore/discard controls.
+   - [x] Per-drive default-app selection, reset, declared-type validation and stale-preference errors.
+   - [x] Initial saved per-bundle restrictions, kernel loader enforcement, next-launch permission controls and reset.
+   - [ ] Further isolation review, including trusted-code policy tampering and executable copies outside bundles.
 
 ## Foundation phase before broader feature work
 
@@ -51,7 +55,8 @@ Networking development is deferred; it remains off by default behind the develop
 - [x] Files whole-folder Name/Type/Bytes sorting, reversible headings, draggable columns, Back/Forward history and file properties.
 - [x] Files icon/compact views with shared selection/drop geometry, persistent favourite folders and per-item copy/move progress.
 - [x] Read-only BMP Image viewer, bounded RGB pixel tiles, fit/native panning, associations and file drops.
-- [ ] PNG/JPEG decoding, image thumbnails and wallpaper import.
+- [x] BMP wallpaper selection, cached Fit/Fill/Center rendering, saved preferences and host PNG/JPEG conversion.
+- [ ] Native PNG/JPEG decoding and image thumbnails.
 - [x] Versioned app updates with an app-bound retained backup, rollback/finalize, and launcher pagination beyond 16 apps.
 - [ ] Further app isolation and kernel hardening before downloadable apps.
 
@@ -59,6 +64,7 @@ Networking development is deferred; it remains off by default behind the develop
 - [x] Queued desktop application file operations with a block-bounded worker and visible I/O activity.
 - [x] Yielding desktop executable reads, cancellation, progress and guarded launch publication.
 - [ ] Extend queued I/O to kernel shell filesystem commands and catalog refreshes.
+- [x] PS/2 wheel negotiation, pointer-targeted scrolling, shared app-modal error/warning/info dialogs, and confirmed Apps shutdown/restart.
 - [ ] Smaller application layouts and richer shared focus/accessibility conventions.
 - [x] Process listing/control for real desktop jobs through Terminal `ps` / `kill PID`.
 

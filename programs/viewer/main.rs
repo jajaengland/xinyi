@@ -40,14 +40,14 @@ fn main() -> u32 {
             let result = files::stream_size_on(&path[..len], volume);
             if result < 0 {
                 count = 0;
-                message = b"Cannot read file or drive changed. Ctrl+O opens another file.";
+                message = xinyi::gui::report(2,b"Cannot read file or drive changed. Ctrl+O opens another file.");
             } else {
                 size = result as u32;
                 offset = offset.min(size.saturating_sub(1) / 256 * 256);
                 let result = files::read_at_on(&path[..len], offset, &mut data, volume);
                 if result < 0 {
                     count = 0;
-                    message = b"Read failed. File may have changed; Ctrl+O reopens it.";
+                    message = xinyi::gui::report(2,b"Read failed. File may have changed; Ctrl+O reopens it.");
                 } else {
                     count = result as usize;
                     message = b"Read only | Arrows / PgUp / PgDn / Home / End | Ctrl+O open";
@@ -112,6 +112,7 @@ fn main() -> u32 {
                 }
                 file_dialog::Result::Pending => (),
             }
+        } else if e.kind==window::SCROLL {offset=(offset as i64+(e.code as i32 as i64)*48).clamp(0,size.saturating_sub(1) as i64/16*16) as u32;load=true;
         } else if e.kind == window::KEY {
             let code = e.code as u16;
             if e.code & key::CTRL != 0 && matches!(code, 79 | 111) {

@@ -17,17 +17,17 @@ struct Viewer {
 impl Viewer {
     fn sample(&mut self) {
         self.loading=None;self.image=None;self.data=Vec::new();
-        if self.data.try_reserve_exact(SAMPLE.len()).is_err() {self.message=b"Not enough memory for the sample.";return;}
+        if self.data.try_reserve_exact(SAMPLE.len()).is_err() {self.message=xinyi::gui::report(2,b"Not enough memory for the sample.");return;}
         self.data.extend_from_slice(SAMPLE);self.image=bmp::parse(&self.data);
         self.name[..10].copy_from_slice(b"sample.bmp");self.len=10;self.pan_x=0;self.pan_y=0;
         self.message=b"BMP images | Ctrl+O open | F fit | 1 actual size | Arrows pan | Ctrl+Q close";
     }
     fn load(&mut self,path:[u8;105],len:usize,volume:u32) {
         let size=files::stream_size_on(&path[..len],volume);
-        if size<0 {self.message=b"Could not open image. Check its path and drive.";return;}
-        if size as usize>bmp::MAX_FILE || size<54 {self.message=b"BMP must be between 54 bytes and 768 KiB.";return;}
+        if size<0 {self.message=xinyi::gui::report(2,b"Could not open image. Check its path and drive.");return;}
+        if size as usize>bmp::MAX_FILE || size<54 {self.message=xinyi::gui::report(2,b"BMP must be between 54 bytes and 768 KiB.");return;}
         self.loading=None;self.image=None;self.data=Vec::new();
-        if self.data.try_reserve_exact(size as usize).is_err() {self.message=b"Not enough memory for this image.";return;}
+        if self.data.try_reserve_exact(size as usize).is_err() {self.message=xinyi::gui::report(2,b"Not enough memory for this image.");return;}
         self.data.resize(size as usize,0);self.name=path;self.len=len;self.pan_x=0;self.pan_y=0;
         self.loading=Some(Loading{volume,read:0,size:size as usize});self.message=b"Loading BMP... Escape cancels; other windows remain usable.";
     }
@@ -35,11 +35,11 @@ impl Viewer {
         let Some(load)=self.loading.as_mut() else{return;};
         let end=(load.read+16384).min(load.size);
         let result=files::read_at_on(&self.name[..self.len],load.read as u32,&mut self.data[load.read..end],load.volume);
-        if result<0 || result as usize!=end-load.read {self.loading=None;self.message=b"Image read failed or the drive changed. Reopen the image.";return;}
+        if result<0 || result as usize!=end-load.read {self.loading=None;self.message=xinyi::gui::report(2,b"Image read failed or the drive changed. Reopen the image.");return;}
         load.read=end;
         if end==load.size {
             self.loading=None;self.image=bmp::parse(&self.data);
-            self.message=if self.image.is_some() {b"F fit | 1 actual size | Arrows pan | Ctrl+O open | Ctrl+Q close"}else{b"Unsupported or damaged BMP. Use uncompressed 24-bit or 32-bit RGB."};
+            self.message=if self.image.is_some() {b"F fit | 1 actual size | Arrows pan | Ctrl+O open | Ctrl+Q close"}else{xinyi::gui::report(2,b"Unsupported or damaged BMP. Use uncompressed 24-bit or 32-bit RGB.")};
         }
     }
     fn paint(&mut self,w:u32) {
@@ -62,7 +62,7 @@ impl Viewer {
                     let sy=if self.fit {(y+ty)*image.height/rh}else{y+ty+self.pan_y};
                     self.tile[(ty*rw+x) as usize]=image.pixel(&self.data,sx,sy);
                 }}
-                if window::pixels(w,ox,oy+y,rw,rows,&self.tile)<0 {self.message=b"Pixel drawing failed.";break;}
+                if window::pixels(w,ox,oy+y,rw,rows,&self.tile)<0 {self.message=xinyi::gui::report(2,b"Pixel drawing failed.");break;}
                 y+=rows;
             }
             let mut dimensions=*b"0000 x 0000";number(&mut dimensions[..4],image.width);number(&mut dimensions[7..],image.height);
@@ -88,8 +88,8 @@ fn main()->u32 {
         if result==0 {xinyi::sleep_ms(10);continue;}
         if e.kind==window::RESIZE {if window::resize(w,e)==0 {viewer.width=e.x as u32;viewer.height=e.y as u32;}continue;}
         if e.kind==window::DROP {
-            if viewer.dialog.is_some() {xinyi::drag_drop::finish();viewer.message=b"Close the dialog before dropping an image.";}
-            else {match xinyi::drag_drop::open_file(e) {Ok((path,len,volume))=>viewer.load(path,len,volume),Err(_)=>viewer.message=b"Drop one image file from the current drive."}}
+            if viewer.dialog.is_some() {xinyi::drag_drop::finish();viewer.message=xinyi::gui::report(1,b"Close the dialog before dropping an image.");}
+            else {match xinyi::drag_drop::open_file(e) {Ok((path,len,volume))=>viewer.load(path,len,volume),Err(_)=>viewer.message=xinyi::gui::report(1,b"Drop one image file from the current drive.")}}
             continue;
         }
         if let Some(dialog)=viewer.dialog.as_mut() {
@@ -98,6 +98,7 @@ fn main()->u32 {
                 file_dialog::Result::Cancel=>viewer.dialog=None,_=>(),
             }continue;
         }
+        if e.kind==window::SCROLL&&!viewer.fit {viewer.pan_y=(viewer.pan_y as i64+(e.code as i32 as i64)*48).clamp(0,u32::MAX as i64) as u32;}
         if e.kind==window::KEY {
             let code=e.code as u16;let ctrl=e.code&key::CTRL!=0;
             if ctrl && matches!(code,81|113) {return 0;}

@@ -16,7 +16,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix='app-system-',dir=out) as tmp:
         d=Path(tmp);image=d/'system.img';shutil.copyfile(a.disk,image);package=d/'extra';(package/'apps').mkdir(parents=True)
         subprocess.run([sys.executable,str(ROOT/'tools/build_program.py'),str(ROOT/'programs/app_check/main.rs'),'--format','elf','--output',str(package/'apps/metahelp.elf')],check=True)
-        shutil.copyfile(package/'apps/metahelp.elf',package/'apps/aptest.elf');(package/'applications.json').write_text(json.dumps([{'file':'METAHELP.ELF'},{'file':'APTEST.ELF'}]));seed_apps(image,package)
+        (package/'apps/accessck').mkdir();shutil.copyfile(package/'apps/metahelp.elf',package/'apps/accessck/accessck.elf');
+        shutil.copyfile(package/'apps/metahelp.elf',package/'apps/aptest.elf');(package/'applications.json').write_text(json.dumps([{'file':'METAHELP.ELF'},{'file':'APTEST.ELF'},{'directory':'ACCESSCK','file':'ACCESSCK.ELF'}]));seed_apps(image,package)
         qemu=r'C:\Program Files\qemu\qemu-system-i386.exe';g=Guest(qemu,None,d,disk=image,extra_args=['-audiodev','none,id=pcm','-device','AC97,audiodev=pcm'])
         try:
             def log():return (d/'debug.log').read_text(errors='replace')
@@ -31,7 +32,11 @@ def main():
             for command in ['run metahelp make-ro','run aptest ro','run --isolated aptest none','run metahelp make-media','run aptest media','run --read-only aptest ro','run metahelp make-trusted','run --isolated aptest none','run metahelp make-bad']:
                 check(command)
             g.command('run aptest trusted','Program: Invalid application manifest.')
-            for command in ['run metahelp remove','run aptest trusted','run metahelp api','run metahelp ambiguous','run metahelp ambiguous-check','run metahelp clear','run metahelp docs','run metahelp title','run metahelp player-trusted']:check(command)
+            for command in ['run metahelp remove','run aptest trusted','run metahelp api','run metahelp ambiguous','run metahelp ambiguous-check','run --read-only metahelp defaults-denied','run metahelp defaults-check','run metahelp clear','run metahelp docs','run metahelp title','run metahelp player-trusted']:check(command)
+            for command in ['run metahelp access-ro','run /apps/accessck/accessck.elf ro','run --media /apps/accessck/accessck.elf ro','run --isolated /apps/accessck/accessck.elf none','run metahelp access-media','run /apps/accessck/accessck.elf media','run --read-only /apps/accessck/accessck.elf ro','run metahelp access-isolated','run /apps/accessck/accessck.elf none','run metahelp access-bad']:check(command)
+            g.command('run /apps/accessck/accessck.elf trusted','Invalid /ACCESS.CFG.')
+            check('run metahelp access-clear');check('run /apps/accessck/accessck.elf trusted')
+            for command in ['run metahelp access-declared-ro','run metahelp access-media','run /apps/accessck/accessck.elf ro','run metahelp access-clear','run /apps/accessck/accessck.elf ro','run metahelp access-declared-clear','run /apps/accessck/accessck.elf trusted']:check(command)
             assert '.APP' not in g.command('apps','EDIT.BIN') # CLI lists executable artifacts.
             baseline=int(re.search(r'Free now: +(\d+)',g.command('frames','Free now:'))[1]);g.command('cd /docs','xinyi:/DOCS>');g.type('desktop\n');until(lambda:'Desktop scheduler: ready' in log(),'desktop')
             def window(pid):
@@ -58,14 +63,14 @@ def main():
                 pid=int(re.search(r'Desktop: terminal launch pid=(\d+)',log()[start:])[1]);until(lambda:f'Multiwindow: open pid={pid}' in log(),'associated window '+name);return pid
             start=open_file('README.TXT');note=associated('NOTEPAD/NOTEPAD.BIN',start);g.key('ctrl-end');g.type(' updated');g.key('ctrl-s')
             until(lambda:inspect_tree(image,2048)[0].get('DOCS/README.TXT')==b'manifest document updated','associated text app lost its working directory')
-            g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={note} code=0' in log(),'Notepad close')
+            g.dismiss_dialogs(note,wait=True);g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={note} code=0' in log(),'Notepad close')
             start=open_file('TONE.WAV');player=associated('PLAYER/PLAYER.ELF',start);until(lambda:f'Audio: open pid={player}' in log()[start:],'WAV association did not play')
             assert 'App manifest: path=/APPS/PLAYER/PLAYER.ELF access=media' in log()[start:]
             g.call('screendump',{'filename':str(out/'application-associations.png'),'format':'png'});g.key('alt-f4');until(lambda:f'Scheduler: exit pid={player} code=0' in log(),'Player close')
             start=open_file('DATA.DAT');viewer=associated('VIEWER/VIEWER.BIN',start)
             assert 'App manifest: path=/APPS/VIEWER/VIEWER.BIN access=read-only' in log()[start:]
             g.key('alt-f4');until(lambda:f'Scheduler: exit pid={viewer} code=0' in log(),'Viewer close')
-            count=log().count('Desktop: terminal launch pid=');open_file('UNKNOWN.ZZZ');until(lambda:'No installed application handles' in text(files,384),'unknown-file message')
+            count=log().count('Desktop: terminal launch pid=');open_file('UNKNOWN.ZZZ');until(lambda:f'Dialog: pid={files} kind=2' in log(),'unknown-file message');g.dismiss_dialogs(files)
             assert log().count('Desktop: terminal launch pid=')==count,'Unknown binary opened as text'
             g.key('alt-f4');until(lambda:f'Scheduler: exit pid={files} code=0' in log(),'Files close');click(*SHELL_BUTTON);g.wait_for('Desktop finished.')
             assert int(re.search(r'Free now: +(\d+)',g.command('frames','Free now:'))[1])==baseline,'Manifest/app buffers leaked'

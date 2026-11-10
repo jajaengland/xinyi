@@ -1,6 +1,6 @@
-"""Record voice playback and verify mute, debounce, volume persistence and shutdown.
+"""Record system-sound playback and verify mute, debounce, volume persistence and shutdown.
 
-Uses NumPy to compare actual QEMU PCM output with each prepared voice waveform.
+Uses NumPy to compare actual QEMU PCM output with each prepared sound waveform.
 """
 import argparse
 import json
@@ -32,22 +32,22 @@ def main():
                 assert time.monotonic()<end,description+'\n'+log()[-1800:]
                 time.sleep(.02)
         try:
-            until(lambda:'Sound: play startup' in log() and 'Sound: finished' in log(),'startup voice')
+            until(lambda:'Sound: play startup' in log() and 'Sound: finished' in log(),'startup sound')
             for name in ('error','warning','info','complete','connect','disconnect','empty'):
                 time.sleep(.8);start=len(log());g.type('sounds test '+name+'\n')
-                until(lambda:f'Sound: play {name}' in log()[start:] and 'Sound: finished' in log()[start:],name+' voice')
+                until(lambda:f'Sound: play {name}' in log()[start:] and 'Sound: finished' in log()[start:],name+' sound')
             time.sleep(.8);start=len(log());g.type('sounds test notification\n')
             until(lambda:'Sound: play info' in log()[start:] and 'Sound: finished' in log()[start:],'notification alias')
             time.sleep(.8);start=len(log());g.type('a\n');g.key('up');g.key('ret')
             until(lambda:'Sound: finished' in log()[start:],'error debounce')
-            assert log()[start:].count('Sound: play error')==1,'Repeated errors stacked voices'
+            assert log()[start:].count('Sound: play error')==1,'Repeated errors stacked sounds'
             g.command('sounds mute','xinyi:/>');start=len(log());g.type('sounds test error\n');time.sleep(.8)
             assert 'Sound: play' not in log()[start:],'Muted sound played'
             g.command('sounds volume 40','xinyi:/>')
             g.command('sounds save','System sound volume saved.')
             assert 'System sounds volume: 40%' in g.command('sounds','System sounds volume:')
             start=len(log());g.type('shutdown\n');g.process.wait(timeout=15)
-            assert 'Sound: play shutdown' in log()[start:] and 'Sound: finished' in log()[start:],'Shutdown voice cut off'
+            assert 'Sound: play shutdown' in log()[start:] and 'Sound: finished' in log()[start:],'Shutdown sound cut off'
             assert 'Power: disks synchronized' in log()[start:]
         finally:
             if g.process.poll() is None:
@@ -63,8 +63,9 @@ def main():
         with wave.open(str(capture),'rb') as f:
             assert f.getframerate()==48000 and f.getnchannels()==2
             stereo=np.frombuffer(f.readframes(f.getnframes()),dtype='<i2').astype(np.float64).reshape(-1,2)
-        assert np.array_equal(stereo[:,0],stereo[:,1]),'System voices must duplicate mono to stereo'
+        assert np.array_equal(stereo[:,0],stereo[:,1]),'System sounds must duplicate mono to stereo'
         signal=stereo[:,0]
+        shutil.copyfile(capture,out/'system-sounds.wav')
         matches={}
         for name in ('startup','shutdown','error','warning','info','complete','connect','disconnect','empty'):
             with wave.open(str(ROOT/'assets/sounds'/f'{name}.wav'),'rb') as f:
@@ -78,9 +79,10 @@ def main():
                 score=corr/np.sqrt(np.maximum(local*energy,1.))
                 best=max(best,float(score.max()))
             matches[name]=round(best,4)
-            assert best>.9,f'{name}: actual audio does not match the supplied voice ({best:.3f})'
+            print(f'{name}: waveform correlation {best:.4f}',flush=True)
         shutil.copyfile(capture,out/'system-sounds.wav')
         (out/'system-sounds-matches.json').write_text(json.dumps(matches,indent=2)+'\n')
+        assert all(value>.9 for value in matches.values()),f'Playback waveform mismatch: {matches}'
         # Rebooting the same private disk restores the saved system volume.
         g=Guest(r'C:\Program Files\qemu\qemu-system-i386.exe',None,d,disk=disk)
         try:
@@ -88,7 +90,7 @@ def main():
             g.type('sounds test error\n')  # Missing hardware remains harmless.
             g.command('version','Xinyi kernel version')
         finally:g.close()
-    print('PASS system sounds: all nine recorded voice waveforms, notification alias, error debounce, mute, saved volume, completed shutdown clip and missing-device fallback')
+    print('PASS system sounds: all nine recorded sound waveforms, notification alias, error debounce, mute, saved volume, completed shutdown clip and missing-device fallback')
 
 
 if __name__=='__main__':main()

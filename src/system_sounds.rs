@@ -97,3 +97,6 @@ pub fn syscall(op: u32, a: u32, b: u32) -> u32 {
         _ => (-22i32) as u32,
     }
 }
+
+/// A newly displayed notification uses the matching voice clip and normal mute/debounce policy.
+pub fn dialog(kind:u32){play(match kind{2=>Event::Error,1=>Event::Warning,_=>Event::Info});}

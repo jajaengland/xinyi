@@ -1,19 +1,26 @@
 //! Advisory metadata review; the kernel remains the installer authority.
 use crate::xinyi::{self,app_manifest::{Manifest,Access}};
 pub fn load(id:&[u8],volume:u32)->Result<Manifest,i32> {
+    load_folder(id,id,volume)
+}
+/// Review a bundle without changing the caller's working directory.
+pub fn load_folder(folder:&[u8],id:&[u8],volume:u32)->Result<Manifest,i32> {
     if id.is_empty()||id.len()>8||!id[0].is_ascii_alphabetic()||!id.iter().all(|b|b.is_ascii_alphanumeric()||*b==b'_') {return Err(-8);}
     if volume!=xinyi::directory::volume() {return Err(-116);}
-    let mut path=[0;32];let n=id.len();path[..n].copy_from_slice(id);path[n]=b'/';path[n+1..n+1+n].copy_from_slice(id);path[2*n+1]=b'.';
-    let size=2*n+5;let mut executable=[0;12];executable[..n].copy_from_slice(id);executable[n]=b'.';
+    let n=id.len();let base=folder.len()+1;let size=base+n+4;
+    if size>105 {return Err(-22);}
+    let mut path=[0;105];path[..folder.len()].copy_from_slice(folder);path[folder.len()]=b'/';
+    path[base..base+n].copy_from_slice(id);path[base+n]=b'.';
+    let mut executable=[0;12];executable[..n].copy_from_slice(id);executable[n]=b'.';
     let mut found=false;
     for ext in [b"BIN",b"ELF"] {
-        path[2*n+2..size].copy_from_slice(ext);
+        path[base+n+1..size].copy_from_slice(ext);
         let bytes=xinyi::files::stream_size_on(&path[..size],volume);
         if bytes>=0 {executable[n+1..n+4].copy_from_slice(ext);found=true;break;}
         if bytes != -2 {return Err(bytes);}
     }
     if !found {return Err(-8);}
-    path[2*n+2..size].copy_from_slice(b"APP");
+    path[base+n+1..size].copy_from_slice(b"APP");
     let bytes=xinyi::files::stream_size_on(&path[..size],volume);
     if bytes<0 {return Err(bytes);}if bytes==0||bytes>512 {return Err(-8);}
     let mut data=[0;512];let read=xinyi::files::read_at_on(&path[..size],0,&mut data[..bytes as usize],volume);

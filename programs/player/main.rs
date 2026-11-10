@@ -103,17 +103,17 @@ impl Player {
     fn start(&mut self) {
         self.stop();
         if self.source == 0 {
-            self.message = b"Choose a WAV or dndt.wav first.";
+            self.message = xinyi::gui::report(1,b"Choose a WAV or dndt.wav first.");
             return;
         }
         let h = audio::open();
         if h < 0 {
             self.message = if h == -16 {
-                b"Another application is using audio."
+                xinyi::gui::report(1,b"Another application is using audio.")
             } else if h == -13 {
-                b"Audio permission denied for this launch."
+                xinyi::gui::report(2,b"Audio permission denied for this launch.")
             } else {
-                b"Audio unavailable. Launch QEMU with an AC97 sound device."
+                xinyi::gui::report(2,b"Audio unavailable. Launch QEMU with an AC97 sound device.")
             };
             return;
         }
@@ -140,12 +140,12 @@ impl Player {
         let size = files::stream_size_on(&path[..length], volume);
         if size <= 0 || size as usize > MAX_WAV {
             self.message =
-                b"Cannot open WAV: missing, empty, drive changed or larger than 512 KiB.";
+                xinyi::gui::report(2,b"Cannot open WAV: missing, empty, drive changed or larger than 512 KiB.");
             return;
         }
         self.data.clear();
         if self.data.try_reserve(size as usize).is_err() {
-            self.message = b"Not enough memory for WAV.";
+            self.message = xinyi::gui::report(2,b"Not enough memory for WAV.");
             return;
         }
         self.data.resize(size as usize, 0);
@@ -171,7 +171,7 @@ impl Player {
             );
             if n != count as i32 {
                 self.loading = None;
-                self.message = b"Read failed or drive changed. No audio was started.";
+                self.message = xinyi::gui::report(2,b"Read failed or drive changed. No audio was started.");
                 return;
             }
             load.read += count;
@@ -198,7 +198,7 @@ impl Player {
                 }
                 Err(_) => {
                     self.message =
-                        b"Unsupported WAV. Use uncompressed 8/16-bit mono/stereo, 8-48 kHz.";
+                        xinyi::gui::report(2,b"Unsupported WAV. Use uncompressed 8/16-bit mono/stereo, 8-48 kHz.");
                     return;
                 }
             }
@@ -229,7 +229,7 @@ impl Player {
             }
             if result != n as i32 {
                 self.stop();
-                self.message = b"Audio playback failed. Try opening the stream again.";
+                self.message = xinyi::gui::report(2,b"Audio playback failed. Try opening the stream again.");
                 return;
             }
             self.position += n as u32;
@@ -237,7 +237,7 @@ impl Player {
         let queued = audio::queued(h);
         if queued < 0 {
             self.stop();
-            self.message = b"Audio device error. Playback stopped.";
+            self.message = xinyi::gui::report(2,b"Audio device error. Playback stopped.");
             return;
         }
         self.queued = queued as u32;
@@ -365,8 +365,8 @@ fn main() -> u32 {
             continue;
         }
         if e.kind==window::DROP {
-            if player.dialog.is_some() {xinyi::drag_drop::finish();player.message=b"Close the file dialog before dropping a WAV";}
-            else {match xinyi::drag_drop::open_file(e) {Ok((path,len,volume))=>{if path[..len].ends_with(b".WAV")||path[..len].ends_with(b".wav") {player.load(path,len,volume);}else{player.message=b"Drop one WAV audio file";}},Err(_)=>player.message=b"Drop one WAV file from the current drive"}}
+            if player.dialog.is_some() {xinyi::drag_drop::finish();player.message=xinyi::gui::report(1,b"Close the file dialog before dropping a WAV");}
+            else {match xinyi::drag_drop::open_file(e) {Ok((path,len,volume))=>{if path[..len].ends_with(b".WAV")||path[..len].ends_with(b".wav") {player.load(path,len,volume);}else{player.message=xinyi::gui::report(1,b"Drop one WAV audio file");}},Err(_)=>player.message=xinyi::gui::report(1,b"Drop one WAV file from the current drive")}}
             continue;
         }
         if let Some(d) = player.dialog.as_mut() {

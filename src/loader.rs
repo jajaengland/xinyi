@@ -117,5 +117,6 @@ pub fn from_disk(path:&str)->Result<LoadedProgram,&'static str> {
     let mut program=load(&data[..size]).map_err(|e|e.message())?;
     program.profile=crate::permissions::Profile::for_name(resolved);
     if let Some(metadata)=metadata {program.profile=program.profile.restrict(crate::app_metadata::profile(metadata.access));crate::debug::write_fmt(format_args!("App manifest: path={} access={}\n",resolved,program.profile.label()));}
+    program.profile=program.profile.restrict(crate::app_access_disk::profile(resolved)?);
     Ok(program)
 }

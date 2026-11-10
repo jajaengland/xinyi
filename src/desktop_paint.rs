@@ -35,34 +35,36 @@ fn button(c:&mut Canvas<'_>,r:Rect,active:bool,hover:bool) {
 }
 pub fn background(c:&mut Canvas<'_>,s:&Shell,color:u32) {
     c.rect(0,0,crate::display_layout::width(),Shell::work_area().h,color);
+    let image=crate::wallpaper::paint(c);
     let subtle=tint(color);
     let (w,h)=(crate::display_layout::width(),Shell::work_area().h);
     // Quiet diagonal bands follow the work area rather than a fixed resolution.
-    for y in 0..h {
+    if !image {for y in 0..h {
         let x=w*2/3+(y-h/2)/3;
         c.rect(x,y,w/7,1,mix(color,0x8bd1cf,7));
         c.rect(x+w/7,y,w/9,1,mix(color,0x8bd1cf,3));
     }
-    let ink=crate::theme_model::ink(color);
+    }
+    let ink=if image{0xffffff}else{crate::theme_model::ink(color)};
     let brand_x=w-200;let brand_y=h-100;
-    c.rect(brand_x,brand_y,24,3,mix(color,ink,45));
+    if !image {c.rect(brand_x,brand_y,24,3,mix(color,ink,45));
     c.label(brand_x,brand_y+14,160,ink,b"Xinyi");
-    c.label(brand_x,brand_y+36,160,mix(color,ink,65),b"Your workspace");
+    c.label(brand_x,brand_y+36,160,mix(color,ink,65),b"Your workspace");}
     for i in [0,1,2,4] {
         let Some(index)=s.shortcut_app(i) else {continue;};let entry=&s.catalog.entries[index];let r=Shell::shortcut(i);
         if s.hit()==Some(Hit::Shortcut(i)) {tile(c,r,subtle);c.rect(r.x+30,r.y+r.h-4,36,2,ACCENT);}
         icon(c,r.x+28,r.y+8,40,entry.icon as usize);
         let width=text::width(entry.title(),Font::Ui).min(88);
-        c.label(r.x+(96-width as i32)/2,r.y+60,width,ink,entry.title());
+        if image{c.rect(r.x,r.y+58,96,20,0x20364f);}c.label(r.x+(96-width as i32)/2,r.y+60,width,ink,entry.title());
     }
     let r=Shell::shortcut(3);if s.hit()==Some(Hit::DesktopFolder){tile(c,r,subtle);c.rect(r.x+30,r.y+r.h-4,36,2,ACCENT);}
-    icon(c,r.x+28,r.y+8,40,0);c.label(r.x+22,r.y+60,72,ink,b"Desktop");
+    icon(c,r.x+28,r.y+8,40,0);if image{c.rect(r.x,r.y+58,96,20,0x20364f);}c.label(r.x+22,r.y+60,72,ink,b"Desktop");
     for i in 0..s.file_count {
         let e=&s.files[i];let r=s.file_rect(i);
         if s.selection&(1<<i)!=0||s.hit()==Some(Hit::Desktop(i)) {tile(c,r,subtle);if s.selection&(1<<i)!=0 {c.rect(r.x+2,r.y+10,2,r.h-20,ACCENT);}}
         icon(c,r.x+28,r.y+8,40,if e.folder {0}else{3});
         let label=&e.name[..e.length];let width=text::width(label,Font::Ui).min(92);
-        c.label(r.x+(96-width as i32)/2,r.y+60,92,ink,label);
+        if image{c.rect(r.x,r.y+58,96,20,0x20364f);}c.label(r.x+(96-width as i32)/2,r.y+60,92,ink,label);
     }
 }
 pub fn chrome(c:&mut Canvas<'_>,s:&Shell) {
@@ -86,7 +88,8 @@ pub fn chrome(c:&mut Canvas<'_>,s:&Shell) {
     let r=Shell::exit();button(c,r,false,s.hit()==Some(Hit::Exit));c.label(r.x+16,r.y+8,44,0xffffff,b"Shell");
     if s.open {
         let r=s.menu();c.rect(r.x+4,r.y+4,r.w,r.h,0x102333);c.rect(r.x,r.y,r.w,r.h,BORDER);c.rect(r.x+1,r.y+1,r.w-2,r.h-2,PANEL);
-        c.rect(r.x+1,r.y+1,r.w-2,50,0x203e52);c.rect(r.x+16,r.y+38,32,2,ACCENT);c.label(r.x+16,r.y+12,360,0xffffff,b"Applications");c.label(r.x+394,r.y+12,72,0xaecedb,b"Xinyi");
+        c.rect(r.x+1,r.y+1,r.w-2,50,0x203e52);c.rect(r.x+16,r.y+38,32,2,ACCENT);c.label(r.x+16,r.y+12,210,0xffffff,b"Applications");
+        for h in [Hit::Shutdown,Hit::Restart]{let b=s.power_button(h);button(c,b,false,s.hit()==Some(h));c.label(b.x+8,b.y+6,(b.w-16) as u32,0xffffff,if h==Hit::Shutdown{b"Shut down"}else{b"Restart"});}
         c.rect(r.x+16,r.y+56,r.w-32,28,0x759daa);c.rect(r.x+17,r.y+57,r.w-34,26,0xffffff);
         let label=if s.query_len==0 {b"Type to find an app..." as &[u8]}else{&s.query[..s.query_len]};
         c.label(r.x+24,r.y+62,(r.w-52) as u32,if s.query_len==0 {MUTED}else{INK},label);
@@ -113,10 +116,11 @@ pub fn chrome(c:&mut Canvas<'_>,s:&Shell) {
                 if enabled {button(c,rect,false,s.hit()==Some(if next {Hit::NextPage}else{Hit::PreviousPage}));}else{c.rect(rect.x,rect.y,rect.w,rect.h,0xcbd6df);}
                 c.label(rect.x+8,rect.y+2,52,if enabled {0xffffff}else{0x708493},if next {b"Next"}else{b"Prev"});
             }
-            let page=[b'1'+s.app_page as u8,b'/',b'0'+n.div_ceil(16) as u8];c.rect(r.x+394,r.y+12,72,28,0xe0eaf2);c.label(r.x+406,r.y+16,48,INK,&page);
-            c.label(r.x+88,r.y+442,304,MUTED,if s.length>0 {&s.message[..s.length]}else if s.catalog.truncated {b"First 64 apps shown"}else{b"PgUp/PgDn | Enter opens"});
+            let page=[b'1'+s.app_page as u8,b'/',b'0'+n.div_ceil(16) as u8];c.label(r.x+330,r.y+442,56,INK,&page);
+            c.label(r.x+88,r.y+442,232,MUTED,if s.length>0 {&s.message[..s.length]}else if s.catalog.truncated {b"First 64 apps shown"}else{b"PgUp/PgDn | Enter opens"});
         } else {c.label(r.x+16,r.y+r.h-20,(r.w-32) as u32,MUTED,if s.length>0 {&s.message[..s.length]}else if s.catalog.truncated {b"Catalog full: first 64 apps shown"}else{b"Enter opens  |  Arrows select  |  Escape closes"});}
     }
+    if s.open {if let Some(restart)=s.power {let r=s.menu();let d=Rect{x:r.x+24,y:r.y+132,w:432,h:204};c.rect(d.x+4,d.y+4,d.w,d.h,0x102333);c.rect(d.x,d.y,d.w,d.h,0xf3f6f8);c.rect(d.x,d.y,d.w,30,0x203e52);c.label(d.x+12,d.y+7,408,0xffffff,if restart{b"Restart Xinyi?"}else{b"Shut down Xinyi?"});c.paragraph(d.x+16,d.y+48,400,80,INK,b"All running applications will close. Unsaved work will be lost. Save your work before continuing.");for h in [Hit::PowerConfirm,Hit::PowerCancel]{let b=s.power_button(h);button(c,b,false,s.hit()==Some(h));c.label(b.x+10,b.y+6,(b.w-20) as u32,0xffffff,if h==Hit::PowerCancel{b"Cancel (Esc)"}else if restart{b"Restart (Y)"}else{b"Shut down (Y)"});}}}
     if s.sound_open {
         let r=Shell::sound_panel();c.rect(r.x+3,r.y+3,r.w,r.h,0x102333);c.rect(r.x,r.y,r.w,r.h,BORDER);c.rect(r.x+1,r.y+1,r.w-2,r.h-2,PANEL);
         c.label(r.x+12,r.y+12,190,INK,b"System sounds");

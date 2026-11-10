@@ -5,9 +5,9 @@ pub const QUERY:usize=24;
 #[derive(Clone,Copy)]
 pub struct Task {pub pid:u32,pub name:[u8;8],pub length:usize}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub enum Hit {PreviousPage,NextPage,Apps,App(usize),Shortcut(usize),Desktop(usize),DesktopFolder,DesktopMenu(usize),Task(usize),Exit,Sound,Less,More,Mute}
+pub enum Hit {Shutdown,Restart,PowerConfirm,PowerCancel,PreviousPage,NextPage,Apps,App(usize),Shortcut(usize),Desktop(usize),DesktopFolder,DesktopMenu(usize),Task(usize),Exit,Sound,Less,More,Mute}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub enum Action {Launch(usize),OpenDesktop(usize),FileAction(u8),Focus(u32),Exit,Volume(u32)}
+pub enum Action {Power(bool),Launch(usize),OpenDesktop(usize),FileAction(u8),Focus(u32),Exit,Volume(u32)}
 #[derive(Clone,Copy,PartialEq,Eq)]
 pub struct DesktopEntry {pub name:[u8;12],pub length:usize,pub folder:bool}
 impl DesktopEntry {pub const EMPTY:Self=Self{name:[0;12],length:0,folder:false};}
@@ -15,13 +15,13 @@ pub struct Shell {
     pub keyboard:bool,nav_anchor:Option<usize>,pub selection:u32,pub modifiers:u32,gesture_modifiers:u32,toggle:Option<usize>,pub context:Option<(i32,i32,Option<usize>)>,pub layout_loaded:bool,pub layout_dirty:bool,pub slots:[u8;20],pub files:[DesktopEntry;20],pub file_count:usize,pub file_volume:u32,pub selected:Option<usize>,pub press:(i32,i32),
     pub catalog:Catalog,pub tasks:[Option<Task>;4],pub focused:Option<u32>,
     pub app_page:usize,
-    pub open:bool,pub sound_open:bool,pub capture:Option<Hit>,pub menu_selection:Option<usize>,
+    pub power:Option<bool>,pub open:bool,pub sound_open:bool,pub capture:Option<Hit>,pub menu_selection:Option<usize>,
     pub query:[u8;QUERY],pub query_len:usize,pub volume:u32,pub clock:[u8;5],
     pub background:bool,pub x:i32,pub y:i32,buttons:u8,blocked:bool,
     pub message:[u8;88],pub length:usize,
 }
 impl Shell {
-    pub const fn new()->Self {Self{keyboard:true,nav_anchor:None,selection:0,modifiers:0,gesture_modifiers:0,toggle:None,context:None,layout_loaded:false,layout_dirty:false,slots:[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19],files:[DesktopEntry::EMPTY;20],file_count:0,file_volume:0,selected:None,press:(0,0),catalog:Catalog::new(),tasks:[None;4],focused:None,app_page:0,open:false,
+    pub const fn new()->Self {Self{keyboard:true,nav_anchor:None,selection:0,modifiers:0,gesture_modifiers:0,toggle:None,context:None,layout_loaded:false,layout_dirty:false,slots:[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19],files:[DesktopEntry::EMPTY;20],file_count:0,file_volume:0,selected:None,press:(0,0),catalog:Catalog::new(),tasks:[None;4],focused:None,app_page:0,power:None,open:false,
         sound_open:false,capture:None,menu_selection:None,query:[0;QUERY],query_len:0,
         volume:60,clock:*b"--:--",background:true,x:400,y:300,buttons:0,blocked:false,message:[0;88],length:0}}
     pub fn status(&mut self,text:&[u8]) {self.length=text.len().min(88);self.message[..self.length].copy_from_slice(&text[..self.length]);}
@@ -104,7 +104,7 @@ impl Shell {
         (out,n)
     }
     pub fn catalog_changed(&mut self) {self.app_page=0;self.capture=None;let (items,n)=self.filtered();self.menu_selection=if n>0 {Some(items[0])}else{None};}
-    fn show_apps(&mut self) {self.open=!self.open;self.sound_open=false;self.capture=None;self.query_len=0;self.catalog_changed();}
+    fn show_apps(&mut self) {self.power=None;self.open=!self.open;self.sound_open=false;self.capture=None;self.query_len=0;self.catalog_changed();}
     pub fn context_rect(&self)->Option<Rect> {self.context.map(|(x,y,_)|Rect{x,y,w:176,h:if self.context.unwrap().2.is_some(){150}else{90}})}
     pub fn page_button(&self,next:bool)->Rect {let r=self.menu();Rect{x:r.x+if next {400}else{16},y:r.y+440,w:64,h:20}}
     pub fn change_page(&mut self,next:bool) {
@@ -112,11 +112,14 @@ impl Shell {
         self.app_page=if next {(self.app_page+1).min(pages-1)}else{self.app_page.saturating_sub(1)};
         self.capture=None;self.menu_selection=items.get(self.app_page*16).copied().filter(|_|n>0);
     }
+    pub fn power_button(&self,hit:Hit)->Rect {let r=self.menu();match hit {Hit::Shutdown=>Rect{x:r.x+240,y:r.y+12,w:104,h:28},Hit::Restart=>Rect{x:r.x+352,y:r.y+12,w:112,h:28},Hit::PowerConfirm=>Rect{x:r.x+48,y:r.y+282,w:160,h:28},_=>Rect{x:r.x+256,y:r.y+282,w:160,h:28}}}
     pub fn hit(&self)->Option<Hit> {
+        if self.open&&self.power.is_some(){for h in [Hit::PowerConfirm,Hit::PowerCancel]{if self.power_button(h).contains(self.x,self.y){return Some(h);}}return None;}
         if let Some(r)=self.context_rect() {if r.contains(self.x,self.y){return Some(Hit::DesktopMenu(((self.y-r.y)/30) as usize));}return None;}
 
         if Self::apps().contains(self.x,self.y) {return Some(Hit::Apps);}
         if self.open {
+            for h in [Hit::Shutdown,Hit::Restart]{if self.power_button(h).contains(self.x,self.y){return Some(h);}}
             let (items,n)=self.filtered();
             if self.app_page>0&&self.page_button(false).contains(self.x,self.y) {return Some(Hit::PreviousPage);}
             if (self.app_page+1)*16<n&&self.page_button(true).contains(self.x,self.y) {return Some(Hit::NextPage);}
@@ -135,7 +138,7 @@ impl Shell {
         if self.background {for i in 0..self.file_count {if self.file_rect(i).contains(self.x,self.y) {return Some(Hit::Desktop(i));}}}
         None
     }
-    pub fn reset(&mut self,buttons:u8) {self.toggle=None;self.context=None;self.open=false;self.sound_open=false;self.capture=None;self.menu_selection=None;self.buttons=buttons;self.blocked=false;}
+    pub fn reset(&mut self,buttons:u8) {self.toggle=None;self.power=None;self.context=None;self.open=false;self.sound_open=false;self.capture=None;self.menu_selection=None;self.buttons=buttons;self.blocked=false;}
     pub fn next_task(&self,reverse:bool)->Option<u32> {
         let current=self.tasks.iter().position(|t|t.is_some_and(|t|Some(t.pid)==self.focused));let start=current.unwrap_or(if reverse {0}else{3});
         for offset in 1..=4 {let i=if reverse {(start+4-offset)%4}else{(start+offset)%4};if let Some(t)=self.tasks[i] {return Some(t.pid);}}None
@@ -168,6 +171,7 @@ impl Shell {
             }
             return (false,None);
         }
+        if let Some(restart)=self.power {match key{27|78|110=>self.power=None,89|121=>{self.power=None;return(true,Some(Action::Power(restart)));},_=>()}return(true,None);}
         let (items,n)=self.filtered();
         match key {
             0x107=>self.change_page(false),
@@ -198,6 +202,7 @@ impl Shell {
         let mut action=None;
         if released&1!=0 {
             if let Some(hit)=self.capture {if Some(hit)==self.hit() {match hit {
+                Hit::Shutdown=>self.power=Some(false),Hit::Restart=>self.power=Some(true),Hit::PowerCancel=>self.power=None,Hit::PowerConfirm=>{action=self.power.take().map(Action::Power);},
                 Hit::Apps=>self.show_apps(),Hit::App(i)=>{self.open=false;action=Some(Action::Launch(i));},
                 Hit::Shortcut(i)=>action=self.shortcut_app(i).map(Action::Launch),
                 Hit::DesktopMenu(row)=>{let item=self.context.and_then(|(_,_,i)|i);self.context=None;action=Some(if row==0 {Action::OpenDesktop(item.unwrap_or(20))}else if row==1 {Action::OpenDesktop(21)}else{Action::FileAction(if item.is_none(){2}else if row==2 {0}else if row==3 {1}else{3})});},

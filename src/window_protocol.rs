@@ -10,6 +10,7 @@ pub const RESIZE: u32 = 5;
 pub const DRAG_OVER:u32=6;
 pub const DROP:u32=7;
 pub const DRAG_END:u32=8;
+pub const SCROLL:u32=9;
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct Event {

@@ -7,6 +7,7 @@ use crate::{
 use core::arch::asm;
 const N: usize = 4;
 struct Window {
+    notice:crate::message_dialog::Notice,
     drop_target:bool,
     open_drop:bool,
     owner: u32,
@@ -24,7 +25,7 @@ struct Window {
 }
 impl Window {
     fn push(&mut self, event: api::Event) {
-        self.events.push(event, false);
+        let active=self.notice.active;let event=self.notice.event(event,self.width as i32,self.height as i32);if active{unsafe{damage(self.ui.window.bounds());}if !self.notice.active{crate::debug::write_fmt(format_args!("Dialog: dismissed pid={}\n",self.owner));}}if let Some(event)=event{self.events.push(event, false);}
     }
     fn pop(&mut self) -> Option<api::Event> {
         self.events.pop()
@@ -259,6 +260,7 @@ unsafe fn chrome(x: i32, y: i32, buttons: u8, lost: bool) -> bool {
     }
     let opened = shell.open && !old_open;
     match action {
+        Some(crate::desktop_shell::Action::Power(restart))=>{if crate::disk_io::busy()||LAUNCH.is_some(){status(b"Wait for file operations and app loading to finish before powering off.");}else if restart{if !crate::power::restart(){status(b"Restart failed. Your disk was synchronized; use the console to retry.");}}else{crate::power::shutdown();}}
         Some(crate::desktop_shell::Action::Launch(i)) => {
             if core::ptr::addr_of!(LAUNCH).read().is_none() { LAUNCH = Some((shell.catalog.entries[i],crate::diskfs::volume_epoch(),[0;128],0,0));
                 crate::debug::write_fmt(format_args!("App load: queued path={} volume={}\n",core::str::from_utf8(&shell.catalog.entries[i].path[..shell.catalog.entries[i].path_len]).unwrap(),crate::diskfs::volume_epoch())); }
@@ -378,7 +380,7 @@ unsafe fn focus(index: Option<usize>) {
 pub fn begin() -> Result<(), &'static str> {begin_mode(false)}
 fn begin_mode(desktop:bool)->Result<(), &'static str> {
     let _ = crate::mouse::init();
-    if desktop {graphics::start_desktop()?;}else{graphics::start()?;}
+    if desktop {graphics::start_desktop()?;crate::wallpaper::load();}else{graphics::start()?;}
     unsafe {
         DRAG=None;DESKTOP_DROP=false;
         WINDOWS = [const { None }; N];
@@ -405,6 +407,7 @@ fn begin_mode(desktop:bool)->Result<(), &'static str> {
     Ok(())
 }
 pub fn finish() {
+    crate::wallpaper::release();
     save_desktop_layout();
     unsafe {
         DRAG=None;DESKTOP_DROP=false;
@@ -459,7 +462,7 @@ fn flush() {
             for (i, w) in (&*core::ptr::addr_of!(WINDOWS)).iter().enumerate() {
                 if let Some(w) = w {
                     views[i] = Some(graphics::WindowView {
-                        ui: w.ui,
+                        ui: w.ui,notice:&w.notice,
                         title: &w.title[..w.length],
                         io_blocks: w.io_blocks,
                         pixels: core::slice::from_raw_parts(
@@ -515,7 +518,7 @@ pub fn pump() -> bool {
                 continue;
             };
             unsafe {
-                if DRAG.as_ref().is_some_and(|d|d.active) {
+            if DRAG.as_ref().is_some_and(|d|d.active) {
                     if code as u16==27 {cancel_drag();continue;}
                     if code as u16==0x123&&code&(1<<18)!=0 || matches!(code as u16,75|107)&&code&((1<<17)|(1<<18))==((1<<17)|(1<<18)) {cancel_drag();}else{continue;}
                 }
@@ -569,6 +572,7 @@ pub fn pump() -> bool {
                                 crate::debug::write_fmt(format_args!("App load: queued path={} volume={}\n",core::str::from_utf8(&shell.catalog.entries[index].path[..shell.catalog.entries[index].path_len]).unwrap(),crate::diskfs::volume_epoch())); }
                             else { status(b"An app launch is already queued. Please wait."); }
                         }
+                        if let Some(crate::desktop_shell::Action::Power(restart))=action {if crate::disk_io::busy()||LAUNCH.is_some(){status(b"Wait for file operations and app loading before powering off.");}else if restart{if !crate::power::restart(){status(b"Restart failed. Use the console to retry.");}}else{crate::power::shutdown();}}
                         if let Some(crate::desktop_shell::Action::FileAction(op))=action {desktop_file_action(op);}
                         if let Some(crate::desktop_shell::Action::OpenDesktop(i))=action {
                             let e=shell.files[i];let volume=shell.file_volume;let mut path=[0;128];path[..9].copy_from_slice(b"/DESKTOP/");path[9..9+e.length].copy_from_slice(&e.name[..e.length]);queue_desktop(&path[..9+e.length],volume,e.folder);
@@ -622,6 +626,15 @@ pub fn pump() -> bool {
                 (old.0 + event.dx as i32).clamp(0, crate::display_layout::width()-1),
                 (old.1 + event.dy as i32).clamp(0, crate::display_layout::height()-1),
             );
+                if event.wheel!=0&&!event.lost {
+                if SHELL.as_ref().is_some_and(|s|s.open&&s.menu().contains(POINTER.0,POINTER.1)) {
+                    let s=SHELL.as_mut().unwrap();s.change_page(event.wheel>0);let r=s.menu();damage(r);
+                } else if CAPTURE.is_none()&&DRAG.is_none() {
+                    let hit=ORDER.iter().rev().copied().find(|&i|WINDOWS[i].as_ref().is_some_and(|w|w.ui.window.visible&&w.ui.window.rect.contains(POINTER.0,POINTER.1)));
+                    if let Some(i)=hit {let w=WINDOWS[i].as_mut().unwrap();let client=w.ui.client();if client.contains(POINTER.0,POINTER.1){w.push(api::Event{kind:api::SCROLL,code:event.wheel as i32 as u32,x:POINTER.0-client.x,y:POINTER.1-client.y,buttons:event.buttons as u32});}}
+                }
+                if event.dx==0&&event.dy==0&&event.buttons==BUTTONS{continue;}
+            }
             if DRAG.as_ref().is_some_and(|d|d.active) {drag_pointer(event.buttons,event.lost,old);BUTTONS=event.buttons;continue;}
             if chrome(POINTER.0, POINTER.1, event.buttons, event.lost) {
                 BUTTONS = event.buttons;
@@ -684,7 +697,7 @@ pub fn pump() -> bool {
                                 w.owner
                             ));
                         }
-                        w.events.push(input, event.buttons == BUTTONS);
+                        if w.notice.active{w.push(input);}else{w.events.push(input,event.buttons==BUTTONS);}
                     }
                 }
             }
@@ -707,6 +720,12 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
         return u32::MAX;
     };
     let owner = usermode::getpid();
+    if number==105 {
+        if first>2||third==0||third>crate::message_dialog::MAX as u32{return (-22i32) as u32;}
+        if !user_buffer::readable(second,third,image){return (-14i32) as u32;}
+        let mut bytes=[0;crate::message_dialog::MAX];unsafe{core::ptr::copy_nonoverlapping(second as *const u8,bytes.as_mut_ptr(),third as usize);}
+        unsafe{let target=crate::pty::io_window_owner(owner);if DRAG.as_ref().is_some_and(|d|d.target==target||d.source==target){cancel_drag();}let Some(w)=WINDOWS.iter_mut().flatten().find(|w|w.owner==target)else{return (-9i32) as u32;};let announce=w.notice.announces(first,&bytes[..third as usize]);if !w.notice.set(first,&bytes[..third as usize]){return (-22i32) as u32;}if announce{crate::system_sounds::dialog(first);}let mut resize=None;let mut drag_end=false;while let Some(e)=w.events.pop(){if e.kind==api::RESIZE{resize=Some(e);}if e.kind==api::DRAG_END{drag_end=true;}}w.events.push(api::Event{kind:api::RESET,buttons:BUTTONS as u32,..api::Event::default()},false);if let Some(e)=resize{w.events.push(e,false);}if drag_end{w.events.push(api::Event{kind:api::DRAG_END,..api::Event::default()},false);}damage(w.ui.window.bounds());crate::debug::write_fmt(format_args!("Dialog: pid={} kind={} text={}\n",owner,first,core::str::from_utf8(&bytes[..third as usize]).unwrap()));asm!("sti",options(nostack));flush();asm!("cli",options(nostack));}return 0;
+    }
     if number == 60 || number == 65 {
         let (width, height) = if number == 65 {
             (third & 0xffff, third >> 16)
@@ -786,7 +805,7 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
                 ui,
                 title,
                 length: title_length,
-                surface,
+                surface,notice:crate::message_dialog::Notice::new(),
                 requested:None,
                 width,
                 height,
@@ -1027,7 +1046,7 @@ unsafe fn cancel_drag() {
 }
 unsafe fn drop_hit()->Option<usize> {
     ORDER.iter().rev().copied().find(|&i|WINDOWS[i].as_ref().is_some_and(|w|w.ui.window.visible&&w.ui.window.rect.contains(POINTER.0,POINTER.1)))
-        .filter(|&i|WINDOWS[i].as_ref().is_some_and(|w|w.drop_target&&{let c=w.ui.client();(if w.open_drop {c}else{Rect{x:c.x+8,y:c.y+80,w:c.w-16,h:c.h-112}}).contains(POINTER.0,POINTER.1)}))
+        .filter(|&i|WINDOWS[i].as_ref().is_some_and(|w|w.drop_target&&!w.notice.active&&{let c=w.ui.client();(if w.open_drop {c}else{Rect{x:c.x+8,y:c.y+80,w:c.w-16,h:c.h-112}}).contains(POINTER.0,POINTER.1)}))
 }
 unsafe fn drag_pointer(buttons:u8,lost:bool,previous:(i32,i32)) {
     if let Some(shell)=SHELL.as_mut(){shell.reset(buttons);}

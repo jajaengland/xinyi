@@ -1,4 +1,4 @@
-"""Prepare compact voice assets from sounds/*.wav; originals are never modified.
+"""Prepare compact system-sound assets from sounds/*.wav; originals are never modified.
 
 Requires ffmpeg only when regenerating assets, not when building Xinyi.
 """
@@ -24,7 +24,7 @@ def prepare(source, destination):
         if width != 2 or channels not in (1, 2) or compression != 'NONE':
             raise ValueError(f'{source}: expected mono/stereo 16-bit PCM WAV')
         if not 8000 <= rate <= 96000 or not 0 < count <= rate * 3:
-            raise ValueError(f'{source}: expected a voice clip of at most three seconds')
+            raise ValueError(f'{source}: expected an audio clip of at most three seconds')
         samples = array('h', f.readframes(count))
     mono = [sum(samples[i:i+channels]) / channels for i in range(0, len(samples), channels)]
     block = max(1, rate // 100)
@@ -33,7 +33,7 @@ def prepare(source, destination):
     threshold = max(100, max(levels) * .025)
     active = [i for i, v in enumerate(levels) if v >= threshold]
     if not active:
-        raise ValueError(f'{source}: no speech detected')
+        raise ValueError(f'{source}: no audible audio detected')
     start = max(0, active[0] * block - round(rate * .03))
     end = min(len(mono), (active[-1]+1) * block + round(rate * .06))
     mono = mono[start:end]

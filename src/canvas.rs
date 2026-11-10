@@ -7,6 +7,14 @@ impl<'a> Canvas<'a> {
         if width==0||height==0||stride<width||stride.checked_mul(height)?>pixels.len() {return None;}
         Some(Self{pixels,width,height,stride})
     }
+    /// Copy a validated RGB image with clipping; no framebuffer mapping is exposed.
+    pub fn blit(&mut self,x:i32,y:i32,width:usize,height:usize,pixels:&[u32])->bool {
+        if width==0||height==0||width>i32::MAX as usize||height>i32::MAX as usize||width.checked_mul(height)!=Some(pixels.len()){return false;}
+        let left=(x as i64).max(0).min(self.width as i64) as usize;let top=(y as i64).max(0).min(self.height as i64) as usize;
+        let right=(x as i64+width as i64).max(0).min(self.width as i64) as usize;let bottom=(y as i64+height as i64).max(0).min(self.height as i64) as usize;
+        if right<=left||bottom<=top{return true;}
+        for row in top..bottom{let src=(row as i64-y as i64) as usize*width+(left as i64-x as i64) as usize;let dst=row*self.stride+left;self.pixels[dst..dst+right-left].copy_from_slice(&pixels[src..src+right-left]);}true
+    }
     pub fn pixel(&mut self,x:i32,y:i32,color:u32) {
         if x>=0&&y>=0&&(x as usize)<self.width&&(y as usize)<self.height {self.pixels[y as usize*self.stride+x as usize]=color;}
     }

@@ -23,15 +23,15 @@ impl Editor {
     fn save(&mut self,name:[u8;105],length:usize)->bool {
         if length==0 {self.mode=Mode::Name(true);self.prompt_len=0;self.message=b"Save as: enter a filename (ASCII 8.3 paths)";return false;}
         let result=xinyi::save_file(&name[..length],&self.doc.data[..self.doc.length]);
-        if result<0 {self.message=match result{-13=>b"Save failed: file is read-only",-28=>b"Save failed: disk full",-19=>b"Save failed: no mounted drive",-22=>b"Save failed: invalid filename",_=>b"Save failed: disk error; document retained"};self.mode=Mode::Edit;self.after_save=None;return false;}
+        if result<0 {self.message=match result{-13=>xinyi::gui::report(2,b"Save failed: file is read-only"),-28=>xinyi::gui::report(2,b"Save failed: disk full"),-19=>xinyi::gui::report(2,b"Save failed: no mounted drive"),-22=>xinyi::gui::report(2,b"Save failed: invalid filename"),_=>xinyi::gui::report(2,b"Save failed: disk error; document retained")};self.mode=Mode::Edit;self.after_save=None;return false;}
         self.name=name;self.name_len=length;self.doc.mark_saved();self.message=b"Saved to disk";self.mode=Mode::Edit;
         if let Some(action)=self.after_save.take(){self.action(action)}else{false}
     }
     fn open(&mut self,name:[u8;105],length:usize)->bool {
         let mut data=[0;1024];let result=xinyi::read_file(&name[..length],&mut data);
-        if result>=0 {if !self.doc.load(&data[..result as usize]) {self.message=b"Cannot open: unsupported text or expanded size over 1024";return false;}}
+        if result>=0 {if !self.doc.load(&data[..result as usize]) {self.message=xinyi::gui::report(2,b"Cannot open: unsupported text or expanded size over 1024");return false;}}
         else if result==-2 {self.doc=Document::new();self.message=b"New file - save to create it";}
-        else {self.message=if result==-27 {b"Cannot open: file exceeds 1024 bytes"}else{b"Cannot open file; current document retained"};return false;}
+        else {self.message=if result==-27 {xinyi::gui::report(2,b"Cannot open: file exceeds 1024 bytes")}else{xinyi::gui::report(2,b"Cannot open file; current document retained")};return false;}
         self.name=name;self.name_len=length;self.top=0;self.mode=Mode::Edit;
         if result>=0 {self.message=b"Opened (CRLF normalized, tabs expanded)";}true
     }
@@ -58,7 +58,7 @@ impl Editor {
                         if (exists>=0||exists==-27)&&(self.prompt_len!=self.name_len||self.prompt[..self.prompt_len]!=self.name[..self.name_len]) {
                             self.mode=Mode::Overwrite;self.message=b"Replace existing file? Y yes / N cancel";
                         }else if exists>=0||exists==-2 {return self.save(self.prompt,self.prompt_len);}
-                        else {self.message=b"Cannot check destination; save cancelled";}
+                        else {self.message=xinyi::gui::report(2,b"Cannot check destination; save cancelled");}
                     }else{self.open(self.prompt,self.prompt_len);self.mode=Mode::Edit;}
                 }
                 32..=126 if self.prompt_len<105&&event&(key::CTRL|key::ALT)==0=>{self.prompt[self.prompt_len]=code as u8;self.prompt_len+=1;}

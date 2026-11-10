@@ -2,7 +2,7 @@
 #[path="../src/mouse_ui.rs"] mod mouse_ui;
 use mouse_packet::{Decoder,Event};use mouse_ui::{State,Target};
 fn packet(d:&mut Decoder,bytes:[u8;3])->Event {assert!(d.feed(bytes[0]).is_none());assert!(d.feed(bytes[1]).is_none());d.feed(bytes[2]).unwrap()}
-fn event(dx:i16,dy:i16,buttons:u8)->Event {Event{dx,dy,buttons,lost:false}}
+fn event(dx:i16,dy:i16,buttons:u8)->Event {Event{dx,dy,buttons,lost:false,wheel:0}}
 #[test] fn signed_nine_bit_motion_and_inverted_screen_y() {
     let mut d=Decoder::new();assert_eq!(packet(&mut d,[8,200,255]),event(200,-255,0));
     assert_eq!(packet(&mut d,[0x3b,56,1]),event(-200,255,3));
@@ -28,3 +28,5 @@ fn event(dx:i16,dy:i16,buttons:u8)->Event {Event{dx,dy,buttons,lost:false}}
     s.update(event(-32000,-32000,0));assert_eq!((s.x,s.y),(0,0));
     s.menu=None;s.update(event(300,260,1));s.update(Event{lost:true,buttons:1,..Event::default()});s.update(event(0,0,0));assert_eq!(s.clicks,[0,0]);
 }
+
+#[test]fn wheel_packets_are_signed_and_do_not_desynchronize(){let mut d=Decoder::new();d.wheel_mode(true);for z in [1,15,7,8,0]{for b in [8,0,0]{assert!(d.feed(b).is_none());}let e=d.feed(z).unwrap();assert_eq!(e.wheel,((z as i8)<<4)>>4);assert_eq!((e.dx,e.dy),(0,0));}d.wheel_mode(false);assert_eq!(packet(&mut d,[8,1,0]).dx,1);}

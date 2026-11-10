@@ -20,6 +20,9 @@ struct Settings {
     volume: u32,
     editing: bool,
     status: &'static [u8],
+    wallpaper:xinyi::wallpaper::Request,
+    paper_buttons:[Button;3],
+    dialog:Option<xinyi::file_dialog::Dialog>,
 }
 impl Settings {
     fn color(&self) -> u32 {
@@ -40,23 +43,25 @@ impl Settings {
         self.status = b"Apply previews; Save persists on the mounted drive.";
     }
     fn apply(&mut self, save: bool) {
+        let result=xinyi::wallpaper::apply(&self.wallpaper,save);
+        if result<0{self.status=gui::report(2,match result{-8=>b"Unsupported or damaged image. Use an uncompressed 24/32-bit BMP.",-27=>b"Wallpaper BMP must be at most 768 KiB.",-116=>b"Drive changed. Choose the wallpaper again.",-2=>b"Wallpaper image was not found. Choose another file.",-12=>b"Not enough memory to prepare this wallpaper.",_=>b"Wallpaper could not be applied. Previous wallpaper was kept."});return;}
         let n = appearance::apply(&self.draft, save);
         if n == 0 && save {
             let mut data = [0; 8];
             data[..4].copy_from_slice(b"SND1");
             data[4..].copy_from_slice(&self.volume.to_le_bytes());
             if xinyi::files::save(b"/SOUND.CFG", &data) < 0 {
-                self.status = b"Colours saved; sound volume could not be saved.";
+                self.status = xinyi::gui::report(2,b"Appearance saved; sound volume could not be saved.");
                 xinyi::sounds::play(xinyi::sounds::Event::Error);
                 return;
             }
         }
         self.status = match n {
-            0 if save => b"Saved colours and system sound volume.",
-            0 => b"Applied for this session. Save to keep after reboot.",
-            -13 => b"GUI.CFG is read-only. Changes were not saved.",
-            -19 => b"No mounted drive. Apply works without saving.",
-            _ => b"Could not save settings. Current colours retained.",
+            0 if save => xinyi::gui::report(0,b"Saved appearance, wallpaper and sound volume."),
+            0 => xinyi::gui::report(0,b"Applied for this session. Save to keep after reboot."),
+            -13 => xinyi::gui::report(2,b"GUI.CFG is read-only. Changes were not saved."),
+            -19 => xinyi::gui::report(2,b"No mounted drive. Apply works without saving."),
+            _ => xinyi::gui::report(2,b"Wallpaper applied; colours could not be saved."),
         };
         xinyi::sounds::play(if n == 0 {
             xinyi::sounds::Event::Complete
@@ -68,11 +73,11 @@ impl Settings {
         window::draw(
             w,
             &[
-                Draw::rect(0, 0, 480, 416, 0xf3f6f8),
-                Draw::rect(0,0,480,30,0x203e52),
+                Draw::rect(0, 0, 640, 416, 0xf3f6f8),
+                Draw::rect(0,0,640,30,0x203e52),
                 Draw::rect(8,34,464,204,0xffffff),
                 Draw::rect(8,240,464,96,0xffffff),
-                Draw::rect(0,382,480,1,0xc6d3dc),
+                Draw::rect(0,382,640,1,0xc6d3dc),
                 Draw::label(16, 7, 448, 0xffffff, b"Appearance"),
                 Draw::label(16, 42, 252, 0, b"Desktop background"),
                 Draw::label(16, 78, 252, 0, b"Active title bar"),
@@ -159,7 +164,7 @@ impl Settings {
             b"-",
             b"+",
             if self.volume == 0 { b"Unmute" } else { b"Mute" },
-            b"Test voice",
+            b"Test sound",
         ]
         .iter()
         .enumerate()
@@ -175,18 +180,25 @@ impl Settings {
                 &self.status[..self.status.len().min(56)],
             )],
         );
+        window::draw(w,&[Draw::rect(480,34,152,338,0xffffff),Draw::label(488,42,136,0x20384d,b"Wallpaper")]);
+        for (i,label) in [b"Choose image" as &[u8],match self.wallpaper.mode{0=>b"Mode: Fit",1=>b"Mode: Fill",_=>b"Mode: Center"},b"Use colour"].iter().enumerate(){gui::button_flat(w,&self.paper_buttons[i],label,false);}
+        let path=&self.wallpaper.path[..self.wallpaper.length as usize];let leaf=path.rsplit(|b|*b==b'/').next().unwrap_or(b"");
+        window::draw(w,&[Draw::label(488,196,136,0x20384d,if path.is_empty(){b"Default background"}else{leaf}),Draw::paragraph(488,224,136,96,0x536c80,b"24/32-bit BMP, up to 768 KiB. Apply previews; Save keeps the image choice.")]);
+        if let Some(dialog)=self.dialog.as_ref(){dialog.paint(w);}
         window::present(w);
     }
 }
 fn main() -> u32 {
-    let w = window::open_sized(b"Settings", 480, 416);
+    let w = window::open_sized(b"Settings", 640, 416);
     if w < 0 {
         return 1;
     }
     let w = w as u32;
     let mut theme = Theme::DEFAULT;
     appearance::get(&mut theme);
+    let mut paper=xinyi::wallpaper::Request::new();let wallpaper_loaded=xinyi::wallpaper::get(&mut paper);
     let mut s = Settings {
+        wallpaper:paper,paper_buttons:[Button::new(Rect::new(488,72,136,28)),Button::new(Rect::new(488,112,136,28)),Button::new(Rect::new(488,152,136,28))],dialog:None,
         draft: theme,
         target: 0,
         volume: xinyi::sounds::volume().clamp(0, 100) as u32,
@@ -204,6 +216,7 @@ fn main() -> u32 {
         editing: false,
         status: b"Choose a colour target, then a swatch or RGB value.",
     };
+    if wallpaper_loaded==0&&paper.length>0{s.status=gui::report(1,b"Saved wallpaper is unavailable. Choose another image or use colour.");}
     let mut buttons = 0;
     s.paint(w);
     loop {
@@ -211,12 +224,17 @@ fn main() -> u32 {
         if window::event(w, &mut e, true) < 0 {
             return 1;
         }
+        if e.kind==window::CLOSE{return 0;}
+        if let Some(dialog)=s.dialog.as_mut(){
+            match dialog.event(e){xinyi::file_dialog::Result::Accept{path,len,volume}=>{s.wallpaper.path=path;s.wallpaper.length=len as u16;s.wallpaper.volume=volume;s.dialog=None;s.status=b"Image selected. Apply previews; Save keeps it.";},xinyi::file_dialog::Result::Cancel=>s.dialog=None,_=>()}
+            s.paint(w);continue;
+        }
         let mut repaint = false;
         match e.kind {
             window::CLOSE => return 0,
             window::RESET => {
                 buttons = e.buttons;
-                for b in &mut s.buttons {
+                for b in s.buttons.iter_mut().chain(s.paper_buttons.iter_mut()) {
                     b.reset(e.buttons);
                 }
                 repaint=true;
@@ -236,7 +254,7 @@ fn main() -> u32 {
                         if let Some(color) = appearance::hex(&s.hex.bytes[..s.hex.len]) {
                             s.choose(color);
                         } else {
-                            s.status = b"Enter exactly six hexadecimal digits.";
+                            s.status = xinyi::gui::report(1,b"Enter exactly six hexadecimal digits.");
                         }
                     } else {
                         gui::edit_key(&mut s.hex, e.code);
@@ -275,7 +293,7 @@ fn main() -> u32 {
                         0 => s.apply(false),
                         1 => s.apply(true),
                         2 => {
-                            s.draft = Theme::DEFAULT;
+                            s.draft = Theme::DEFAULT;s.wallpaper=xinyi::wallpaper::Request::new();s.wallpaper.volume=xinyi::directory::volume();
                             s.volume = 60;
                             xinyi::sounds::set_volume(s.volume);
                             s.editing = false;
@@ -300,11 +318,14 @@ fn main() -> u32 {
                         _ => (),
                     }
                 }
+                let mut paper_action=None;
+                for(i,b)in s.paper_buttons.iter_mut().enumerate(){let before=(b.hover,b.pressed);if b.pointer(e.x,e.y,e.buttons){paper_action=Some(i);}if before!=(b.hover,b.pressed){repaint=true;}}
+                if let Some(i)=paper_action{match i{0=>{let mut dialog=xinyi::file_dialog::Dialog::new(false);dialog.input.set(if s.wallpaper.length>0{&s.wallpaper.path[..s.wallpaper.length as usize]}else{b"/APPS/SETTINGS/WALL.BMP"});s.dialog=Some(dialog);},1=>s.wallpaper.mode=(s.wallpaper.mode+1)%3,_=>{s.wallpaper.length=0;s.wallpaper.path.fill(0);s.wallpaper.volume=xinyi::directory::volume();}}s.status=b"Apply previews the wallpaper; Save keeps it.";repaint=true;}
                 let new_pressed = s
                     .buttons
                     .iter()
                     .fold(0u32, |n, b| (n << 2) | u32::from(b.hover) | (u32::from(b.pressed && b.hover)<<1));
-                repaint = (e.buttons & 1 != 0 && buttons & 1 == 0)
+                repaint = repaint || (e.buttons & 1 != 0 && buttons & 1 == 0)
                     || action.is_some()
                     || old_pressed != new_pressed;
                 buttons = e.buttons;

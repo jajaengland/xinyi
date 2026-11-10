@@ -33,6 +33,9 @@ mod files_api;
 mod clipboard;
 mod file_clipboard;
 mod theme;
+mod bmp;
+mod wallpaper_model;
+mod wallpaper;
 mod theme_model;
 mod terminal_service;
 mod directory_api;
@@ -51,6 +54,7 @@ mod display_layout;
 mod ps2;
 mod mouse;
 mod mouse_packet;
+mod message_dialog;
 mod mouse_ui;
 mod desktop_ui;
 mod desktop_shell;
@@ -58,6 +62,8 @@ mod desktop_paint;
 mod app_catalog;
 mod app_manifest;
 mod app_metadata;
+mod app_access;
+mod app_access_disk;
 mod app_install;
 mod app_tree;
 mod cpu_context;
@@ -798,36 +804,8 @@ fn run_command(input: &str) {
         }
 
         "shutdown" => {if !argument.is_empty()&&argument!="confirm"{println!("Usage: shutdown [confirm]");}else if multitask::active()&&argument!="confirm"{println!("Shutdown closes running applications. Save your work, then shutdown confirm.");}else{power::shutdown();}}
-        "reboot" => {
-            audio::farewell();
-            println!("Rebooting...");
+        "reboot" => {if !power::restart(){println!("Reset was not confirmed.");}}
 
-            unsafe {
-                for _ in 0..100_000 {
-                    let status: u8;
-
-                    core::arch::asm!(
-                        "in al, dx",
-                        in("dx") 0x64u16,
-                        out("al") status,
-                        options(nomem, nostack, preserves_flags)
-                    );
-
-                    if status & 0x02 == 0 {
-                        core::arch::asm!(
-                            "out dx, al",
-                            in("dx") 0x64u16,
-                            in("al") 0xFEu8,
-                            options(nomem, nostack, preserves_flags)
-                        );
-
-                        break;
-                    }
-                }
-            }
-
-            println!("Reset was not confirmed.");
-        }
 		"uptime" => {
 			let total_seconds = interrupts::uptime_seconds();
 			let hours = total_seconds / 3600;

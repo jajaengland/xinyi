@@ -1,7 +1,7 @@
 #[path="../src/mouse_packet.rs"] mod mouse_packet;
 #[path="../src/desktop_ui.rs"] mod desktop_ui;
 use desktop_ui::{State,Target};use mouse_packet::Event;
-fn at(s:&mut State,x:i32,y:i32,buttons:u8) {s.update(Event{dx:(x-s.x) as i16,dy:(y-s.y) as i16,buttons,lost:false});}
+fn at(s:&mut State,x:i32,y:i32,buttons:u8) {s.update(Event{dx:(x-s.x) as i16,dy:(y-s.y) as i16,buttons,lost:false,wheel:0});}
 fn click(s:&mut State,x:i32,y:i32) {at(s,x,y,1);at(s,x,y,0);}
 #[test] fn opaque_windows_block_covered_controls_and_clicks_raise() {
     let mut s=State::new(0);at(&mut s,340,240,0);assert_eq!(s.hit(),Some(Target::Client(1)));click(&mut s,340,240);assert_eq!(s.clicks,[0,0]);

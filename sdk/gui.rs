@@ -190,3 +190,6 @@ pub fn scrollbar_flat(w:u32,s:&Scrollbar) {
     window::draw(w,&[Draw::rect(thumb.x as u32,thumb.y as u32,thumb.w as u32,thumb.h as u32,0xffffff)]);
     if thumb.h>8 {window::draw(w,&[Draw::rect((thumb.x+6) as u32,(thumb.y+3) as u32,4,(thumb.h-6) as u32,0x94aabb)]);}
 }
+
+/// Queue an owner-window modal: 0 information, 1 warning, 2 error. Text is copied by the kernel.
+pub fn report(kind:u32,message:&'static[u8])->&'static[u8] {let n=super::syscall(105,kind,message.as_ptr() as u32,message.len() as u32);if n==0{b""}else{message}}

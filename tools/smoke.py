@@ -117,6 +117,22 @@ class Guest:
             raise RuntimeError(f"Could not send key {key}: {result}")
         time.sleep(0.045)  # Let the key release complete before sending another.
 
+    def dismiss_dialogs(self,pid,wait=False):
+        """Explicitly acknowledge an already-visible owner modal in interaction tests."""
+        log=self.directory/'debug.log'
+        if wait:
+            deadline=time.monotonic()+15
+            while True:
+                history=re.findall(r'Dialog: (?:pid='+str(pid)+r' kind=\d+[^\n]*|dismissed pid='+str(pid)+r')',log.read_text(errors='replace'))
+                if history and 'dismissed' not in history[-1]:break
+                assert time.monotonic()<deadline,'Expected dialog for '+str(pid)
+                time.sleep(.04)
+        for _ in range(32):
+            events=re.findall(r'Dialog: (?:pid='+str(pid)+r' kind=\d+[^\n]*|dismissed pid='+str(pid)+r')',log.read_text(errors='replace'))
+            if not events or 'dismissed' in events[-1]:return
+            self.key('ret');time.sleep(.1)
+        raise AssertionError('Dialog did not dismiss for '+str(pid))
+
     def type(self, text):
         for character in text:
             if character == "!":

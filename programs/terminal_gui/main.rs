@@ -4,18 +4,12 @@
 mod xinyi;
 use xinyi::{
     gui, key, pty,
-    widgets::{Rect, Scrollbar},
+    widgets::{Button, Rect, Scrollbar},
     window,
 };
 fn banner(window: u32, width: u32, text: &[u8]) {
-    window::draw(
-        window,
-        &[
-            window::Draw::rect(0, 0, width - 16, 32, 0xf3f6f8),
-            window::Draw::text(8, 8, 0, text),
-        ],
-    );
-    window::present(window);
+    let r=Rect::new(24,64,(width as i32-64).min(480),192);gui::dialog_flat(window,b"Warning",r);
+    window::draw(window,&[window::Draw::paragraph((r.x+16) as u32,(r.y+48) as u32,(r.w-32) as u32,96,0x20384d,text)]);
 }
 fn main() -> u32 {
     let handle = window::open_sized(b"Terminal", 656, 400);
@@ -35,6 +29,7 @@ fn main() -> u32 {
     let (mut scroll, mut anchor, mut dragging, mut buttons, mut closing) =
         (0u32, 0u32, false, 0u32, false);
     let mut message: Option<&[u8]> = None;
+    let mut close_buttons=[Button::new(Rect::new(40,216,144,26)),Button::new(Rect::new(200,216,128,26))];
     let mut bar = Scrollbar::new(Rect::new(640, 0, 16, 400));
     let mut painted = None;
     let mut last_scrolls = pty::control(session, 7).max(0) as u32;
@@ -75,6 +70,17 @@ fn main() -> u32 {
             if result == 0 {
                 break;
             }
+            if closing {
+                let mut decision=None;
+                match event.kind {
+                    window::KEY=>match event.code as u16 {27|78|110=>decision=Some(false),89|121=>decision=Some(true),_=>()},
+                    window::CLOSE=>decision=Some(true),
+                    window::POINTER=>{for(i,b)in close_buttons.iter_mut().enumerate(){if b.pointer(event.x,event.y,event.buttons){decision=Some(i==0);}}},
+                    window::RESET=>{for b in &mut close_buttons{b.reset(event.buttons);}},_=>(),
+                }
+                if let Some(terminate)=decision {if terminate {if pty::control(session,2)==0{return 0;}}else{closing=false;message=None;painted=None;pty::control(session,5);}}
+                if !matches!(event.kind,window::RESET|window::RESIZE){continue;}
+            }
             match event.kind {
                 window::RESIZE => {
                     if window::resize(window, event) == 0 {
@@ -96,8 +102,9 @@ fn main() -> u32 {
                         return 0;
                     }
                     closing = true;
-                    message = Some(b"Program running. X again terminates it. Escape cancels.");
+                    message = Some(b"A program is running. Terminating it loses unsaved work. Y confirms; Escape cancels.");for b in &mut close_buttons{b.reset(event.buttons);}
                 }
+                window::SCROLL=>{scroll=(scroll as i64-(event.code as i32 as i64)*3).clamp(0,history as i64) as u32;},
                 window::RESET => {
                     dragging = false;
                     buttons = event.buttons;
@@ -149,7 +156,7 @@ fn main() -> u32 {
                     if ctrl && shift && matches!(code, 67 | 99) {
                         if pty::copy(session) < 0 {
                             message = Some(
-                                b"Selection exceeds the 1024-byte clipboard. Escape dismisses.",
+                                xinyi::gui::report(1,b"Selection exceeds the 1024-byte clipboard. Escape dismisses."),
                             );
                         }
                         continue;
@@ -159,7 +166,7 @@ fn main() -> u32 {
                         let n = xinyi::clipboard_get(&mut text);
                         if n > 0 && pty::paste(session, &text[..n as usize]) < 0 {
                             message =
-                                Some(b"Paste does not fit the input buffer. Escape dismisses.");
+                                Some(gui::report(1,b"Paste does not fit the input buffer. Escape dismisses."));
                         }
                         continue;
                     }
@@ -177,7 +184,7 @@ fn main() -> u32 {
                             return 0;
                         }
                         closing = true;
-                        message = Some(b"Program starting. X terminates it. Escape cancels.");
+                        message = Some(b"A program is starting. Terminating it loses unsaved work. Y confirms; Escape cancels.");for b in &mut close_buttons{b.reset(event.buttons);}
                         continue;
                     }
                     pty::clear_selection(session);
@@ -187,8 +194,10 @@ fn main() -> u32 {
                 _ => (),
             }
         }
+        if message.is_some_and(|text|text.is_empty()){message=None;}
         if let Some(text) = message {
             banner(window, width, text);
+            if closing{gui::button_flat(window,&close_buttons[0],b"Terminate (Y)",true);gui::button_flat(window,&close_buttons[1],b"Cancel (Esc)",false);}window::present(window);
         } else if pty::present(session, window, scroll) < 0 {
             return 0;
         }

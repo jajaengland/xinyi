@@ -552,7 +552,7 @@ pub(crate) fn app_scene(state:&crate::app_window_ui::State,title:&[u8],surface:&
 }
 
 #[derive(Clone,Copy)]
-pub(crate) struct WindowView<'a> {pub ui:crate::app_window_ui::State,pub title:&'a[u8],pub pixels:&'a[u32],pub io_blocks:Option<u32>}
+pub(crate) struct WindowView<'a> {pub ui:crate::app_window_ui::State,pub notice:&'a crate::message_dialog::Notice,pub title:&'a[u8],pub pixels:&'a[u32],pub io_blocks:Option<u32>}
 fn modern_window(c:&mut Canvas<'_>,view:&WindowView<'_>) {
     let s=&view.ui;let r=s.window.rect;let bar=s.title();
     c.rect(r.x+3,r.y+3,r.w,r.h,0x122333);c.rect(r.x,r.y,r.w,r.h,crate::desktop_paint::BORDER);c.rect(r.x+1,r.y+1,r.w-2,r.h-2,crate::desktop_paint::PANEL);
@@ -573,7 +573,7 @@ pub(crate) fn multi_scene(views:&[Option<WindowView<'_>>;4],order:&[usize;4],she
         if view.ui.limits.is_some(){let m=view.ui.maximize_button();bevel(&mut c,m.x,m.y,m.w,m.h,view.ui.maximize_pressed());let d=if view.ui.maximize_pressed(){1}else{0};if view.ui.is_maximized(){c.rect(m.x+7+d,m.y+4+d,8,8,0);c.rect(m.x+8+d,m.y+6+d,6,5,0xc4c4c4);}c.rect(m.x+4+d,m.y+6+d,9,8,0);c.rect(m.x+5+d,m.y+8+d,7,5,0xc4c4c4);}
         let close=view.ui.window.close();bevel(&mut c,close.x,close.y,close.w,close.h,view.ui.close_pressed());c.line((close.x+5,close.y+5),(close.x+12,close.y+12),0);c.line((close.x+12,close.y+5),(close.x+5,close.y+12),0);}
 
-        let client=view.ui.client();copy_client(data,client,view.pixels);
+        let client=view.ui.client();copy_client(data,client,view.pixels);{let mut c=Canvas::new(data,width(),height(),width()).unwrap();view.notice.paint(&mut c,client);}
         if view.ui.limits.is_some() && !view.ui.is_maximized(){let mut c=Canvas::new(data,width(),height(),width()).unwrap();let g=view.ui.grip();for d in [3,7,11]{c.line((g.x+13-d,g.y+13),(g.x+13,g.y+13-d),0x404040);}}
         if let Some(p)=view.ui.preview(){let mut c=Canvas::new(data,width(),height(),width()).unwrap();c.rect(p.x,p.y,p.w,2,0xffffff);c.rect(p.x,p.y,2,p.h,0xffffff);c.rect(p.x,p.y+p.h-2,p.w,2,0xffffff);c.rect(p.x+p.w-2,p.y,2,p.h,0xffffff);}
 
@@ -598,3 +598,5 @@ fn copy_client(data:&mut[u32],r:crate::desktop_ui::Rect,pixels:&[u32]) {
  if left>=right||top>=bottom{return;}let n=(right-left) as usize;
  for y in top..bottom {let dst=y as usize*width()+left as usize;let src=((y-r.y)*r.w+left-r.x) as usize;data[dst..dst+n].copy_from_slice(&pixels[src..src+n]);}
 }
+
+pub(crate) fn notice(notice:&crate::message_dialog::Notice,client:crate::desktop_ui::Rect){let session=unsafe{SESSION.as_ref().unwrap()};let data=unsafe{core::slice::from_raw_parts_mut(session.back.base() as *mut u32,width()*height())};let mut c=Canvas::new(data,width(),height(),width()).unwrap();notice.paint(&mut c,client);}

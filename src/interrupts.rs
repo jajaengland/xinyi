@@ -269,7 +269,7 @@ pub extern "C" fn xinyi_syscall_handler(frame: &crate::syscall_frame::SyscallFra
             crate::usermode::getpid()
         }
         50..=56 => crate::terminal::syscall(frame.cs, syscall_num, arg1, arg2, arg3),
-        60..=65|85..=86|104 => if crate::multitask::active() {crate::multi_window::syscall(frame.cs,syscall_num,arg1,arg2,arg3)}else{crate::window_api::syscall(frame.cs,syscall_num,arg1,arg2,arg3)},
+        60..=65|85..=86|104|105 => if crate::multitask::active() {crate::multi_window::syscall(frame.cs,syscall_num,arg1,arg2,arg3)}else{crate::window_api::syscall(frame.cs,syscall_num,arg1,arg2,arg3)},
         67..=68=>crate::clipboard::syscall(frame.cs,syscall_num,arg1,arg2,arg3),
         72..=77=>crate::pty::syscall(frame.cs,syscall_num,arg1,arg2,arg3),
         96..=99=>crate::audio::syscall(frame.cs,syscall_num,arg1,arg2,arg3),
@@ -282,6 +282,7 @@ pub extern "C" fn xinyi_syscall_handler(frame: &crate::syscall_frame::SyscallFra
         88..=90=>crate::files_api::large(frame.cs,syscall_num,arg1,arg2,arg3),
         87=>crate::user_memory::heap(frame.cs,arg1,arg2,arg3),
         83=>crate::file_clipboard::syscall(frame.cs,arg1,arg2,arg3),
+        106=>crate::wallpaper::syscall(frame.cs,arg1,arg2,arg3),
         84=>crate::theme::syscall(frame.cs,arg1,arg2,arg3),
         78..=82=>crate::directory_api::syscall(frame.cs,syscall_num,arg1,arg2,arg3),
         69..=71=>crate::terminal_service::syscall(frame.cs,syscall_num,arg1,arg2,arg3),

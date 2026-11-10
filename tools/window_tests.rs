@@ -7,7 +7,7 @@
 #[path="../src/input_order.rs"]mod input_order;
 use window_protocol::{Draw,Event,CLOSE,POINTER,RESET};
 use app_window_ui::State;
-fn at(s:&mut State,x:i32,y:i32,buttons:u8)->(bool,Option<Event>) {s.update(mouse_packet::Event{dx:(x-s.x) as i16,dy:(y-s.y) as i16,buttons,lost:false})}
+fn at(s:&mut State,x:i32,y:i32,buttons:u8)->(bool,Option<Event>) {s.update(mouse_packet::Event{dx:(x-s.x) as i16,dy:(y-s.y) as i16,buttons,lost:false,wheel:0})}
 #[test] fn draw_bounds_reject_overflow_and_bad_formats() {
     assert!(Draw::rect(639,399,1,1,0xffffff).valid());
     for c in [Draw::rect(u32::MAX,0,2,1,0),Draw::rect(639,399,2,1,0),Draw::rect(0,0,1,1,0x1000000),Draw{kind:2,..Draw::default()},Draw::text(0,385,0,b"a"),Draw::text(633,0,0,b"a")] {assert!(!c.valid());}
@@ -80,7 +80,7 @@ fn at(s:&mut State,x:i32,y:i32,buttons:u8)->(bool,Option<Event>) {s.update(mouse
 
 #[test]fn lost_mouse_input_cancels_resize_preview(){let mut s=State::sized(0,640,400,0,24);s.limits=Some((640,400,768,528));at(&mut s,650,455,1);at(&mut s,750,550,1);let(_,e)=s.update(mouse_packet::Event{lost:true,buttons:1,..mouse_packet::Event::default()});assert_eq!(e.unwrap().kind,window_protocol::RESET);assert!(s.preview().is_none());assert!(at(&mut s,750,550,0).1.is_none());}
 
-fn timed(s:&mut State,x:i32,y:i32,buttons:u8,tick:u32)->Option<Event>{s.update_at(mouse_packet::Event{dx:(x-s.x) as i16,dy:(y-s.y) as i16,buttons,lost:false},tick).1}
+fn timed(s:&mut State,x:i32,y:i32,buttons:u8,tick:u32)->Option<Event>{s.update_at(mouse_packet::Event{dx:(x-s.x) as i16,dy:(y-s.y) as i16,buttons,lost:false,wheel:0},tick).1}
 fn maximize(s:&mut State)->Event{let r=s.maximize_button();timed(s,r.x+8,r.y+8,1,1);timed(s,r.x+8,r.y+8,0,2).unwrap()}
 #[test]fn maximize_defers_geometry_and_restores_exact_position_and_size(){
  let mut s=State::sized(0,640,400,-200,150);s.limits=Some((640,400,768,528));s.minimizable=true;let old=s.window.rect;

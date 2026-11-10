@@ -6,6 +6,7 @@ use crate::{
 };
 use core::arch::asm;
 struct App {
+    notice:crate::message_dialog::Notice,
     id: u32,
     owner: u32,
     ui: State,
@@ -55,6 +56,7 @@ fn open(title: &[u8], width: u32, height: u32) -> u32 {
             .fill(0xffffff);
     }
     let mut app = App {
+        notice:crate::message_dialog::Notice::new(),
         id,
         owner: usermode::getpid(),
         ui: State::sized(crate::mouse::discard(), width as i32, height as i32, 72, 88),
@@ -96,6 +98,7 @@ fn compose(app: &App) {
         )
     };
     graphics::app_scene(&app.ui, &app.title[..app.title_len], surface);
+    graphics::notice(&app.notice,app.ui.client());
 }
 fn input(app: &mut App, wait: bool) -> Option<api::Event> {
     loop {
@@ -114,11 +117,9 @@ fn input(app: &mut App, wait: bool) -> Option<api::Event> {
                 }
                 if let Some(code) = crate::keyboard::poll_event() {
                     if app.ui.focused {
-                        return Some(api::Event {
-                            kind: api::KEY,
-                            code,
-                            ..api::Event::default()
-                        });
+                        let next=app.notice.event(api::Event{kind:api::KEY,code,..api::Event::default()},app.width as i32,app.height as i32);
+        unsafe{asm!("sti",options(nostack));}compose(app);graphics::present_guarded(0,0,crate::display_layout::width(),crate::display_layout::height(),(app.ui.x,app.ui.y));unsafe{asm!("cli",options(nostack));}
+                        if let Some(next)=next{return Some(next);}continue;
                     }
                 }
                 continue;
@@ -128,7 +129,8 @@ fn input(app: &mut App, wait: bool) -> Option<api::Event> {
             };
             let old = app.ui;
             let (mut changed, mut event) = app.ui.update(mouse);
-            if !mouse.lost && mouse.buttons == old.buttons {
+            if mouse.wheel!=0&&mouse.buttons==old.buttons&&!mouse.lost&&app.ui.client().contains(app.ui.x,app.ui.y){event=Some(api::Event{kind:api::SCROLL,code:mouse.wheel as i32 as u32,x:app.ui.x-app.ui.client().x,y:app.ui.y-app.ui.client().y,buttons:mouse.buttons as u32});}
+            if mouse.wheel==0 && !mouse.lost && mouse.buttons == old.buttons {
                 for _ in 0..63 {
                     if !crate::mouse::motion_before(mouse.buttons, crate::keyboard::next_order()) {
                         break;
@@ -160,7 +162,7 @@ fn input(app: &mut App, wait: bool) -> Option<api::Event> {
             }
             if let Some(mut event) = event {
                 if event.kind==api::POINTER {event.code=crate::keyboard::modifiers();}
-                return Some(event);
+                let active=app.notice.active;let next=app.notice.event(event,app.width as i32,app.height as i32);if active{unsafe{asm!("sti",options(nostack));}compose(app);graphics::present_guarded(0,0,crate::display_layout::width(),crate::display_layout::height(),(app.ui.x,app.ui.y));unsafe{asm!("cli",options(nostack));}}if let Some(next)=next{return Some(next);}
             }
         }
         if !wait {
@@ -218,6 +220,12 @@ pub fn syscall(cs: u32, number: u32, first: u32, second: u32, third: u32) -> u32
     let Some(app) = (unsafe { (&mut *core::ptr::addr_of_mut!(APP)).as_mut() }) else {
         return (-19i32) as u32;
     };
+    if number==105 {
+        if app.owner!=usermode::getpid(){return (-9i32) as u32;}if first>2||third==0||third>crate::message_dialog::MAX as u32{return (-22i32) as u32;}if !user_buffer::readable(second,third,image){return (-14i32) as u32;}
+        let mut bytes=[0;crate::message_dialog::MAX];unsafe{core::ptr::copy_nonoverlapping(second as *const u8,bytes.as_mut_ptr(),third as usize);}let announce=app.notice.announces(first,&bytes[..third as usize]);if !app.notice.set(first,&bytes[..third as usize]){return (-22i32) as u32;}
+        if announce{crate::system_sounds::dialog(first);}
+        unsafe{asm!("sti",options(nostack));}compose(app);graphics::present_guarded(0,0,crate::display_layout::width(),crate::display_layout::height(),(app.ui.x,app.ui.y));unsafe{asm!("cli",options(nostack));}return 0;
+    }
     if first != app.id || app.owner != usermode::getpid() {
         return (-9i32) as u32;
     }

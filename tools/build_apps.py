@@ -45,6 +45,11 @@ def main():
         if properties.get('exec','').upper()!=name.upper()+extension.upper():raise ValueError(f"Manifest executable mismatch: {manifest}")
         shutil.copyfile(manifest,output/f"apps/{name}/{name}.app")
         entries.append({"directory":name.upper(),"name":name,"title":properties['title'],"description":properties['description'],"icon":properties['icon'],"access":properties['access'],"file":name.upper()+extension.upper(),"manifest":name.upper()+".APP"})
+    # A normal filesystem asset makes wallpaper selection usable on a fresh image.
+    settings=next((entry for entry in entries if entry['name']=='settings'),None)
+    if settings is not None:
+        sample=output/'apps/settings/wall.bmp';shutil.copyfile(ROOT/'assets/images/sample.bmp',sample)
+        settings['assets']=['WALL.BMP']
     if not entries:raise ValueError("The application manifest must not be empty")
     (output/"applications.json").write_text(json.dumps(entries,indent=2))
 

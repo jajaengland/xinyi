@@ -53,7 +53,7 @@ App titles, descriptions, icon choices and restrictive access profiles come from
 
 Use the maximize/restore title-bar button or double-click the title bar in Files, Notepad and Terminal. Maximized frames fill the work area above the taskbar, respect app layout limits and restore their previous size/position. Minimize and taskbar restore preserve maximized state.
 
-Open **Applications** from Apps (search `appmgr`) to inspect up to 64 installed bundles, their versions and access profiles. Launch opens the selected app; Open folder shows its bundle in Files. Remove requires confirmation and refuses running apps or the manager itself. Installation and updates remain in Files for now. Arrow/Home/End and Page Up/Down navigate; Enter launches, Delete reviews removal and F5 refreshes.
+Open **Applications** from Apps (search `appmgr`) to inspect up to 64 installed bundles, their versions and access profiles. Launch opens the selected app; Open folder shows its bundle in Files. Remove requires confirmation and refuses running apps or the manager itself. Install and Update accept an absolute source bundle folder outside /APPS or an offline `.XAP` package, then show its version and access before confirmation. Build a package with `python tools/package_app.py BUNDLE_FOLDER --output APP.XAP`; see [offline package limits and recovery](APP_PACKAGES.md). Restore rolls back the retained update backup; Discard backup keeps the current version and permanently removes the backup. Only one update backup is retained per drive. Operations show a working message while the kernel validates and copies files. Arrow/Home/End and Page Up/Down navigate; Enter launches, Delete reviews removal and F5 refreshes. Defaults (or Ctrl+D) chooses the selected app for an extension such as TXT; use - for extensionless files. The app must declare that type in its manifest. Reset type restores automatic matching. Preferences are saved per drive in /DEFAULTS.CFG; missing or incompatible preferred apps require choosing or resetting the default. Permissions (Ctrl+P) saves a read-only, media or isolated restriction for the selected bundle; Declared removes that saved restriction. Close and reopen the app to apply changes. These controls reduce service access and do not provide a complete sandbox.
 
 Before installing, updating or removing an app in Files, a review shows its manifest title, version, destination and access profile. Install/update metadata is reread before confirmation; changed metadata requires a fresh review. The kernel independently validates the bundle and enforces version/access restrictions. Removal can proceed when metadata is missing, so broken bundles remain removable. These profiles limit OS services and are not a complete security sandbox.
 
@@ -247,3 +247,17 @@ Permanent deletion preflights up to 32 payload entries, including the selected r
 Compiler/tool versions, build output, the smoke transcript, and per-mode emulator debug/stderr logs are uploaded for seven days, including test failures. Startup failures retain available logs too. The new QEMU job's first GitHub execution is pending until this workflow is pushed.
 
 `XINYI_RUST_TOOLCHAIN` selects the rustup toolchain used by nested application builds (default: `nightly`). Set it to the same toolchain as the outer Cargo command when reproducing a CI build. App build dependencies include assets and shared source files, so editing a bundled recording or shared model invalidates the app build. This pins the compiler/Python baseline; NASM/QEMU versions come from the runner OS and are recorded rather than claimed to be bit-for-bit reproducible.
+
+### Wheel, power and message dialogs
+
+The mouse wheel scrolls the window under the pointer without changing keyboard focus. Files, file pickers, Notepad, Terminal history, Viewer, native-size images, Applications and Recycle Bin support it; the open Apps menu uses the wheel to change pages. Standard PS/2 mice still work without a wheel.
+
+Apps now has **Shut down** and **Restart** buttons. Both show an unsaved-work confirmation; Escape cancels and Y confirms. Save your work first. File operations and pending app loading must finish before the action proceeds, and disks are synchronized before power-off or reset.
+
+Actionable application errors, warnings and completion messages use shared, app-modal dialogs. Other windows remain usable. Enter/Space or the captured OK button acknowledges a dialog; Escape dismisses it. Long messages show Next when the client is too small. Routine progress, file positions and keyboard hints remain inline. Recycle Bin restoration/deletion and Terminal termination prompts also use centered confirmation panels.
+
+Files also uses centered dialogs for recycling, creating files/folders, renaming and paste-as. The Recycle Bin cannot recycle itself or its contents; use its restore or permanent-delete actions instead. New information/warning/error dialogs play the matching system sound, subject to sound settings and the existing audio policy.
+
+### Image wallpapers
+
+Settings now has a Wallpaper panel with Choose image, Fit/Fill/Center, Apply, Save and Use colour. A sample BMP is included at `/APPS/SETTINGS/WALL.BMP`. Wallpapers use uncompressed 24/32-bit BMP files up to 768 KiB; a host converter handles PNG/JPEG inputs. See [wallpaper usage and recovery](WALLPAPER.md).

@@ -129,16 +129,16 @@ impl Editor {
             self.selecting = false;
             self.message = b"Edited";
         } else {
-            self.message = b"Edit failed: 64 KiB limit or insufficient memory";
+            self.message = xinyi::gui::report(2,b"Edit failed: 64 KiB limit or insufficient memory");
         }
     }
     fn copy(&mut self, cut: bool) {
         let Some((a, b)) = self.range() else {
-            self.message = b"Select text first (drag, Shift+arrows, or Ctrl+A)";
+            self.message = xinyi::gui::report(1,b"Select text first (drag, Shift+arrows, or Ctrl+A)");
             return;
         };
         if xinyi::clipboard_set(&self.doc.data[a..b]) < 0 {
-            self.message = b"Clipboard limit is 1024 bytes; selection retained";
+            self.message = xinyi::gui::report(1,b"Clipboard limit is 1024 bytes; selection retained");
             return;
         }
         if cut {
@@ -152,16 +152,16 @@ impl Editor {
         let mut raw = [0; 1024];
         let n = xinyi::clipboard_get(&mut raw);
         if n < 0 {
-            self.message = b"Clipboard read failed";
+            self.message = xinyi::gui::report(2,b"Clipboard read failed");
             return;
         }
         if n == 0 {
-            self.message = b"Clipboard is empty";
+            self.message = xinyi::gui::report(1,b"Clipboard is empty");
             xinyi::sounds::play(xinyi::sounds::Event::Empty);
             return;
         }
         let Some(text) = model::normalize(&raw[..n as usize]) else {
-            self.message = b"Clipboard text cannot fit in this document";
+            self.message = xinyi::gui::report(2,b"Clipboard text cannot fit in this document");
             return;
         };
         self.replace(&text);
@@ -215,13 +215,13 @@ impl Editor {
         if result < 0 {
             xinyi::sounds::play(xinyi::sounds::Event::Error);
             self.message = match result {
-                -13 => b"Save failed: file is read-only",
-                -28 => b"Save failed: disk full",
-                -19 => b"Save failed: no mounted drive",
-                -22 => b"Save failed: invalid filename",
-                -116 => b"Drive changed. Use Save As to choose the destination.",
-                -12 => b"Save failed: not enough memory; document retained",
-                _ => b"Save failed: disk error; document retained",
+                -13 => xinyi::gui::report(2,b"Save failed: file is read-only"),
+                -28 => xinyi::gui::report(2,b"Save failed: disk full"),
+                -19 => xinyi::gui::report(2,b"Save failed: no mounted drive"),
+                -22 => xinyi::gui::report(2,b"Save failed: invalid filename"),
+                -116 => xinyi::gui::report(2,b"Drive changed. Use Save As to choose the destination."),
+                -12 => xinyi::gui::report(2,b"Save failed: not enough memory; document retained"),
+                _ => xinyi::gui::report(2,b"Save failed: disk error; document retained"),
             };
             self.mode = Mode::Edit;
             self.after_save = None;
@@ -231,12 +231,12 @@ impl Editor {
         self.name_len = length;
         self.doc_volume = volume;
         if !self.doc.mark_saved() {
-            self.message = b"Saved; insufficient memory to update saved-state marker";
+            self.message = xinyi::gui::report(1,b"Saved; insufficient memory to update saved-state marker");
             self.mode = Mode::Edit;
             self.after_save = None;
             return false;
         }
-        self.message = b"Saved to disk";
+        self.message = xinyi::gui::report(0,b"Saved to disk");
         xinyi::sounds::play(xinyi::sounds::Event::Complete);
         self.mode = Mode::Edit;
         if let Some(action) = self.after_save.take() {
@@ -247,11 +247,11 @@ impl Editor {
     }
     fn open(&mut self,name:[u8;105],length:usize)->bool {self.open_checked(name,length,None)}
     fn open_checked(&mut self, name: [u8; 105], length: usize, expected:Option<u32>) -> bool {
-        if expected.is_some_and(|v|v!=xinyi::directory::volume()) {self.message=b"Drive changed; dropped file was not opened";return false;}
+        if expected.is_some_and(|v|v!=xinyi::directory::volume()) {self.message=xinyi::gui::report(2,b"Drive changed; dropped file was not opened");return false;}
 
         let mut data = Vec::new();
         if data.try_reserve_exact(model::LIMIT).is_err() {
-            self.message = b"Cannot open: not enough memory; document retained";
+            self.message = xinyi::gui::report(2,b"Cannot open: not enough memory; document retained");
             return false;
         }
         data.resize(model::LIMIT, 0);
@@ -260,20 +260,20 @@ impl Editor {
         if result >= 0 {
             if !self.doc.load(&data[..result as usize]) {
                 self.message =
-                    b"Cannot open: unsupported text, expanded size over 64 KiB or low memory";
+                    xinyi::gui::report(2,b"Cannot open: unsupported text, expanded size over 64 KiB or low memory");
                 return false;
             }
         } else if result == -2 {
-            if expected.is_some() {self.message=b"Dropped file no longer exists; document retained";return false;}
+            if expected.is_some() {self.message=xinyi::gui::report(1,b"Dropped file no longer exists; document retained");return false;}
             self.doc.clear();
             self.doc_volume = xinyi::directory::volume();
             self.follow = true;
             self.message = b"New file - save to create it";
         } else {
             self.message = if result == -27 {
-                b"Cannot open: file exceeds 64 KiB"
+                xinyi::gui::report(2,b"Cannot open: file exceeds 64 KiB")
             } else {
-                b"Cannot open file; current document retained"
+                xinyi::gui::report(2,b"Cannot open file; current document retained")
             };
             return false;
         }
@@ -318,7 +318,7 @@ impl Editor {
                 self.prompt_volume = volume;
                 if let Mode::Name(save) = self.mode {
                     if volume != xinyi::directory::volume() {
-                        self.message = b"Drive changed; reopen the dialog";
+                        self.message = xinyi::gui::report(2,b"Drive changed; reopen the dialog");
                         return false;
                     }
                     if save {
@@ -333,7 +333,7 @@ impl Editor {
                             self.dialog = None;
                             return self.save(path, len);
                         } else {
-                            self.message = b"Cannot check destination; document retained";
+                            self.message = xinyi::gui::report(2,b"Cannot check destination; document retained");
                         }
                     } else {
                         self.dialog = None;
@@ -373,7 +373,7 @@ impl Editor {
                     if self.prompt_volume != xinyi::directory::volume() {
                         self.mode = Mode::Edit;
                         self.after_save = None;
-                        self.message = b"Drive changed; save cancelled";
+                        self.message = xinyi::gui::report(2,b"Drive changed; save cancelled");
                     } else {
                         return self.save(self.prompt, self.prompt_len);
                     }
@@ -855,14 +855,15 @@ fn main() -> u32 {
         }
         let (quit, redraw) = match event.kind {
             window::DROP=>{
-                if !matches!(editor.mode,Mode::Edit)||editor.dialog.is_some() {xinyi::drag_drop::finish();editor.message=b"Finish the current dialog before dropping a file";}
-                else {match xinyi::drag_drop::open_file(event) {Ok((path,len,volume))=>{editor.request(Action::Dropped(path,len,volume));},Err(_)=>editor.message=b"Drop one file from the current drive"}}
+                if !matches!(editor.mode,Mode::Edit)||editor.dialog.is_some() {xinyi::drag_drop::finish();editor.message=xinyi::gui::report(1,b"Finish the current dialog before dropping a file");}
+                else {match xinyi::drag_drop::open_file(event) {Ok((path,len,volume))=>{editor.request(Action::Dropped(path,len,volume));},Err(_)=>editor.message=xinyi::gui::report(1,b"Drop one file from the current drive")}}
                 (false,true)
             },
             window::RESIZE => {
                 editor.resize(handle as u32, event);
                 (false, true)
             }
+            window::SCROLL=>{if let Some(d)=editor.dialog.as_mut(){d.event(event);}else if matches!(editor.mode,Mode::Edit){editor.follow=false;editor.top=(editor.top as i64+(event.code as i32 as i64)*3).clamp(0,editor.doc.position(editor.doc.length).0 as i64) as usize;}(false,true)},
             window::KEY => (editor.event(event.code), true),
             window::POINTER => editor.pointer(event),
             window::CLOSE => (editor.request(Action::Quit), true),

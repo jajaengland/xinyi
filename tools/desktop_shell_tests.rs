@@ -149,3 +149,5 @@ fn task(pid:u32)->Task {Task{pid,name:*b"APP     ",length:3}}
  let mut s=Shell::new();assert_eq!(s.key(0x106),(true,Some(Action::FileAction(3))));s.keyboard=false;assert_eq!(s.key(0x106),(false,None));
  s.file_count=1;s.files[0].name[0]=b'A';s.files[0].length=1;s.input(180,60,2,false);s.input(180,60,0,false);let r=s.context_rect().unwrap();assert_eq!(click(&mut s,r.x+10,r.y+135),Some(Action::FileAction(3)));
 }
+
+#[test]fn power_actions_require_captured_confirmation_and_cancel_without_launching(){use desktop_shell::Hit;let mut s=Shell::new();s.key((1<<17)|27);let b=s.power_button(Hit::Shutdown);assert_eq!(click(&mut s,b.x+10,b.y+10),None);assert_eq!(s.power,Some(false));assert_eq!(s.key(10),(true,None));assert_eq!(s.key(27),(true,None));assert_eq!(s.power,None);let b=s.power_button(Hit::Restart);click(&mut s,b.x+10,b.y+10);assert_eq!(s.key(b'y' as u32),(true,Some(Action::Power(true))));s.power=Some(false);let b=s.power_button(Hit::PowerConfirm);s.input(b.x+10,b.y+10,1,false);assert_eq!(s.input(b.x-10,b.y,0,false).1,None);assert_eq!(s.power,Some(false));assert_eq!(click(&mut s,b.x+10,b.y+10),Some(Action::Power(false)));}

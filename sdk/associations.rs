@@ -1,7 +1,19 @@
 //! Filesystem manifest associations. No implicit executable or unknown-file fallback.
 use super::{app_manifest::{self,Manifest},directory,files};
+#[path="../src/app_defaults.rs"]pub mod defaults;
+pub fn load_defaults(volume:u32)->Result<defaults::Table,i32> {
+ let size=files::stream_size_on(b"/DEFAULTS.CFG",volume);
+ if size==-2{return Ok(defaults::Table::new());}if size<0{return Err(size);}if size as usize>defaults::MAX_BYTES{return Err(-8);}
+ let mut b=[0;defaults::MAX_BYTES];let n=files::read_at_on(b"/DEFAULTS.CFG",0,&mut b[..size as usize],volume);
+ if n!=size{return Err(if n<0{n}else{-8});}defaults::Table::parse(&b[..size as usize]).map_err(|_|-8)
+}
+pub fn set_default(ext:&[u8],id:Option<&[u8]>,volume:u32)->i32 {
+ let mut t=match load_defaults(volume){Ok(t)=>t,Err(e)=>return e};if t.set(ext,id).is_err(){return -22;}
+ let mut b=[0;defaults::MAX_BYTES];let n=t.encode(&mut b);files::save_on(b"/DEFAULTS.CFG",&b[..n],volume)
+}
 pub const NO_HANDLER:i32=-2;
 pub const AMBIGUOUS:i32=-17;
+pub const UNAVAILABLE_DEFAULT:i32=-61;
 // Match the launcher's app capacity, with a separate bound for non-app directory entries.
 const MAX_CANDIDATES:usize=64;
 const MAX_ENTRIES:u16=256;
@@ -11,7 +23,8 @@ pub fn open(path:&[u8],volume:u32)->i32 {
     let leaf=path.rsplit(|b|matches!(*b,b'/'|b'\\')).next().unwrap();
     let ext=leaf.rsplit(|b|*b==b'.').next().filter(|_|leaf.contains(&b'.')).unwrap_or(b"");
     if ext.eq_ignore_ascii_case(b"BIN")||ext.eq_ignore_ascii_case(b"ELF") {return -22;}
-    let mut offset=0;let mut selected=None;let mut candidates=0;
+    let preferences=match load_defaults(volume){Ok(p)=>p,Err(e)=>return e};let preferred=preferences.get(ext);
+    let mut offset=0;let mut selected=None;let mut candidates=0;let mut ambiguous=false;
     loop {
         if directory::volume()!=volume {return -116;}
         let mut list=directory::Listing::new();let n=directory::list(b"/APPS",offset,&mut list);
@@ -43,14 +56,15 @@ pub fn open(path:&[u8],volume:u32)->i32 {
             let n=files::read_at_on(&manifest_path[..length],0,&mut bytes[..count as usize],volume);
             if n==-116 {return n;}if n!=count {continue;}
             let Ok(manifest)=Manifest::parse(&bytes[..count as usize],leaf) else {continue;};
-            if manifest.handles(ext) {
-                if selected.is_some() {return AMBIGUOUS;}
+            if manifest.handles(ext)&&preferred.map_or(true,|id|e.flags&1!=0&&id.eq_ignore_ascii_case(name)) {
+                if selected.is_some() {ambiguous=true;}
                 selected=Some((manifest,executable,executable_len));
             }
         }
         offset+=list.count as u16;if offset as u32>=list.total {break;}if list.count==0||offset>=MAX_ENTRIES {return -27;}
     }
-    let Some((manifest,executable,executable_len))=selected else {return NO_HANDLER;};
+    if ambiguous {return AMBIGUOUS;}
+    let Some((manifest,executable,executable_len))=selected else {return if preferred.is_some(){UNAVAILABLE_DEFAULT}else{NO_HANDLER};};
     let mut command=[0;128];let prefix=manifest.access.prefix();
     let n=prefix.len()+executable_len+1+path.len();if n>command.len(){return -22;}
     command[..prefix.len()].copy_from_slice(prefix);let mut at=prefix.len();

@@ -59,6 +59,7 @@ def seed_apps(image,package,root_name="APPS"):
     for app in json.loads((package/"applications.json").read_text()):
         artifacts.append(app)
         if app.get('manifest'):artifacts.append({'file':app['manifest'],'directory':app.get('directory','')})
+        for asset in app.get('assets',[]):artifacts.append({'file':asset,'directory':app.get('directory','')})
     for app in artifacts:
         folder=app.get('directory','');parent=directory
         if folder:
@@ -71,7 +72,7 @@ def seed_apps(image,package,root_name="APPS"):
                 assert data[entry+11]&0x10;parent=word(entry+26)
         payload=(package/"apps"/folder.lower()/app["file"].lower()).read_bytes();name=app["file"]
         key=root_name+"/"+(folder.upper()+"/" if folder else "")+name
-        assert 0<len(payload)<=(1024*1024 if payload.startswith(b"\x7fELF") else 65536)
+        assert 0<len(payload)<=(1024*1024 if payload.startswith(b"\x7fELF") or not name.upper().endswith(('.BIN','.ELF')) else 65536)
         expected[key]=payload
         base,extension=name.split(".");encoded=(base.ljust(8)+extension.ljust(3)).encode()
         if find(parent,encoded) is not None:

@@ -72,13 +72,13 @@ impl Dialog {
             self.offset = 0;
             self.bar.range(0, 10);
             self.bar.value = 0;
-            self.message = b"Drive changed. Cancel and reopen this dialog.";
+            self.message = gui::report(2,b"Drive changed. Cancel and reopen this dialog.");
             return;
         }
         let n = directory::list(&self.path[..self.len], self.offset, &mut self.list);
         if n < 0 {
             self.list = Listing::new();
-            self.message = b"Cannot read this folder.";
+            self.message = gui::report(2,b"Cannot read this folder.");
         }
         let max = self.list.total.saturating_sub(10);
         if self.offset as u32 > max {
@@ -104,7 +104,7 @@ impl Dialog {
                 n += 1;
             }
             if name.len() > 105 - n {
-                self.message = b"Path is too deep.";
+                self.message = gui::report(2,b"Path is too deep.");
                 return;
             }
             p[n..n + name.len()].copy_from_slice(name);
@@ -112,7 +112,7 @@ impl Dialog {
         }
         let mut listing = Listing::new();
         if directory::list(&p[..n], 0, &mut listing) < 0 {
-            self.message = b"Cannot open this folder.";
+            self.message = gui::report(2,b"Cannot open this folder.");
             return;
         }
         self.path = p;
@@ -132,7 +132,7 @@ impl Dialog {
     }
     fn activate(&mut self) -> Result {
         if self.volume != directory::volume() || (self.volume as i32) < 0 {
-            self.message = b"Drive changed or unavailable. Cancel and reopen.";
+            self.message = gui::report(2,b"Drive changed or unavailable. Cancel and reopen.");
             return Result::Pending;
         }
         if self.input.len == 0 {
@@ -143,7 +143,7 @@ impl Dialog {
                     return Result::Pending;
                 }
             }
-            self.message = b"Enter a filename first.";
+            self.message = gui::report(2,b"Enter a filename first.");
             return Result::Pending;
         }
         let mut path = [0; 105];
@@ -154,7 +154,7 @@ impl Dialog {
             self.len + usize::from(self.len > 1)
         };
         if prefix + text.len() > 105 {
-            self.message = b"Path is too long.";
+            self.message = gui::report(2,b"Path is too long.");
             return Result::Pending;
         }
         if prefix != 0 {
@@ -191,6 +191,7 @@ impl Dialog {
     }
     pub fn event(&mut self, e: window::Event) -> Result {
         match e.kind {
+            window::SCROLL=>{self.offset=(self.offset as i32+(e.code as i32).clamp(-8,8)*3).clamp(0,self.bar.max as i32) as u16;self.refresh();},
             window::RESET => self.reset(e.buttons),
             window::KEY => {
                 let code = e.code as u16;

@@ -42,3 +42,5 @@ use canvas::Canvas;
     Canvas::new(&mut pixels,8,16,8).unwrap().glyph(0,0,7,219,&font);
     assert!(pixels.iter().all(|&p|p==7));
 }
+
+#[test]fn image_blits_clip_without_overwriting_stride_or_edges(){let mut data=[9;24];let image=[1,2,3,4];let mut c=Canvas::new(&mut data,4,4,6).unwrap();assert!(c.blit(-1,-1,2,2,&image));assert!(c.blit(100,0,2,2,&image));assert!(c.blit(-100,0,2,2,&image));assert!(!c.blit(0,0,2,2,&[1]));assert_eq!(data[0],4);assert!(data[1..].iter().all(|p|*p==9));}

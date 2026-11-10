@@ -27,6 +27,30 @@ fn main()->u32 {
             assert_eq!(xinyi::associations::open(b"readme.txt",volume),-16); // Resolves, but physical mode cannot queue a GUI app.
         }
         b"ambiguous-check"=>{assert_eq!(xinyi::associations::open(b"readme.txt",directory::volume()),-17);},
+        b"defaults-denied"=>{assert_eq!(xinyi::associations::set_default(b"TXT",Some(b"NOTEPAD"),directory::volume()),-13);},
+        b"defaults-check"=>{
+            let v=directory::volume();
+            assert_eq!(xinyi::associations::set_default(b"TXT",Some(b"NOTEPAD"),v.wrapping_add(1)),-116);
+            assert!(xinyi::associations::set_default(b"TXT",Some(b"NOTEPAD"),v)>0);
+            assert_eq!(xinyi::associations::open(b"readme.txt",v),-16);
+            assert!(xinyi::associations::set_default(b"TXT",Some(b"COUNTER"),v)>0);
+            assert_eq!(xinyi::associations::open(b"readme.txt",v),-61);
+            assert!(xinyi::associations::set_default(b"TXT",Some(b"MISSING"),v)>0);
+            assert_eq!(xinyi::associations::open(b"readme.txt",v),-61);
+            assert_eq!(xinyi::associations::set_default(b"BIN",Some(b"NOTEPAD"),v),-22);
+            assert!(xinyi::associations::set_default(b"TXT",None,v)>0);
+            assert_eq!(xinyi::associations::open(b"readme.txt",v),-17);
+            assert!(files::save_on(b"/DEFAULTS.CFG",b"bad",v)>0);
+            assert_eq!(xinyi::associations::open(b"readme.txt",v),-8);
+            assert_eq!(directory::action_on(b"/DEFAULTS.CFG",1,v),0);
+        },
+        b"access-ro"=>{assert!(files::save(b"/ACCESS.CFG",b"XINYI-ACCESS 1\nACCESSCK=R\n")>0);},
+        b"access-media"=>{assert!(files::save(b"/ACCESS.CFG",b"XINYI-ACCESS 1\nACCESSCK=M\n")>0);},
+        b"access-isolated"=>{assert!(files::save(b"/ACCESS.CFG",b"XINYI-ACCESS 1\nACCESSCK=I\n")>0);},
+        b"access-bad"=>{assert!(files::save(b"/ACCESS.CFG",b"XINYI-ACCESS 1\nACCESSCK=T\n")>0);},
+        b"access-declared-ro"=>save_manifest(b"/APPS/ACCESSCK/ACCESSCK.APP",b"ACCESSCK.ELF",b"read-only",b"Access check",b""),
+        b"access-declared-clear"=>{assert_eq!(directory::action_on(b"/APPS/ACCESSCK/ACCESSCK.APP",1,directory::volume()),0);},
+        b"access-clear"=>{assert_eq!(directory::action_on(b"/ACCESS.CFG",1,directory::volume()),0);},
         b"docs"=>{
             assert_eq!(directory::action(b"/DOCS",0),0);
             assert_eq!(files::save(b"/DOCS/README.TXT",b"manifest document"),17);

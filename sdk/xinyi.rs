@@ -148,7 +148,7 @@ pub mod window {
     use super::window_protocol as protocol;
     #[allow(unused_imports)]
     pub use protocol::{
-        Draw, Event, CLOSE, HEIGHT, KEY, MAX_COMMANDS, POINTER, RESET, RESIZE, WIDTH, DRAG_OVER, DROP, DRAG_END,
+        Draw, Event, CLOSE, HEIGHT, KEY, MAX_COMMANDS, POINTER, RESET, RESIZE, WIDTH, DRAG_OVER, DROP, DRAG_END, SCROLL,
     };
     pub fn resizable(
         handle: u32,
@@ -385,6 +385,9 @@ pub mod appearance {
         super::syscall(84, if save { 2 } else { 1 }, theme as *const _ as u32, 8)
     }
 }
+
+#[path="wallpaper.rs"]
+pub mod wallpaper;
 
 #[path = "file_dialog.rs"]
 pub mod file_dialog;

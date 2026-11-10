@@ -166,3 +166,10 @@ pub fn shutdown() {
         }
     }
 }
+
+/// Synchronize before the existing bounded keyboard-controller reset sequence.
+pub fn restart()->bool {
+ if let Err(e)=crate::diskfs::sync(){crate::println!("Restart cancelled: {}",e.message());return false;}
+ crate::audio::farewell();crate::network::shutdown();crate::debug::write_str("Power: restart; disks synchronized\n");
+ unsafe {for _ in 0..100_000{if crate::bios::input(0x64)&2==0{crate::bios::output(0x64,0xfe);for _ in 0..100_000{core::hint::spin_loop();}return false;}}}false
+}

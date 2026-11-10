@@ -13,7 +13,7 @@ pub struct Request {
 }
 
 pub fn handles(number: u32, a: u32) -> bool {
-    matches!(number, 57 | 58 | 78..=81 | 88..=94 | 102) || number == 84 && a == 2
+    matches!(number, 57 | 58 | 78..=81 | 88..=94 | 102) || number==106&&a!=0 || number == 84 && a == 2
 }
 
 static mut ACTIVE: bool = false;
@@ -137,6 +137,7 @@ extern "C" fn entry() -> ! {
         84 => crate::theme::syscall(0x1b, request.a, request.b, request.c),
         91..=94 => crate::files_api::stream(0x1b, request.number, request.a, request.b, request.c),
         88..=90 => crate::files_api::large(0x1b, request.number, request.a, request.b, request.c),
+        106 => crate::wallpaper::syscall(0x1b,request.a,request.b,request.c),
         102 => crate::app_install::syscall(0x1b,request.a,request.b,request.c),
         _ => (-38i32) as u32,
     }};
@@ -148,12 +149,14 @@ extern "C" fn entry() -> ! {
 // than firmware calls and must not each consume a physical-block slot.
 pub fn checkpoint() {checkpoint_cost(16);}
 pub fn cached_checkpoint() {checkpoint_cost(1);}
-fn checkpoint_cost(cost:u32) {
+pub fn cpu_checkpoint(){checkpoint_impl(128,false);}
+fn checkpoint_cost(cost:u32){checkpoint_impl(cost,true);}
+fn checkpoint_impl(cost:u32,count:bool) {
     if !unsafe { EXECUTING } { return; }
     let flags: u32;
     unsafe {
         asm!("pushfd", "pop {0}", "cli", out(reg) flags);
-        BLOCKS = BLOCKS.saturating_add(1);
+        if count{BLOCKS = BLOCKS.saturating_add(1);}
         SLICE += cost;
         if SLICE >= 128 {
             EXECUTING = false;

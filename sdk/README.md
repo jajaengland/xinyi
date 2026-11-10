@@ -1,6 +1,6 @@
 # Application SDK
 
-Applications are separate `/APPS/*.BIN` or `*.ELF` files running as protected 32-bit ring-3 programs. Flat binaries retain their 64 KiB read-only image and 16 KiB stack. Static ELF32 apps add initialized writable globals, zeroed BSS and a bounded private heap. Rust `alloc` is available for ELF programs; `std`, dynamic linking, TLS and user threads are unavailable.
+Applications are separate `/APPS/ID/ID.BIN` or `/APPS/ID/ID.ELF` bundles running as protected 32-bit ring-3 programs. Flat binaries retain their 64 KiB read-only image and 16 KiB stack. Static ELF32 apps add initialized writable globals, zeroed BSS and a bounded private heap. Rust `alloc` is available for ELF programs; `std`, dynamic linking, TLS and user threads are unavailable.
 
 ## Build an application
 
@@ -273,3 +273,31 @@ UI scaling is transparent to apps: window sizes, draw coordinates, font metrics,
 `gui::scrollbar_flat` uses the same `widgets::Scrollbar` geometry and capture model as the beveled painter. Terminal adopts it without changing its text grid, clipboard or scrollback handling.
 
 File dialogs expose `pointer_feedback()` for hosts that redraw on demand. Compare it before/after forwarding pointer events to repaint hover/pressed changes without requiring a click.
+
+Offline `.XAP` packages are user-mode distribution containers, not executable images or a new syscall ABI. Build them with `tools/package_app.py`; Applications reviews a bounded snapshot and invokes syscall 102 after temporary extraction. See [format, limits and recovery](../APP_PACKAGES.md).
+
+### Default file handlers
+
+`associations::load_defaults(volume)` reads the drive's bounded `/DEFAULTS.CFG` table. `associations::set_default(extension, Some(bundle_id), volume)` saves a preference; `None` clears that extension. Saving requires ordinary write authority and returns the saved byte count or a negative error. The table allows 16 entries and 1-3 alphanumeric extension characters, or `-` for extensionless files. BIN/ELF are excluded. SDK setters validate the table syntax; Applications also checks the selected app's declared file types. Resolution always rechecks the installed manifest.
+
+The LF ASCII file starts with `XINYI-DEFAULTS 1`, followed by lines such as `TXT=NOTEPAD`. IDs have 1-8 alphanumeric/underscore characters, starting with a letter; keys and IDs are case-insensitive and are saved uppercase. Files exceed neither 256 bytes nor 16 mappings. Duplicate/invalid mappings are rejected. `associations::open` returns -61 for an unavailable/incompatible preferred app and -8 for invalid defaults. Removing `/DEFAULTS.CFG` in Files resets all preferences; explicit app launches still work while a defaults file is invalid. Preference changes do not grant permissions or alter the selected app's service profile.
+
+### User-selected bundle restrictions
+
+The kernel disk loader also intersects saved `/ACCESS.CFG` restrictions for executables under `/APPS/ID/` with manifest/name and requested launch profiles. This uses existing file and launch APIs, with no new syscall. Restrictions are R (read-only), M (media), or I (isolated); the absence of a record restores the remaining normal limits. Configuration syntax, limits and recovery are described in `ARCHITECTURE.md`. They apply at next launch, including direct executable-path launches. Existing jobs retain their original capabilities. Trusted file writers can modify this configuration; it is not an integrity-protected policy store or complete sandbox.
+
+### Scroll-wheel events and message dialogs
+
+`window::SCROLL` is event kind 9 in the unchanged 20-byte event structure. Read `event.code as i32` for vertical notches (positive downward). Coordinates are local to the target client; the wheel does not change keyboard focus. Applications should scroll their viewport and preserve text cursors. The shared file picker handles this event directly.
+
+Use `gui::report(0, b"Completed.")`, severity 1 for warnings or 2 for errors, to raise an owner-window modal message. The helper is also suitable on the right side of status assignments: it returns an empty static string after successful display, or the original message if publication failed. Text must be 1..192 printable ASCII bytes. Enter/Space/OK acknowledges, Escape dismisses, and long messages paginate in small windows. The owning app receives RESET after dismissal, preventing input from activating controls underneath. Other app windows remain usable. Existing destructive-action confirmations still need explicit Confirm/Cancel handling; this notification API is not an authorization callback.
+
+Raw syscall 105: EBX severity 0..2, ECX readable message pointer, EDX byte count. Returns zero on success; -22 for invalid kind/length/text, -14 for invalid user range, -9 for no owned/attached window (-19 when foreground GUI is unavailable). The kernel copies message bytes and restricts the target to the caller's window or attached Terminal. Every profile may display its own message; no file or launch authority is granted. The ABI addition does not change existing syscall layouts.
+
+Shared dialog publication also requests the corresponding information, warning or error system sound once for a new visible message. Repeated publication of the same active message does not replay it. Sound remains subject to system mute/debounce and the existing audio-owner policy. Custom destructive-action confirmations still select their own warning sound.
+
+### Wallpaper service
+
+`wallpaper::get(&mut Request)` returns 1 for an active cached image or 0 for a colour/fallback background, and fills the current path/mode/volume. A nonempty path with return 0 means the saved source could not be loaded. `wallpaper::apply(&request, save)` previews or saves an image; an empty path selects the normal background. Modes are 0 Fit, 1 Fill, 2 Center. This service changes global desktop appearance and requires Trusted for changes; restricted profiles may query only.
+
+Raw syscall 106 takes EBX operation, ECX request pointer, EDX 112. Operations: 0 query (writable request), 1 preview image, 2 save image, 3 preview colour, 4 save colour (readable request). The C layout is `[u8;105] path`, u8 mode, u16 path length, u32 expected volume epoch. Paths are empty or canonical absolute 8.3 paths up to 105 bytes. Query fills the epoch; callers should retain the file picker's epoch for a newly selected image. Normal negative file/memory errors are returned, including -14 for bad ranges, -22 for invalid fields, -116 for stale volume, -13 for denied changes and -8 for unsupported BMP data. Changing calls yield through the desktop disk worker. See `WALLPAPER.md` for image limits and persistence.

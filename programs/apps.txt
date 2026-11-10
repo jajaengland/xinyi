@@ -6,7 +6,7 @@ snake|programs/snake/main.rs|Snake with food beeps
 notepad|programs/notepad/main.rs|Graphical text editor (64 KiB documents)|elf|bin
 counter|programs/counter/main.rs|Independent counter window
 terminal|programs/terminal_gui/main.rs|Graphical command terminal with shared clipboard
-files|programs/files/main.rs|Browse folders and open files
+files|programs/files/main.rs|Browse folders and open files|elf|bin
 settings|programs/settings/main.rs|Desktop appearance settings
 memdemo|programs/memdemo/main.rs|ELF writable globals and heap demonstration|elf
 viewer|programs/viewer/main.rs|Read-only hex viewer for files up to 1 MiB

@@ -23,7 +23,9 @@ def main():
         with tempfile.TemporaryDirectory(prefix="usb-boot-",dir=output) as temporary:
             directory=Path(temporary)
             guest=Guest(qemu,None,directory,attach_disk=False,extra_args=[
-                "-drive",f"if=none,id=stick,file={image.as_posix()},format=raw",
+                # First desktop entry may initialize /DESKTOP. Keep those writes
+                # in a disposable overlay, leaving the distributable pristine.
+                "-drive",f"if=none,id=stick,file={image.as_posix()},format=raw,snapshot=on",
                 "-device","piix3-usb-uhci,id=uhci",
                 "-device","usb-storage,bus=uhci.0,drive=stick,bootindex=1",
                 "-vga","cirrus",
