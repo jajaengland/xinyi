@@ -179,6 +179,22 @@ pub fn button_flat_focus(w:u32,b:&Button,label:&[u8],primary:bool,focused:bool) 
     if focused {let r=b.rect;outline(w,Rect::new(r.x+2,r.y+2,r.w-4,r.h-4),if primary {0x8bd1cf}else{0x367c85});}
 }
 
+/// Move through the controls in tab order, wrapping at either end.
+/// A pointer selection can use the same control ID as keyboard focus.
+pub fn tab_focus<T: Copy + PartialEq>(current: Option<T>, order: &[T], reverse: bool) -> Option<T> {
+    if order.is_empty() {
+        return None;
+    }
+    let position = current.and_then(|id| order.iter().position(|item| *item == id));
+    let index = match (position, reverse) {
+        (Some(0) | None, true) => order.len() - 1,
+        (Some(index), true) => index - 1,
+        (Some(index), false) => (index + 1) % order.len(),
+        (None, false) => 0,
+    };
+    Some(order[index])
+}
+
 /// Flat scrollbar with the same track, thumb and capture geometry.
 pub fn scrollbar_flat(w:u32,s:&Scrollbar) {
     let r=s.rect;

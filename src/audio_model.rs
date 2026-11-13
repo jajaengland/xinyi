@@ -22,6 +22,14 @@ impl Ring {
     pub fn available(&self) -> bool {
         self.count < SLOTS - 1
     }
+    pub fn front(&self) -> Option<usize> {
+        (self.count != 0).then(|| usize::from(self.lengths[self.head]))
+    }
+    pub fn consume_front(&mut self) {
+        if self.count != 0 {
+            self.pop();
+        }
+    }
     pub fn push(&mut self, frames: u16) -> Option<usize> {
         if frames == 0 || frames as usize > FRAMES || !self.available() {
             return None;

@@ -198,11 +198,9 @@ impl Dialog {
                 match code {
                     27 => return Result::Cancel,
                     9 => {
-                        self.focus = if e.code & key::SHIFT != 0 {
-                            (self.focus + 4) % 5
-                        } else {
-                            (self.focus + 1) % 5
-                        };
+                        if let Some(next) = gui::tab_focus(Some(self.focus), &[0, 1, 2, 3, 4], e.code & key::SHIFT != 0) {
+                            self.focus = next;
+                        }
                     }
                     10 => {
                         if self.focus == 3 {

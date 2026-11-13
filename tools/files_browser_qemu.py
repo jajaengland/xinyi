@@ -24,7 +24,7 @@ def main():
         d = Path(temporary); image = d / 'system.img'; shutil.copyfile(args.disk, image)
         package = d / 'package'; (package / 'apps/files').mkdir(parents=True)
         subprocess.run([sys.executable, str(ROOT / 'tools/build_program.py'), str(ROOT / 'programs/files/main.rs'),
-                        '--output', str(package / 'apps/files/files.bin')], check=True)
+                        '--format', 'elf', '--output', str(package / 'apps/files/files.bin')], check=True)
         (package / 'applications.json').write_text(json.dumps([{'directory': 'FILES', 'file': 'FILES.BIN'}]))
         qemu = shutil.which('qemu-system-i386') or r'C:\Program Files\qemu\qemu-system-i386.exe'
         guest = Guest(qemu, None, d, disk=image)
@@ -74,9 +74,15 @@ def main():
                 pixels=array('I');pixels.frombytes(path.read_bytes())
                 return ''.join(glyphs.get(bytes(pixels[dy*width+x+col*8+dx]==fg for dy in range(16) for dx in range(8)), '?') for col in range(count)).rstrip()
             until(lambda: line(80,fg=0xffffff)=='SUB', 'Initial physical-order listing')
+            guest.key('shift-tab');guest.key('ret')  # Reverse wrap from the list to Next.
+            until(lambda: line(80).startswith('F'), 'Keyboard Next did not advance the listing')
+            guest.key('home')  # List navigation returns focus from the toolbar.
+            until(lambda: line(80,fg=0xffffff)=='SUB', 'Home did not return to the first item')
             click(40,70)
             until(lambda: line(96)=='F00.TXT', 'Name sort did not include entries beyond first page')
-            guest.key('home');guest.key('down');guest.key('alt-ret')
+            guest.key('home');guest.key('down')
+            for _ in range(7): guest.key('tab')  # File list to More.
+            guest.key('spc');guest.key('up');guest.key('ret')  # Skip disabled Update app to Properties.
             until(lambda: line(120,40,10)=='Properties', 'Properties did not open')
             assert line(152,40)=='F00.TXT' and line(184,208,10)=='1', 'Wrong properties after sorting'
             guest.key('esc');guest.key('home');guest.key('down');guest.key('shift-down');guest.key('ctrl-c')
@@ -89,6 +95,7 @@ def main():
                     return files.get('BROWSE/SUB/F00.TXT')==b'x' and files.get('BROWSE/SUB/F01.TXT')==b'xx'
                 except AssertionError: return False
             until(copied, 'Sorted Shift-selection copied the wrong files')
+            guest.dismiss_dialogs(pid, wait=True)
             guest.key('alt-left')
             until(lambda: line(40,224,min(60,(width-232)//8),fg=0x20384d)=='/BROWSE', 'Back after sorted copy failed')
             guest.key('home');guest.key('ret')
@@ -126,6 +133,7 @@ def main():
                 try: return inspect_tree(image,2048)[0].get('BROWSE/SUB/F02.TXT')==b'xxx'
                 except AssertionError: return False
             until(icon_drop, 'Icon folder drop chose the wrong destination')
+            guest.dismiss_dialogs(pid, wait=True)
             guest.key('home');guest.key('ret')
             until(lambda: '/BROWSE/SUB' in line(40,224,min(60,(width-232)//8),fg=0x20384d), 'Icon folder open failed')
             guest.key('ctrl-d')
@@ -139,6 +147,7 @@ def main():
                 try: return inspect_tree(image,2048)[0].get('BROWSE/BIG.BIN')==big
                 except AssertionError: return False
             until(big_copied, 'Icon copy produced incorrect contents')
+            guest.dismiss_dialogs(pid, wait=True)
             guest.key('ctrl-2')
             until(lambda: line(64,8,7)=='Compact', 'Compact view did not appear')
             guest.key('home');guest.key('right');guest.key('alt-ret')

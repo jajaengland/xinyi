@@ -16,3 +16,4 @@ fonts|programs/fonts/main.rs|Font metrics, wrapping and clipping demo|elf
 trash|programs/trash/main.rs|Restore files from the recycle bin
 image|programs/image/main.rs|Read-only BMP image viewer|elf
 appmgr|programs/appmgr/main.rs|Manage installed application bundles|elf
+hardware|programs/hardware/main.rs|Browse detected devices and driver status

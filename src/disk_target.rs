@@ -14,12 +14,15 @@ impl Target {
         }
     }
     pub fn valid(self) -> bool {
-        self.position < 4
+        (self.position < 4 || (self.bdf != u32::MAX && self.sata_port().is_some()))
             && if self.bdf == u32::MAX {
                 self.id == 0
             } else {
                 self.bdf & 0xff00e0f8 == 0 && self.id as u16 != 0xffff && self.id as u16 != 0
             }
+    }
+    pub fn sata_port(self) -> Option<u8> {
+        ((0x80..0xa0).contains(&self.position)).then_some(self.position & 31)
     }
     pub fn secondary(self) -> bool {
         self.position & 1 != 0
@@ -39,7 +42,7 @@ impl Target {
     }
     pub fn decode(bytes: &[u8; 20]) -> Option<Self> {
         let word = |i| u32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]);
-        if &bytes[..4] != b"XDT1" || word(16) != hash(&bytes[..16]) || word(12) > 3 {
+        if &bytes[..4] != b"XDT1" || word(16) != hash(&bytes[..16]) || word(12) > u8::MAX as u32 {
             return None;
         }
         let target = Self {

@@ -113,7 +113,7 @@ impl Player {
             } else if h == -13 {
                 xinyi::gui::report(2,b"Audio permission denied for this launch.")
             } else {
-                xinyi::gui::report(2,b"Audio unavailable. Launch QEMU with an AC97 sound device.")
+                xinyi::gui::report(2,b"Sampled playback unavailable. Run audio in Terminal to identify your sound controller.")
             };
             return;
         }

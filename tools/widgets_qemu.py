@@ -103,7 +103,20 @@ def main():
    start=len(log());g.type('run stream\n');time.sleep(.3);g.key('shift-pgup');time.sleep(.2);anchored=content();time.sleep(.4);assert content()==anchored,'Scrolled terminal moved while background output arrived'
    until(lambda:re.search(r'Scheduler: exit pid=\d+ code=0',log()[start:]),'Output fixture did not finish');g.type('echo live\n');time.sleep(.2)
    g.call('screendump',{'filename':str(out/'widgets-terminal.png'),'format':'png'});g.key('ctrl-q');until(lambda:f'Scheduler: exit pid={term} code=0' in log(),'Terminal close')
-   settings=launch('SETTINGS');sx,sy=coords(settings);click(sx+120,sy+218);g.type('112233');g.key('ctrl-a');g.type('294f9c\n');click(sx+160,sy+356);until(lambda:tree().get('GUI.CFG')==b'294F9C 215C83\n','Shared Settings field/Save');g.call('screendump',{'filename':str(out/'widgets-settings.png'),'format':'png'});g.dismiss_dialogs(settings,wait=True);click(sx+400,sy+356);until(lambda:f'Scheduler: exit pid={settings}' in log(),'Settings close')
+   settings=launch('SETTINGS');sx,sy=coords(settings)
+   click(sx+120,sy+218);g.type('112233');g.key('ctrl-a');g.type('294f9c\n')
+   g.key('shift-tab');g.key('right');g.key('ret')  # Palette navigation from the hex field.
+   g.key('tab');g.type('294f9c\n')
+   for _ in range(5):g.key('tab')  # Hex to Choose image.
+   g.key('ret');g.key('esc')  # Cancel the picker and keep focus on Choose image.
+   g.key('tab');g.key('spc')  # Switch to Fill.
+   for _ in range(3):g.key('tab')  # Mode to Save.
+   g.key('ret')
+   until(lambda:tree().get('GUI.CFG')==b'294F9C 215C83\n' and tree().get('WALL.CFG')==b'XINYI-WALL 1\n1\n\n','Keyboard Settings field, mode and Save')
+   g.call('screendump',{'filename':str(out/'widgets-settings.png'),'format':'png'})
+   g.dismiss_dialogs(settings,wait=True)
+   g.key('tab');g.key('tab');g.key('ret')
+   until(lambda:f'Scheduler: exit pid={settings}' in log(),'Keyboard Settings close')
    click(*SHELL_BUTTON);g.wait_for('Desktop finished.');assert frames()==baseline,'Widget application frame leak'
    print('PASS GUI controls: file browsing/save/open/cancel/overwrite, private cwd, field selection, terminal scrollbar and 80 columns, Settings and frame balance',flush=True)
   finally:

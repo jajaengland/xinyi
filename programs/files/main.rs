@@ -11,13 +11,21 @@ use selection::Selection;
 use xinyi::{
     directory::{self, Listing},
     file_clipboard::{self, Selection as FileClip},
-    key,
+    gui, key,
     window::{self, Draw},
 };
+
+// None is the file list. Command IDs match the painted toolbar and footer.
+const TAB_ORDER: [Option<usize>; 13] = [
+    None, Some(0), Some(1), Some(2), Some(3), Some(5), Some(8), Some(20),
+    Some(15), Some(16), Some(18), Some(6), Some(7),
+];
+
 struct Files {
     review_buttons:[xinyi::widgets::Button;2],
     review:Option<xinyi::app_manifest::Manifest>,
     toolbar_hot:Option<usize>,
+    command_focus: Option<usize>,
     handle: u32,
     view: View,
     favorites: Favorites,
@@ -87,6 +95,20 @@ impl Files {
         let bg=if hot {0xdceef0}else{0xe6edf2};let ink=if enabled {0x20384d}else {0x8293a1};
         let length=xinyi::text::width(label,xinyi::text::Font::Ui).min(r.w-12);
         window::draw(w,&[Draw::rect(r.x,r.y,r.w,r.h,bg),Draw::rect(r.x,r.y+r.h-1,r.w,1,if hot {0x367c85}else {0xc6d3dc}),Draw::label(r.x+(r.w-length)/2,r.y+(r.h-16)/2,length,ink,label)]);
+        if enabled && self.command_focus == Some(n) {
+            gui::outline(w, xinyi::widgets::Rect::new(r.x as i32, r.y as i32, r.w as i32, r.h as i32), 0x367c85);
+        }
+    }
+
+    fn move_focus(&mut self, reverse: bool) {
+        let mut focus = self.command_focus;
+        loop {
+            focus = gui::tab_focus(Some(focus), &TAB_ORDER, reverse).flatten();
+            if focus.is_none_or(|command| self.command_enabled(command)) {
+                self.command_focus = focus;
+                break;
+            }
+        }
     }
     fn page(&self) -> u16 {
         self.view.layout(self.width,self.height).3.max(1)
@@ -740,19 +762,23 @@ impl Files {
         if self.menu.is_some() {
             if code == 27 {
                 self.menu = None;
+                self.hover = None;
                 return false;
             }
-            if code == 10 {
+            if matches!(code, 10 | 32) {
                 if let Some(i) = self.hover.filter(|&i|self.enabled(i)) {
                     return self.action([1, 9, 10, 11, 12, 4, 5, 13, 14, 17, 19][i]);
                 }
             }
             if matches!(code, key::UP | key::DOWN) {
-                self.hover = Some(match (self.hover, code) {
-                    (Some(i), key::UP) => i.saturating_sub(1),
-                    (Some(i), _) => (i + 1).min(10),
-                    _ => 0,
-                });
+                let mut next = self.hover;
+                for _ in 0..11 {
+                    next = gui::tab_focus(next, &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], code == key::UP);
+                    if next.is_some_and(|index| self.enabled(index)) {
+                        self.hover = next;
+                        break;
+                    }
+                }
             }
             return false;
         }
@@ -841,6 +867,10 @@ impl Files {
             match code { key::LEFT => self.history_go(false), key::RIGHT => self.history_go(true), 10 => { self.action(17); }, _ => () }
             return false;
         }
+        if code == 9 && !ctrl {
+            self.move_focus(event & key::SHIFT != 0);
+            return false;
+        }
         if ctrl {
             match code {
                 49 => {self.set_view(View::Details);return false;},
@@ -868,6 +898,20 @@ impl Files {
                         }
                     }
                     return false;
+                }
+                _ => (),
+            }
+        }
+        if let Some(command) = self.command_focus {
+            match code {
+                10 | 32 if !ctrl => {
+                    if self.command_enabled(command) {
+                        self.action(command);
+                    }
+                    return false;
+                }
+                27 | key::UP | key::DOWN | key::LEFT | key::RIGHT | key::HOME | key::END => {
+                    self.command_focus = None;
                 }
                 _ => (),
             }
@@ -1034,6 +1078,10 @@ impl Files {
             }
         }
         let row = self.item_at(event.x,event.y);
+        let focus_changed = (left || right) && self.command_focus.is_some();
+        if left || right {
+            self.command_focus = None;
+        }
         if right {
             if let Some(row) = row {
                 let e = self.list.entries[row];
@@ -1088,7 +1136,7 @@ impl Files {
             }
             return true;
         }
-        false
+        changed || focus_changed
     }
     fn paint(&self, w: u32) {
         window::draw(w, &[Draw::rect(0, 0, self.width, self.height, 0xf4f4f4)]);
@@ -1166,6 +1214,9 @@ impl Files {
                 ],
             );
         }
+        if self.mode == 0 && self.command_focus.is_none() {
+            gui::outline(w, xinyi::widgets::Rect::new(7, 79, self.width as i32 - 14, self.height as i32 - 110), 0x367c85);
+        }
         let hint = match self.mode {
             1 => b"New file (8.3): " as &[u8],
             2 => b"New folder (8.3): ",
@@ -1175,7 +1226,7 @@ impl Files {
             6 => b"Install selected app folder? Y confirms / N cancels",
             7 => b"Remove app and its bundled files? Y confirms / N cancels",
             10 => b"Update installed app from this folder? Y confirms / N cancels",
-            _ => b"Ctrl/Shift select | Ctrl+C/X/V | F2 rename | Right-click actions",
+            _ => b"Tab: toolbar | Ctrl/Shift select | Ctrl+C/X/V | F2 rename",
         };
         let dialog_open=matches!(self.mode,1|2|3|4|5|6|7|10);
         let footer=if dialog_open{b"" as &[u8]}else{self.status};
@@ -1314,7 +1365,7 @@ fn main() -> u32 {
     }
     let w = w as u32;
     let mut app = Files {
-        review_buttons:[xinyi::widgets::Button::new(xinyi::widgets::Rect::new(408,312,88,24)),xinyi::widgets::Button::new(xinyi::widgets::Rect::new(512,312,88,24))],review:None,toolbar_hot:None,handle:w, view:View::Details, favorites:Favorites::new(), favorite_focus:0, transfer_total:0, transfer_done:0,
+        review_buttons:[xinyi::widgets::Button::new(xinyi::widgets::Rect::new(408,312,88,24)),xinyi::widgets::Button::new(xinyi::widgets::Rect::new(512,312,88,24))],review:None,toolbar_hot:None,command_focus:None,handle:w, view:View::Details, favorites:Favorites::new(), favorite_focus:0, transfer_total:0, transfer_done:0,
         width: 640,
         height: 400,
         list: Listing::new(),
@@ -1431,6 +1482,9 @@ fn main() -> u32 {
             }
             _ => false,
         };
+        if app.command_focus.is_some_and(|command| !app.command_enabled(command)) {
+            app.command_focus = None;
+        }
         if app.mode!=previous_mode{for b in &mut app.review_buttons{b.reset(buttons);}}
         if app.quit {
             return 0;

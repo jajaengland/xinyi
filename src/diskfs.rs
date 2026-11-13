@@ -5,7 +5,45 @@ use crate::{
     fat16::{self, Error, Fat16, FormatPlan, Result, MAX_FILE_SIZE},
     println, vfs,
 };
-pub(crate) static DISK: AtaDisk = AtaDisk::new(0);
+static IDE_DISK: AtaDisk = AtaDisk::new(0);
+static mut SATA_DISK: Option<crate::ahci_check::Disk> = None;
+#[cfg(feature = "live")]
+static mut LIVE_DISK: Option<(crate::blockdev::RamDisk, crate::loader::Frames)> = None;
+
+pub(crate) fn live_boot() -> bool {
+    cfg!(feature = "live") && crate::bios::available()
+}
+
+#[cfg(feature = "live")]
+fn load_live() -> Result<()> {
+    const BYTES: usize = 16 * 1024 * 1024;
+    let source = &crate::bios_disk::BOOT;
+    if !source.init() || source.block_count() < (BYTES / 512) as u32 { return Err(Error::Io); }
+    let frames = crate::loader::Frames::new(BYTES / 4096).ok_or(Error::OutOfMemory)?;
+    let data = unsafe { core::slice::from_raw_parts_mut(frames.base() as *mut u8, BYTES) };
+    if !source.copy_image(data) { return Err(Error::Io); }
+    unsafe { LIVE_DISK = Some((crate::blockdev::RamDisk::new(data, 512), frames)); }
+    mount()?;
+    crate::debug::write_str("Live: RAM volume ready\n");
+    Ok(())
+}
+
+pub(crate) fn device() -> &'static dyn BlockDevice {
+    match unsafe { (&*core::ptr::addr_of!(SATA_DISK)).as_ref() } {
+        Some(disk) => disk,
+        None => &IDE_DISK,
+    }
+}
+
+pub fn sata_selected() -> bool {
+    unsafe { (&*core::ptr::addr_of!(SATA_DISK)).is_some() }
+}
+
+#[derive(Clone, Copy)]
+enum Interface {
+    Ide(crate::pci::IdeChannel),
+    Sata(crate::hardware_model::Device, usize),
+}
 static mut SELECTED: Option<crate::disk_target::Target> = None;
 static mut BOOT_SELECTED:bool=false;
 pub fn boot_selected()->bool {unsafe {*core::ptr::addr_of!(BOOT_SELECTED)}}
@@ -15,18 +53,18 @@ static mut VOLUME_EPOCH:u32=1;
 pub fn volume_epoch()->u32 {unsafe {VOLUME_EPOCH}}
 static mut CWD: crate::fs_path::Path = crate::fs_path::Path::ROOT;
 #[derive(Clone,Copy)]
-struct Drive {target:crate::disk_target::Target,channel:crate::pci::IdeChannel,model:[u8;40],sectors:u32,fat:bool,apps:bool}
+struct Drive {target:crate::disk_target::Target,interface:Interface,model:[u8;40],sectors:u32,fat:bool,apps:bool}
 static mut DRIVES:[Option<Drive>;16]=[None;16];
 static mut DISCOVERED:bool=false;
 fn discover() {
     if unsafe {DISCOVERED} {return;}
     let mut drives=[None;16];let mut count=0;let mut ide=false;
     let mut probe=|target:crate::disk_target::Target,channel:crate::pci::IdeChannel| {
-        if count==16 || drives[..count].iter().flatten().any(|d:&Drive|d.channel==channel&&d.target.drive()==target.drive()) {return;}
+        if count==16 || drives[..count].iter().flatten().any(|d:&Drive|matches!(d.interface, Interface::Ide(c) if c==channel)&&d.target.drive()==target.drive()) {return;}
         let disk=AtaDisk::at(channel,target.drive());
         if disk.init() {
             let fs=Fat16::new(&disk).ok();
-            drives[count]=Some(Drive{target,channel,model:disk.model_name(),sectors:disk.block_count(),fat:fs.is_some(),apps:fs.is_some_and(|fs|fs.is_directory("/APPS").is_ok())});
+            drives[count]=Some(Drive{target,interface:Interface::Ide(channel),model:disk.model_name(),sectors:disk.block_count(),fat:fs.is_some(),apps:fs.is_some_and(|fs|fs.is_directory("/APPS").is_ok())});
             count+=1;
         }
     };
@@ -39,9 +77,26 @@ fn discover() {
     });
     if !ide {for secondary in [false,true] {for slave in [false,true] {probe(crate::disk_target::Target::legacy(secondary,slave),
         if secondary {crate::pci::IdeChannel::SECONDARY}else{crate::pci::IdeChannel::PRIMARY});}}}
+    for (device, port) in crate::hardware::sata_devices() {
+        if count == drives.len() { break; }
+        let Some(disk) = crate::ahci_check::Disk::probe(device, port) else { continue };
+        let fs = Fat16::new(&disk).ok();
+        let target = crate::disk_target::Target {
+            bdf: (u32::from(device.bus) << 16) | (u32::from(device.slot) << 8) | u32::from(device.function),
+            id: (u32::from(device.device) << 16) | u32::from(device.vendor),
+            position: 0x80 | port as u8,
+        };
+        drives[count] = Some(Drive {
+            target, interface: Interface::Sata(device, port), model: disk.geometry.model,
+            sectors: disk.block_count(), fat: fs.is_some(),
+            apps: fs.is_some_and(|fs| fs.is_directory("/APPS").is_ok()),
+        });
+        count += 1;
+    }
     unsafe {DRIVES=drives;DISCOVERED=true;}
 }
 pub fn list_drives() {
+    if live_boot() { println!("Drive 0: Live RAM session. Changes disappear after reboot."); return; }
     discover();let drives=unsafe {*core::ptr::addr_of!(DRIVES)};
     println!("Available drives (use NUMBER to open):");
     if crate::bios_disk::BOOT.init() {
@@ -51,9 +106,27 @@ pub fn list_drives() {
         println!("  {}: {} - {} MiB {}{}",index+1,core::str::from_utf8(&drive.model).unwrap_or("ATA disk").trim(),drive.sectors/2048,
             if drive.fat {"FAT16"}else{"unformatted/unsupported"},if !boot_selected()&&target().ok()==Some(drive.target) {" [selected]"}else{""});
     }}
-    if drives[0].is_none() {println!("No supported IDE drives found.");}
+    if drives[0].is_none() {println!("No supported IDE or SATA drives found.");}
+}
+pub(crate) fn installer_drives() -> [Option<([u8; 40], u32)>; 16] {
+    discover();
+    unsafe { DRIVES }.map(|entry| {
+        let drive = entry?;
+        let eligible = match drive.interface {
+            Interface::Ide(channel) => {
+                let disk = AtaDisk::at(channel, drive.target.drive());
+                disk.init() && refuse_boot_alias(&disk).is_ok()
+            }
+            Interface::Sata(controller, port) => crate::ahci_check::Disk::probe(controller, port)
+                .is_some_and(|disk| refuse_boot_alias(&disk).is_ok()),
+        };
+        eligible.then_some((drive.model, drive.sectors))
+    })
 }
 pub fn use_drive(number:usize,mount_it:bool)->Result<()> {
+    if live_boot() {
+        return if number == 0 && mount_it { mount().map(|_| ()) } else { Err(Error::ReadOnly) };
+    }
     if number==0 {
         if !mount_it {return Err(Error::FirmwareDestination);}
         if !crate::bios_disk::BOOT.init() {return Err(Error::Io);}
@@ -64,20 +137,61 @@ pub fn use_drive(number:usize,mount_it:bool)->Result<()> {
     discover();
     let drive=number.checked_sub(1).and_then(|i|unsafe {(*core::ptr::addr_of!(DRIVES)).get(i).copied().flatten()}).ok_or(Error::NotFound)?;
     // Verify the new disk/filesystem before detaching the current one.
-    let candidate=AtaDisk::at(drive.channel,drive.target.drive());
-    if !candidate.init() {return Err(Error::Io);}
-    if mount_it {Fat16::new(&candidate)?;}
-    unmount()?;
-    unsafe {SELECTED=Some(drive.target);BOOT_SELECTED=false;}
-    DISK.adopt(&candidate);
+    match drive.interface {
+        Interface::Ide(channel) => {
+            let candidate = AtaDisk::at(channel, drive.target.drive());
+            if !candidate.init() { return Err(Error::Io); }
+            if mount_it { Fat16::new(&candidate)?; }
+            else { refuse_boot_alias(&candidate)?; }
+            unmount()?;
+            IDE_DISK.adopt(&candidate);
+            unsafe { SATA_DISK = None; }
+        }
+        Interface::Sata(controller, port) => {
+            let candidate = crate::ahci_check::Disk::probe(controller, port).ok_or(Error::Io)?;
+            if mount_it { Fat16::new(&candidate)?; }
+            else { refuse_boot_alias(&candidate)?; }
+            unmount()?;
+            unsafe { SATA_DISK = Some(candidate); }
+        }
+    }
+    unsafe { SELECTED = Some(drive.target); BOOT_SELECTED = false; }
     if mount_it {mount()?;println!("Drive {} ready. Files are persistent.",number);crate::system_sounds::play(crate::system_sounds::Event::Connect);}
     else {println!("Selected drive {}.",number);}
     Ok(())
 }
 pub fn startup_mount() {
+    #[cfg(feature = "live")]
+    if live_boot() {
+        if let Err(error) = load_live() { println!("Live session could not load: {}", error.message()); }
+        return;
+    }
     if crate::bios::available() {
         unsafe {BOOT_SELECTED=true;}
         if let Err(error)=use_drive(0,true) {println!("Boot filesystem unavailable: {}. Use disks and use NUMBER to choose another drive.",error.message());}
+        if is_mounted() {
+            if let Some(target) = crate::multiboot::disk_target().filter(|t| t.sata_port().is_some()) {
+                let mut boot_sector = [0; 512];
+                if crate::bios_disk::BOOT.read_block(0, &mut boot_sector) {
+                    if let Some((controller, port)) = sata_target(target) {
+                        if let Some(candidate) = crate::ahci_check::Disk::probe(controller, port) {
+                            let mut sector = [0; 512];
+                            if candidate.read_block(0, &mut sector) && sector == boot_sector
+                                && Fat16::new(&candidate).is_ok() && unmount().is_ok()
+                            {
+                                unsafe { SATA_DISK = Some(candidate); BOOT_SELECTED = false; }
+                                if mount().is_ok() {
+                                    println!("System drive ready: native AHCI.");
+                                    return;
+                                }
+                                unsafe { BOOT_SELECTED = true; }
+                                let _ = mount();
+                            }
+                        }
+                    }
+                }
+            }
+        }
         return;
     }
     if crate::multiboot::disk_target().is_some() {
@@ -136,20 +250,37 @@ pub fn restore_boot_target() {
         }
     }
 }
+fn sata_target(target: crate::disk_target::Target) -> Option<(crate::hardware_model::Device, usize)> {
+    let port = usize::from(target.sata_port()?);
+    crate::hardware::sata_devices().find(|(d, p)| {
+        *p == port
+            && target.bdf == (u32::from(d.bus) << 16 | u32::from(d.slot) << 8 | u32::from(d.function))
+            && target.id == (u32::from(d.device) << 16 | u32::from(d.vendor))
+    })
+}
+
 pub fn init_disk() -> Result<()> {
+    if live_boot() { return Err(Error::ReadOnly); }
     let selected = match target() {
         Ok(target) => target,
         Err(error) => {
-            DISK.unavailable();
+            IDE_DISK.unavailable();
             return Err(error);
         }
     };
+    if let Some(port) = selected.sata_port() {
+        if sata_selected() { return Ok(()); }
+        let (controller, _) = sata_target(selected).ok_or(Error::Io)?;
+        let disk = crate::ahci_check::Disk::probe(controller, usize::from(port)).ok_or(Error::Io)?;
+        unsafe { SATA_DISK = Some(disk); }
+        return Ok(());
+    }
     let Some(channel) = crate::pci::target_channel(selected) else {
-        DISK.unavailable();
+        IDE_DISK.unavailable();
         return Err(Error::Io);
     };
-    DISK.configure(channel, selected.drive());
-    if DISK.init() {
+    IDE_DISK.configure(channel, selected.drive());
+    if IDE_DISK.init() {
         Ok(())
     } else {
         Err(Error::Io)
@@ -158,6 +289,10 @@ pub fn init_disk() -> Result<()> {
 pub fn report_target() {
     if boot_selected() {println!("Selected: BIOS boot drive 0 (status {:02x})",crate::bios_disk::BOOT.status());return;}
     if let Ok(t) = target() {
+        if let Some(port) = t.sata_port() {
+            println!("Selected: AHCI {:02x}:{:02x}.{} port {}", t.bdf >> 16, (t.bdf >> 8) & 255, t.bdf & 255, port);
+            return;
+        }
         if t.bdf == u32::MAX {
             println!(
                 "Selected: legacy {} {}",
@@ -183,9 +318,10 @@ pub fn report_target() {
             );
         }
     }
-    DISK.report();
+    IDE_DISK.report();
 }
 pub fn select_command(arguments: &str) {
+    if live_boot() { println!("Physical drive selection is disabled in the Live session."); return; }
     if is_mounted() {
         println!("Unmount the filesystem before changing the disk target.");
         return;
@@ -242,8 +378,9 @@ pub fn select_command(arguments: &str) {
     unsafe {
         *core::ptr::addr_of_mut!(SELECTED) = Some(t);
         BOOT_SELECTED=false;
+        SATA_DISK=None;
     }
-    DISK.adopt(&candidate);
+    IDE_DISK.adopt(&candidate);
     println!("Disk target selected (no disk sectors written).");
     report_target();
 }
@@ -252,6 +389,20 @@ pub fn cancel_format() {
         *core::ptr::addr_of_mut!(FORMAT_PENDING) = None;
     }
 }
+pub fn refuse_sata_boot_target() -> Result<()> {
+    if sata_selected() { refuse_boot_alias(device()) } else { Ok(()) }
+}
+
+fn refuse_boot_alias(candidate: &dyn BlockDevice) -> Result<()> {
+    if !crate::bios::available() { return Ok(()); }
+    let mut boot = [0; 512];
+    let mut selected = [0; 512];
+    if !crate::bios_disk::BOOT.read_block(0, &mut boot) || !candidate.read_block(0, &mut selected) {
+        return Err(Error::Io);
+    }
+    if boot == selected { Err(Error::FirmwareDestination) } else { Ok(()) }
+}
+
 pub fn prepare_format() -> Result<FormatPlan> {
     cancel_format();
     if boot_selected() {return Err(Error::FirmwareDestination);}
@@ -259,8 +410,9 @@ pub fn prepare_format() -> Result<FormatPlan> {
         return Err(Error::Mounted);
     }
     init_disk()?;
-    crate::fat16::require_full_disk(&DISK)?;
-    let plan = FormatPlan::new(DISK.block_count())?;
+    refuse_sata_boot_target()?;
+    crate::fat16::require_full_disk(device())?;
+    let plan = FormatPlan::new(device().block_count())?;
     unsafe {
         *core::ptr::addr_of_mut!(FORMAT_PENDING) = Some(plan);
     }
@@ -275,7 +427,8 @@ pub fn confirm_format() -> Result<()> {
         return Err(Error::Mounted);
     }
     init_disk()?;
-    fat16::format_disk(&DISK, plan)
+    refuse_sata_boot_target()?;
+    fat16::format_disk(device(), plan)
 }
 pub fn is_mounted() -> bool {
     unsafe { (&*core::ptr::addr_of!(MOUNTED)).is_some() }
@@ -285,10 +438,19 @@ pub fn mount() -> Result<u32> {
         return Ok(fs.start_sector());
     }
     crate::bios_disk::invalidate_cache();
+    #[cfg(feature = "live")]
+    if live_boot() {
+        let (disk, _) = unsafe { (&*core::ptr::addr_of!(LIVE_DISK)).as_ref() }.ok_or(Error::Io)?;
+        let fs = Fat16::new(disk)?;
+        let start = fs.start_sector();
+        unsafe { MOUNTED = Some(fs); }
+        reset_directory();
+        return Ok(start);
+    }
     let fs=if boot_selected() {
         if !crate::bios_disk::BOOT.init() {return Err(Error::Io);}
         Fat16::new(&crate::bios_disk::BOOT)?
-    }else{init_disk()?;Fat16::new(&DISK)?};
+    }else{init_disk()?;Fat16::new(device())?};
     let start = fs.start_sector();
     let has_apps=fs.is_directory("/APPS").is_ok();
     let selected=if boot_selected() {None}else{target().ok()};
@@ -301,9 +463,9 @@ pub fn mount() -> Result<u32> {
     reset_directory();
     Ok(start)
 }
-pub fn sync()->Result<()> {if !is_mounted()||if boot_selected(){crate::bios_disk::BOOT.flush()}else{DISK.flush()}{Ok(())}else{Err(Error::Io)}}
+pub fn sync()->Result<()> {if live_boot()||!is_mounted()||if boot_selected(){crate::bios_disk::BOOT.flush()}else{device().flush()}{Ok(())}else{Err(Error::Io)}}
 pub fn unmount() -> Result<()> {
-    let ok = !is_mounted() || if boot_selected() {crate::bios_disk::BOOT.flush()}else{DISK.flush()};
+    let ok = sync().is_ok();
     crate::bios_disk::invalidate_cache();
     unsafe {
         *core::ptr::addr_of_mut!(MOUNTED) = None;
@@ -423,14 +585,14 @@ pub fn test() {
     // Do not re-identify a device beneath an active mounted filesystem.
     if !is_mounted() && init_disk().is_err() {
         println!("No ATA disk found (or device timed out).");
-        DISK.report();
+        IDE_DISK.report();
         println!("Run disk scan for PCI/controller and other drive positions.");
         return;
     }
-    DISK.report();
-    println!("ATA disk: {} sectors (512 bytes each)", DISK.block_count());
+    report_target();
+    println!("Disk: {} sectors (512 bytes each)", device().block_count());
     let mut sector = [0; 512];
-    if !DISK.read_block(0, &mut sector) {
+    if !device().read_block(0, &mut sector) {
         println!("Failed to read sector 0");
         return;
     }
@@ -594,7 +756,7 @@ fn check_selected(argument: &str) -> Result<()> {
     let device: &dyn BlockDevice = if boot_selected() {
         if !crate::bios_disk::BOOT.init() {return Err(Error::Io);}
         &crate::bios_disk::BOOT
-    } else { init_disk()?; &DISK };
+    } else { init_disk()?; device() };
     let frames = crate::loader::Frames::new((WORKSPACE_WORDS*2+4095)/4096).ok_or(Error::OutOfMemory)?;
     let scratch=unsafe {core::slice::from_raw_parts_mut(frames.base() as *mut u16,WORKSPACE_WORDS)};
     crate::bios_disk::invalidate_cache();

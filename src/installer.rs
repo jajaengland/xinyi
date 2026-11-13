@@ -1,9 +1,8 @@
-// Shell-only installation state. Destructive tests attach private QEMU fixtures.
+// Shared console and graphical installation engine.
 use crate::{
     blockdev::BlockDevice,
     bootdisk::{self, InstallPlan, Kernel},
     diskfs,
-    diskfs::DISK,
     fat16::{Error, Result},
 };
 const MBR: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/disk_mbr.bin"));
@@ -79,7 +78,8 @@ pub fn prepare() -> Result<InstallPlan> {
     }
     let (_, kernel) = image()?;
     diskfs::init_disk()?;
-    let mut plan = bootdisk::plan(&DISK, kernel)?;
+    diskfs::refuse_sata_boot_target()?;
+    let mut plan = bootdisk::plan(diskfs::device(), kernel)?;
     plan.target = diskfs::target()?;
     unsafe {
         *core::ptr::addr_of_mut!(PENDING) = Some(plan);
@@ -87,6 +87,9 @@ pub fn prepare() -> Result<InstallPlan> {
     Ok(plan)
 }
 pub fn confirm() -> Result<()> {
+    confirm_with_progress(|_, _| {})
+}
+pub fn confirm_with_progress(mut progress: impl FnMut(usize, usize)) -> Result<()> {
     let plan = unsafe { *core::ptr::addr_of!(PENDING) };
     let copies=unsafe {core::mem::replace(&mut *core::ptr::addr_of_mut!(COPIES),[const {None};64])};
     cancel();
@@ -95,19 +98,23 @@ pub fn confirm() -> Result<()> {
         return Err(Error::Mounted);
     }
     diskfs::init_disk()?;
-    if DISK.block_count() != plan.disk_sectors || diskfs::target()? != plan.target {
+    diskfs::refuse_sata_boot_target()?;
+    if diskfs::device().block_count() != plan.disk_sectors || diskfs::target()? != plan.target {
         return Err(Error::Io);
     }
     let (bytes, kernel) = image()?;
     if kernel != plan.kernel {
         return Err(Error::InvalidKernel);
     }
-    bootdisk::install(&DISK, plan, bytes, MBR, STAGE2)?;
+    let total = copies.iter().flatten().count() + 1;
+    progress(0, total);
+    bootdisk::install(diskfs::device(), plan, bytes, MBR, STAGE2)?;
+    progress(1, total);
     if copies.iter().any(Option::is_some) {
         let result=(|| {
-            let fs=crate::fat16::Fat16::new(&DISK)?;
+            let fs=crate::fat16::Fat16::new(diskfs::device())?;
             match fs.mkdir("/APPS") {Ok(())|Err(Error::Exists)=>(),Err(e)=>return Err(e)}
-            for app in copies.iter().flatten() {
+            for (index, app) in copies.iter().flatten().enumerate() {
                 let mut path=[0u8;105];let n=app.path.encode(&mut path);
                 let path=core::str::from_utf8(&path[..n]).map_err(|_|Error::InvalidName)?;
                 if let Some(frames)=&app.frames {
@@ -115,6 +122,7 @@ pub fn confirm() -> Result<()> {
                     let data=unsafe{core::slice::from_raw_parts(frames.base() as *const u8,app.size)};
                     fs.save_image(path,data)?;
                 }else {match fs.mkdir(path) {Ok(())|Err(Error::Exists)=>(),Err(e)=>return Err(e)}}
+                progress(index + 2, total);
             }Ok(())
         })();
         if let Err(error)=result {crate::println!("Kernel installed, but copying applications failed: {}",error.message());return Err(error);}

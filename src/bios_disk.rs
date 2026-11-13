@@ -20,15 +20,34 @@ impl BiosDisk {
         self.sectors.store(sectors as u32,Ordering::Relaxed);true
     }
     fn transfer(&self,block:u32,write:bool)->bool {
-        if block>=self.block_count() {return false;}
+        self.transfer_sectors(block, 1, write)
+    }
+    fn transfer_sectors(&self,block:u32,count:u32,write:bool)->bool {
+        if block.checked_add(count).is_none_or(|end| end > self.block_count()) {return false;}
         let Some(drive)=crate::multiboot::bios_drive() else{return false;};
-        let packet=[0x10u32|(1<<16),0x10000000,block,0];
+        let packet=[0x10u32|(count<<16),0x10000000,block,0];
         unsafe {core::ptr::copy_nonoverlapping(packet.as_ptr(),0x6100 as *mut u32,4);}
         let Some(result)=bios::invoke(Registers{eax:if write {0x4300}else{0x4200},edx:drive as u32,esi:0x6100,interrupt:0x13,..Registers::default()}) else{return false;};
         self.error.store(if result.flags&1!=0 {result.eax>>8&255}else{0},Ordering::Relaxed);
         result.flags&1==0
     }
     pub fn status(&self)->u32 {self.error.load(Ordering::Relaxed)}
+    #[cfg(feature = "live")]
+    pub fn copy_image(&self, output: &mut [u8]) -> bool {
+        let mut block = 0;
+        for chunk in output.chunks_mut(16 * 512) {
+            let count = (chunk.len() / 512) as u32;
+            if self.transfer_sectors(block, count, false) {
+                unsafe { core::ptr::copy_nonoverlapping(0x10000 as *const u8, chunk.as_mut_ptr(), chunk.len()); }
+            } else {
+                for (index, sector) in chunk.chunks_exact_mut(512).enumerate() {
+                    if !self.read_block(block + index as u32, sector) { return false; }
+                }
+            }
+            block += count;
+        }
+        true
+    }
 }
 impl BlockDevice for BiosDisk {
     fn read_block(&self,block:u32,buffer:&mut [u8])->bool {
@@ -41,6 +60,7 @@ impl BlockDevice for BiosDisk {
         crate::disk_io::checkpoint();true
     }
     fn write_block(&self,block:u32,buffer:&[u8])->bool {
+        if crate::diskfs::live_boot() { return false; }
         if buffer.len()<512 {return false;}
         unsafe {core::ptr::copy_nonoverlapping(buffer.as_ptr(),0x10000 as *mut u8,512);}
         if !self.transfer(block,true)||!self.transfer(block,false) {invalidate_cache();return false;}

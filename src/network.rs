@@ -19,6 +19,8 @@ fn address(ip: Ip) -> impl core::fmt::Display {
     }
     Address(ip)
 }
+pub fn enabled() -> bool { unsafe { *core::ptr::addr_of!(ENABLED) } }
+
 pub fn init() {
     crate::rtl8139::disable_all();
     crate::debug::write_str("Net: disabled by default\n");

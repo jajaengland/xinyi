@@ -211,7 +211,23 @@ unsafe fn chrome(x: i32, y: i32, buttons: u8, lost: bool) -> bool {
     let Some(shell) = &mut *core::ptr::addr_of_mut!(SHELL) else {
         return false;
     };
+    let old_hit = shell.hit();
     if (*core::ptr::addr_of!(CAPTURE)).is_some() {
+        // The window owns the pointer during a drag. Clear any desktop hover
+        // before repainting the old and new window bounds.
+        use crate::desktop_shell::{Hit, Shell};
+        let highlight = match old_hit {
+            Some(Hit::Shortcut(i)) => Some(Shell::shortcut(i)),
+            Some(Hit::DesktopFolder) => Some(Shell::shortcut(3)),
+            Some(Hit::Desktop(i)) => Some(shell.file_rect(i)),
+            _ => None,
+        };
+        if let Some(rect) = highlight {
+            damage(rect);
+        }
+        shell.background = false;
+        shell.x = -1;
+        shell.y = -1;
         shell.reset(buttons);
         return false;
     }
@@ -238,7 +254,9 @@ unsafe fn chrome(x: i32, y: i32, buttons: u8, lost: bool) -> bool {
     shell.modifiers=crate::keyboard::modifiers();
     let focus_desktop=buttons&!BUTTONS&3!=0&&shell.background&&y<crate::display_layout::taskbar()&&!shell.open&&!shell.sound_open;
     let (consumed, action, changed) = shell.input(x, y, buttons, lost);
-    if changed {
+    // shell.input compares hits after the occlusion flag is updated. Include
+    // the hit from before that update so crossing a window edge clears hover.
+    if changed || old_hit != shell.hit() {
         damage(Rect{x:0,y:0,w:crate::display_layout::width(),h:crate::display_layout::taskbar()});
         if old_sound||shell.sound_open {damage(crate::desktop_shell::Shell::sound_panel());}
         damage(crate::desktop_shell::Shell::bar());
@@ -472,13 +490,17 @@ fn flush() {
                     });
                 }
             }
+            let start = crate::graphics_timing::stamp();
             graphics::multi_scene(
                 &views,
                 &*core::ptr::addr_of!(ORDER),
                 (&*core::ptr::addr_of!(SHELL)).as_ref(),
+                rect,
             );
+            let composed = crate::graphics_timing::stamp();
             graphics::move_pointer(DRAWN, POINTER);
             graphics::present_guarded(rect.x, rect.y, rect.w, rect.h, POINTER);
+            crate::graphics_timing::record(start, composed);
         } else if DRAWN != POINTER {
             graphics::move_pointer(DRAWN, POINTER);
         }

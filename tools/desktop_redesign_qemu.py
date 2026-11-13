@@ -34,7 +34,9 @@ def main():
                     except AssertionError:pass # A live snapshot can catch a FAT mirror write.
                     assert time.monotonic()<end,msg+'\n'+log()[-1600:];time.sleep(.04)
             def frames():return int(re.search(r'Free now: +(\d+)',g.command('frames','Free now:'))[1])
-            baseline=frames();g.type('desktop\n');until(lambda:'Desktop scheduler: ready' in log(),'desktop')
+            g.command('touch /desktop/highlite.txt','Created:')
+            baseline=frames();desktop_start=len(log());g.type('desktop\n')
+            until(lambda:'Desktop scheduler: ready' in log()[desktop_start:],'desktop')
             if a.vga=='std':
                 dev=next(v for v in g.call('query-pci')[0]['devices'] if v.get('id',{}).get('vendor')==0x1234);base=next(v['address'] for v in dev['regions'] if v['bar']==0);pitch=3200;size=4
             else:
@@ -46,17 +48,37 @@ def main():
                 return {(x,y) for y in range(16) for x in range(72) if int.from_bytes(data[y*pitch+(640+x)*size:y*pitch+(641+x)*size],'little')==white}
             until(lambda:clock()==expected,'RTC clock did not render 12:34')
             pointer=[400,300]
-            def click(x,y):
+            def move(x,y):
                 while pointer!=[x,y]:
                     dx=max(-80,min(80,x-pointer[0]));dy=max(-80,min(80,y-pointer[1]))
                     g.call('input-send-event',{'events':[{'type':'rel','data':{'axis':'x','value':dx}},{'type':'rel','data':{'axis':'y','value':dy}}]});pointer[0]+=dx;pointer[1]+=dy;time.sleep(.02)
-                for down in [True,False]:g.call('input-send-event',{'events':[{'type':'btn','data':{'button':'left','down':down}}]});time.sleep(.07)
+            def button(down):
+                g.call('input-send-event',{'events':[{'type':'btn','data':{'button':'left','down':down}}]});time.sleep(.07)
+            def click(x,y):
+                move(x,y)
+                for down in [True,False]:button(down)
             def launched(name,start):
                 until(lambda:re.search(r'Desktop: launch pid=(\d+) path=/APPS/(?:[A-Z0-9_]+/)?'+name,log()[start:]),'launch '+name)
                 pid=int(re.search(r'Desktop: launch pid=(\d+) ',log()[start:])[1]);until(lambda:f'Multiwindow: open pid={pid} ' in log(),'window '+name);return pid
             def search(name):
                 start=len(log());g.key('ctrl-esc');g.type(name.lower()+'\n');return launched(name,start)
             start=len(log());click(68,64);files=launched('FILES',start)
+            # Sample the uncovered part of the Terminal shortcut. Moving
+            # straight into the overlapping Files window must clear the tile.
+            def shortcut_pixel():return mem(base+133*pitch+30*size,size)
+            move(16,150);time.sleep(.1);plain=shortcut_pixel()
+            move(40,150);until(lambda:shortcut_pixel()!=plain,'Desktop hover did not appear')
+            move(68,150);until(lambda:shortcut_pixel()==plain,'Window edge left a stale desktop highlight')
+            # Select a real desktop file, cover its highlight and move away.
+            def file_pixel():return mem(base+74*pitch+140*size,size)
+            plain_file=file_pixel()
+            def ctrl(down):
+                g.call('input-send-event',{'events':[{'type':'key','data':{'down':down,'key':{'type':'qcode','data':'ctrl'}}}]})
+            ctrl(True);click(180,60);ctrl(False)
+            move(220,113);until(lambda:file_pixel()!=plain_file,'Desktop file selection did not persist')
+            selected=file_pixel()
+            button(True);move(220,70);until(lambda:file_pixel()!=selected,'Window did not cover the selected tile')
+            move(220,113);button(False);until(lambda:file_pixel()==selected,'Window drag did not restore the selected tile')
             before=log().count('Desktop: launch pid=');click(68,168);time.sleep(.2)
             assert log().count('Desktop: launch pid=')==before,'Shortcut clicked through an application'
             g.key('ctrl-esc');g.type('zzzz\n');time.sleep(.15);assert log().count('Desktop: launch pid=')==before,'No-result search launched a stale item'

@@ -13,7 +13,7 @@ pub struct Request {
 }
 
 pub fn handles(number: u32, a: u32) -> bool {
-    matches!(number, 57 | 58 | 78..=81 | 88..=94 | 102) || number==106&&a!=0 || number == 84 && a == 2
+    matches!(number, 57 | 58 | 78..=81 | 88..=94 | 102) || matches!(number,106|107)&&a!=0 || number == 84 && a == 2
 }
 
 static mut ACTIVE: bool = false;
@@ -138,6 +138,7 @@ extern "C" fn entry() -> ! {
         91..=94 => crate::files_api::stream(0x1b, request.number, request.a, request.b, request.c),
         88..=90 => crate::files_api::large(0x1b, request.number, request.a, request.b, request.c),
         106 => crate::wallpaper::syscall(0x1b,request.a,request.b,request.c),
+        107 => crate::hardware::query(0x1b,request.a,request.b,request.c),
         102 => crate::app_install::syscall(0x1b,request.a,request.b,request.c),
         _ => (-38i32) as u32,
     }};

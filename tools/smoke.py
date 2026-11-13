@@ -77,7 +77,7 @@ class Guest:
                     time.sleep(0.05)
                 if not start_desktop:
                     self.wait_for("xinyi:/",timeout=30)
-            else:
+            elif boot_message is not None:
                 self.wait_for(boot_message, timeout=45)
         except BaseException:
             self.close()

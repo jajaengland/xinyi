@@ -32,7 +32,7 @@ def main():
             ])
             try:
                 transcript.append(guest.command("version","Xinyi kernel version"))
-                transcript.append(guest.command("disks","No supported IDE drives found"))
+                transcript.append(guest.command("disks","No supported IDE or SATA drives found"))
                 transcript.append(guest.command("apps","EDIT.BIN"))
                 transcript.append(guest.command("run hello","User program exited with code 0."))
                 transcript.append(guest.command("bios","VBE mode"))

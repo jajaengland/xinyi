@@ -385,6 +385,8 @@ impl BlockDevice for AtaDisk {
         result
     }
     fn write_block(&self, block: u32, buffer: &[u8]) -> bool {
+        #[cfg(feature = "live")]
+        if crate::diskfs::live_boot() { return false; }
         // A native target may alias the firmware boot disk (installation or
         // drive switching), so native writes invalidate firmware read copies.
         crate::bios_disk::invalidate_cache();

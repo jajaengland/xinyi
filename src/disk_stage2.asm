@@ -18,15 +18,34 @@ start:
     sti
     mov ax, 3
     int 0x10
-    ; Fast A20 gate: clear reset, enable the address line.
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
+    call check_a20
+    jnc .a20_ready
+
+    ; Ask firmware first. A success status does not prove the gate opened.
+    mov ax, 0x2401
+    int 0x15
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
+    call check_a20
+    jnc .a20_ready
+
+    ; Fast A20 gate: clear reset, enable the address line, then verify.
     in al, 0x92
     and al, 0xfe
     or al, 2
     out 0x92, al
+    call check_a20
+    jc a20_error
+.a20_ready:
     xor ax, ax
     mov es, ax
     mov di, INFO
     mov cx, 128/2
+    cld
     rep stosw
     int 0x12
     movzx eax, ax
@@ -35,30 +54,55 @@ start:
     mov dword [INFO+48], MAP
     xor ebx, ebx
     mov word [map_pointer], MAP
+    mov word [map_calls], 256
 .map:
-    mov di, [map_pointer]
-    mov dword [di], 20
-    add di, 4
+    dec word [map_calls]
+    jz memory_error
+    mov di, map_entry
+    mov dword [di+20], 1 ; BIOS returning only 20 bytes leaves this enabled.
     mov eax, 0xe820
-    mov ecx, 20
+    mov ecx, 24
     mov edx, 0x534d4150
+    stc
     int 0x15
-    jc memory_error
+    pushf
+    push eax
+    xor ax, ax
+    mov es, ax
+    mov ds, ax
+    pop eax
+    popf
+    ; Some BIOSes signal the end on the call after their last record.
+    jc .map_done
     cmp eax, 0x534d4150
     jne memory_error
     cmp ecx, 20
     jb memory_error
-    xor ax, ax
-    mov es, ax
-    mov ds, ax
+    cmp ecx, 24
+    jb .legacy_entry
+    test byte [map_entry+20], 1
+    jz .next_entry
+.legacy_entry:
+    mov eax, [map_entry+8]
+    or eax, [map_entry+12]
+    jz .next_entry
+    mov di, [map_pointer]
+    cmp di, MAP+128*24
+    jae memory_error
+    mov dword [di], 20
+    add di, 4
+    mov si, map_entry
+    mov cx, 10
+    cld
+    rep movsw
     add word [map_pointer], 24
     add dword [INFO+44], 24
+.next_entry:
     test ebx, ebx
-    jz .map_done
-    cmp word [map_pointer], MAP+128*24
-    jb .map
-    jmp memory_error
+    jnz .map
 .map_done:
+    cmp word [map_pointer], MAP
+    je memory_error
     mov word [packet+4], HEADER
     mov word [packet+6], 0
     mov dword [packet+8], 63
@@ -84,8 +128,13 @@ start:
     loop .target_hash
     cmp eax, [HEADER+48]
     jne header_error
-    cmp dword [HEADER+44], 3
+    mov ecx, [HEADER+44]
+    cmp ecx, 3
+    jbe .position_ok
+    sub ecx, 0x80
+    cmp ecx, 31
     ja header_error
+.position_ok:
     mov eax, [HEADER+36]
     cmp eax, 0xffffffff
     je .legacy_target
@@ -97,6 +146,8 @@ start:
     je header_error
     jmp .target_ok
 .legacy_target:
+    cmp dword [HEADER+44], 3
+    ja header_error
     cmp dword [HEADER+40], 0
     jne header_error
 .target_ok:
@@ -202,17 +253,59 @@ start:
     mov cr0, eax
     jmp 0x18:protected
 
+; Compare 0000:0500 and FFFF:0510, which alias when A20 is off.
+; Restore both bytes before returning. CF indicates the alias was observed.
+check_a20:
+    pushf
+    cli
+    push es
+    mov ax, 0xffff
+    mov es, ax
+    mov al, [0x500]
+    mov ah, [es:0x510]
+    mov byte [0x500], 0
+    mov byte [es:0x510], 0xff
+    cmp byte [0x500], 0xff
+    mov [es:0x510], ah
+    mov [0x500], al
+    pop es
+    je .closed
+    popf
+    clc
+    ret
+.closed:
+    popf
+    stc
+    ret
+
 read_sector:
     sti
+    mov bp, 3
+.retry:
     mov word [packet+2], 1 ; BIOS may modify the transfer count.
     mov si, packet
     mov dl, [drive]
     mov ah, 0x42
-    int 0x13
-    jc disk_error
+    call disk_interrupt
+    jnc .done
+    dec bp
+    jz disk_error
     xor ax, ax
-    mov ds, ax
-    mov es, ax
+    mov dl, [drive]
+    call disk_interrupt
+    jmp .retry
+.done:
+    ret
+
+disk_interrupt:
+    pusha
+    push ds
+    push es
+    stc
+    int 0x13
+    pop es
+    pop ds
+    popa
     ret
 
 ; Establish 4 GiB DS/ES limits for a bounded copy above 1 MiB, then return
@@ -237,6 +330,9 @@ unreal:
 
 memory_error:
     mov si, memory_message
+    jmp fatal
+a20_error:
+    mov si, a20_message
     jmp fatal
 header_error:
     mov si, header_message
@@ -282,10 +378,14 @@ packet:
     dq 0
 drive db 0
 map_pointer dw 0
+map_calls dw 0
+align 4
+map_entry times 24 db 0
 remaining dw 0
 destination dd 0
 memory_end dd 0
 memory_message db 'Xinyi disk loader: missing/insufficient E820 RAM',0
+a20_message db 'Xinyi disk loader: could not enable A20',0
 header_message db 'Xinyi disk loader: invalid kernel header',0
 disk_message db 'Xinyi disk loader: disk read failed',0
 checksum_message db 'Xinyi disk loader: kernel checksum failed',0

@@ -7,8 +7,13 @@ build = "build.rs"
 
 [dependencies]
 
+[features]
+live = []
+
 [profile.dev]
 panic = "abort"
 
 [profile.release]
 panic = "abort"
+# Keep the installed kernel within the BIOS disk image's reserved boot area.
+opt-level = "s"

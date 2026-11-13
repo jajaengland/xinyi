@@ -1,4 +1,4 @@
-"""Record actual AC97 output, then exercise media UI, ownership and lifetime."""
+"""Record AC97 or HD Audio output and exercise media UI, ownership and lifetime."""
 import argparse,json,math,re,shutil,struct,subprocess,sys,tempfile,time,wave
 from array import array
 from pathlib import Path
@@ -7,8 +7,8 @@ from seed_apps import seed_apps
 from folders_qemu import inspect_tree
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--disk',type=Path,required=True);a=p.parse_args()
-    out=ROOT/'target/smoke';out.mkdir(exist_ok=True)
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--disk',type=Path,required=True);p.add_argument('--hda',action='store_true');a=p.parse_args()
+    out=ROOT/('target/smoke/hda-playback' if a.hda else 'target/smoke');out.mkdir(parents=True,exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='audio-',dir=out) as tmp:
         d=Path(tmp);image=d/'system.img';shutil.copyfile(a.disk,image);extra=d/'extra';(extra/'apps').mkdir(parents=True)
         subprocess.run([sys.executable,str(ROOT/'tools/build_program.py'),str(ROOT/'programs/audio_check/main.rs'),'--format','elf','--output',str(extra/'apps/audcheck.elf')],check=True)
@@ -17,9 +17,21 @@ def main():
         (extra/'applications.json').write_text(json.dumps([{'name':'audcheck','file':'AUDCHECK.ELF'},{'name':'demo','file':'DEMO.WAV'}]));seed_apps(image,extra)
         qemu=r'C:\Program Files\qemu\qemu-system-i386.exe'
         g=Guest(qemu,None,d,disk=image)
-        try:g.command('run --media audcheck missing','Missing audio checks passed!');g.wait_for('User program exited with code 0.')
+        try:
+            g.command('audio','No PCI audio controllers detected.')
+            g.command('run --media audcheck missing','Missing audio checks passed!');g.wait_for('User program exited with code 0.')
         finally:g.close()
-        def audio_args(path):return ['-audiodev',f'wav,id=pcm,path={path.as_posix()},out.frequency=48000,out.channels=2,out.format=s16','-device','AC97,audiodev=pcm']
+        g=Guest(qemu,None,d,disk=image,extra_args=['-device','intel-hda'])
+        try:
+            report=g.command('audio','Sampled playback unavailable.')
+            assert '8086:2668' in report and 'HD Audio' in report, report
+            g.command('run --media audcheck missing','Missing audio checks passed!')
+            g.wait_for('User program exited with code 0.')
+        finally:g.close()
+        backend='HD Audio' if a.hda else 'AC97'
+        def audio_args(path):
+            devices=['-device','intel-hda','-device','hda-output,audiodev=pcm'] if a.hda else ['-device','AC97,audiodev=pcm']
+            return ['-audiodev',f'wav,id=pcm,path={path.as_posix()},out.frequency=48000,out.channels=2,out.format=s16',*devices]
         def finish(g):
             # QEMU must finalize the WAV RIFF lengths before we inspect the capture.
             try:g.call('quit');g.process.wait(timeout=10)
@@ -34,9 +46,11 @@ def main():
                 struct.pack_into('<I',data,4,len(data)-8);struct.pack_into('<I',data,40,len(data)-44);path.write_bytes(data)
         pcm=d/'pcm.wav';g=Guest(qemu,None,d,disk=image,extra_args=audio_args(pcm))
         try:
-            assert 'Audio: AC97 PCM ready' in (d/'debug.log').read_text(),(d/'debug.log').read_text()
+            assert f'Audio: {backend} PCM ready' in (d/'debug.log').read_text(),(d/'debug.log').read_text()
             def frames():return int(re.search(r'Free now: +(\d+)',g.command('frames','Free now:'))[1])
             baseline=frames()
+            report=g.command('audio','PCM ready')
+            assert ('8086:2668' if a.hda else '8086:2415') in report, report
             g.command('run --media audcheck','PCM audio checks passed!');g.wait_for('User program exited with code 0.');assert frames()==baseline
             g.command('run --media audcheck fault','User program faulted:');assert frames()==baseline
             g.command('run --media audcheck','PCM audio checks passed!');g.wait_for('User program exited with code 0.');assert frames()==baseline
@@ -102,6 +116,6 @@ def main():
         assert detected,'The selected mono 22050 Hz WAV was not converted to audible 48000 Hz stereo'
 
         shutil.copyfile(capture,out/'audio-player.wav')
-    print('PASS AC97: actual recorded PCM, ring wrap/backpressure, invalid buffers, missing device, media permissions, exclusive ownership, WAV conversion, live desktop, fault/kill cleanup and frame balance')
+    print(f'PASS {backend}: actual recorded PCM, ring wrap/backpressure, invalid buffers, missing device, media permissions, exclusive ownership, WAV conversion, live desktop, fault/kill cleanup and frame balance')
 
 if __name__=='__main__':main()

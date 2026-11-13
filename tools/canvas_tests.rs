@@ -44,3 +44,26 @@ use canvas::Canvas;
 }
 
 #[test]fn image_blits_clip_without_overwriting_stride_or_edges(){let mut data=[9;24];let image=[1,2,3,4];let mut c=Canvas::new(&mut data,4,4,6).unwrap();assert!(c.blit(-1,-1,2,2,&image));assert!(c.blit(100,0,2,2,&image));assert!(c.blit(-100,0,2,2,&image));assert!(!c.blit(0,0,2,2,&[1]));assert_eq!(data[0],4);assert!(data[1..].iter().all(|p|*p==9));}
+
+#[test]
+fn damaged_region_matches_full_render_without_touching_surroundings() {
+    fn paint(mut canvas: Canvas<'_>) {
+        canvas.rect(0, 0, 32, 32, 1);
+        canvas.blit(4, 3, 8, 8, &[2; 64]);
+        canvas.line((0, 2), (31, 27), 3);
+        canvas.triangle((1, 17), (31, 18), (7, 28), 4, true);
+        canvas.glyph(4, 4, 5, b'A', &crate::canvas::text::FONT);
+        canvas.label(12, 6, 16, 6, b"OK");
+    }
+    let mut full = [99; 36 * 32];
+    let mut partial = full;
+    paint(Canvas::new(&mut full, 32, 32, 36).unwrap());
+    paint(Canvas::new(&mut partial, 32, 32, 36).unwrap().clipped(7, 8, 17, 15));
+    for y in 0..32 {
+        for x in 0..36 {
+            let i = y * 36 + x;
+            let expected = if (7..24).contains(&x) && (8..23).contains(&y) { full[i] } else { 99 };
+            assert_eq!(partial[i], expected, "pixel ({x}, {y})");
+        }
+    }
+}

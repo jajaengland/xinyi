@@ -53,7 +53,7 @@ impl Profile {
             97..=99 => self == Self::Media,
             100 => self == Self::Media && first == 0,
             // Reading colours is harmless; applying/saving changes global state.
-            84 | 106 => first == 0,
+            84 | 106 | 107 => first == 0,
             _ => false,
         }
     }

@@ -1,33 +1,53 @@
 // Drawing into owned RAM, independent of the display hardware.
 #[path="text_layout.rs"]
 pub mod text;
-pub struct Canvas<'a> {pixels:&'a mut [u32],width:usize,height:usize,stride:usize}
+pub struct Canvas<'a> {pixels:&'a mut [u32],width:usize,height:usize,stride:usize,clip:(i64,i64,i64,i64)}
 impl<'a> Canvas<'a> {
     pub fn new(pixels:&'a mut [u32],width:usize,height:usize,stride:usize)->Option<Self> {
         if width==0||height==0||stride<width||stride.checked_mul(height)?>pixels.len() {return None;}
-        Some(Self{pixels,width,height,stride})
+        Some(Self{pixels,width,height,stride,clip:(0,0,width as i64,height as i64)})
     }
+    /// Restrict drawing to a rectangle without changing scene coordinates.
+    pub fn clipped(mut self, x: i32, y: i32, width: i32, height: i32) -> Self {
+        let (left, top, right, bottom) = self.clip;
+        let x = i64::from(x);
+        let y = i64::from(y);
+        self.clip = (
+            x.clamp(left, right),
+            y.clamp(top, bottom),
+            (x + i64::from(width.max(0))).clamp(left, right),
+            (y + i64::from(height.max(0))).clamp(top, bottom),
+        );
+        self
+    }
+
+    pub fn visible_rows(&self) -> core::ops::Range<i32> {
+        self.clip.1 as i32..self.clip.3 as i32
+    }
+
     /// Copy a validated RGB image with clipping; no framebuffer mapping is exposed.
     pub fn blit(&mut self,x:i32,y:i32,width:usize,height:usize,pixels:&[u32])->bool {
         if width==0||height==0||width>i32::MAX as usize||height>i32::MAX as usize||width.checked_mul(height)!=Some(pixels.len()){return false;}
-        let left=(x as i64).max(0).min(self.width as i64) as usize;let top=(y as i64).max(0).min(self.height as i64) as usize;
-        let right=(x as i64+width as i64).max(0).min(self.width as i64) as usize;let bottom=(y as i64+height as i64).max(0).min(self.height as i64) as usize;
+        let left=(x as i64).clamp(self.clip.0,self.clip.2) as usize;let top=(y as i64).clamp(self.clip.1,self.clip.3) as usize;
+        let right=(x as i64+width as i64).clamp(self.clip.0,self.clip.2) as usize;let bottom=(y as i64+height as i64).clamp(self.clip.1,self.clip.3) as usize;
         if right<=left||bottom<=top{return true;}
         for row in top..bottom{let src=(row as i64-y as i64) as usize*width+(left as i64-x as i64) as usize;let dst=row*self.stride+left;self.pixels[dst..dst+right-left].copy_from_slice(&pixels[src..src+right-left]);}true
     }
     pub fn pixel(&mut self,x:i32,y:i32,color:u32) {
-        if x>=0&&y>=0&&(x as usize)<self.width&&(y as usize)<self.height {self.pixels[y as usize*self.stride+x as usize]=color;}
+        if (self.clip.0..self.clip.2).contains(&(x as i64)) && (self.clip.1..self.clip.3).contains(&(y as i64)) {self.pixels[y as usize*self.stride+x as usize]=color;}
     }
     pub fn rect(&mut self,x:i32,y:i32,width:i32,height:i32,color:u32) {
         if width<=0||height<=0 {return;}
-        let left=(x as i64).max(0).min(self.width as i64) as usize;
-        let top=(y as i64).max(0).min(self.height as i64) as usize;
-        let right=(x as i64+width as i64).max(0).min(self.width as i64) as usize;
-        let bottom=(y as i64+height as i64).max(0).min(self.height as i64) as usize;
+        let left=(x as i64).clamp(self.clip.0,self.clip.2) as usize;
+        let top=(y as i64).clamp(self.clip.1,self.clip.3) as usize;
+        let right=(x as i64+width as i64).clamp(self.clip.0,self.clip.2) as usize;
+        let bottom=(y as i64+height as i64).clamp(self.clip.1,self.clip.3) as usize;
         for row in top..bottom {self.pixels[row*self.stride+left..row*self.stride+right].fill(color);}
     }
     pub fn line(&mut self,a:(i32,i32),b:(i32,i32),color:u32) {
         let(mut x0,mut y0,mut x1,mut y1)=(a.0 as i64,a.1 as i64,b.0 as i64,b.1 as i64);
+        if x0.max(x1) < self.clip.0 || x0.min(x1) >= self.clip.2
+            || y0.max(y1) < self.clip.1 || y0.min(y1) >= self.clip.3 { return; }
         let(max_x,max_y)=((self.width-1) as i64,(self.height-1) as i64);
         // Clip before rasterizing, so even extreme off-screen endpoints do
         // bounded work. Wider intermediates prevent intersection overflow.
@@ -61,10 +81,10 @@ impl<'a> Canvas<'a> {
         if !filled||area==0 {
             self.line(a,b,color);self.line(b,c,color);self.line(c,a,color);return;
         }
-        let left=(a.0.min(b.0).min(c.0) as i64).max(0);
-        let right=(a.0.max(b.0).max(c.0) as i64).min(self.width as i64-1);
-        let top=(a.1.min(b.1).min(c.1) as i64).max(0);
-        let bottom=(a.1.max(b.1).max(c.1) as i64).min(self.height as i64-1);
+        let left=(a.0.min(b.0).min(c.0) as i64).max(self.clip.0);
+        let right=(a.0.max(b.0).max(c.0) as i64).min(self.clip.2-1);
+        let top=(a.1.min(b.1).min(c.1) as i64).max(self.clip.1);
+        let bottom=(a.1.max(b.1).max(c.1) as i64).min(self.clip.3-1);
         if left>right||top>bottom {return;}
         for y in top..=bottom {for x in left..=right {
             let p=(x as i32,y as i32);let signs=[edge(a,b,p),edge(b,c,p),edge(c,a,p)];
@@ -75,7 +95,7 @@ impl<'a> Canvas<'a> {
     }
     /// Draw one raw bitmap glyph, including CP437 console cells.
     pub fn glyph(&mut self,x:i32,y:i32,color:u32,byte:u8,font:&[u8;4096]) {
-        if x>=0 && y>=0 && x as i64+8<=self.width as i64 && y as i64+16<=self.height as i64 {
+        if x as i64>=self.clip.0 && y as i64>=self.clip.1 && x as i64+8<=self.clip.2 && y as i64+16<=self.clip.3 {
             for row in 0..16 {
                 let bits=font[byte as usize*16+row];if bits==0 {continue;}
                 let start=(y as usize+row)*self.stride+x as usize;
@@ -88,8 +108,8 @@ impl<'a> Canvas<'a> {
     }
     fn glyph_clip(&mut self,x:i32,y:i32,color:u32,byte:u8,font:&[u8;4096],source:u8,width:u8,clip:(i64,i64,i64,i64)) {
         let (x,y)=(x as i64,y as i64);
-        let left=x.max(clip.0).max(0);let right=(x+width as i64).min(clip.2).min(self.width as i64);
-        let top=y.max(clip.1).max(0);let bottom=(y+16).min(clip.3).min(self.height as i64);
+        let left=x.max(clip.0).max(self.clip.0);let right=(x+width as i64).min(clip.2).min(self.clip.2);
+        let top=y.max(clip.1).max(self.clip.1);let bottom=(y+16).min(clip.3).min(self.clip.3);
         if left>=right || top>=bottom {return;}
         for row in top..bottom {
             let bits=font[byte as usize*16+(row-y) as usize];

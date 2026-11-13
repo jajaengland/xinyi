@@ -23,6 +23,11 @@ mod terminal;
 mod speaker;
 mod audio;
 mod audio_model;
+mod hda;
+mod hardware;
+mod ahci_check;
+mod graphics_timing;
+mod hardware_model;
 mod sound_model;
 mod system_sounds;
 mod stream_protocol;
@@ -96,6 +101,7 @@ mod disk_target;
 mod diskfs;
 mod disk_io;
 mod installer;
+mod setup;
 mod bootdisk;
 mod vga;
 
@@ -120,6 +126,7 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("multitask", "multitask [hog|fault|check|wait]", "Run two isolated counter programs concurrently"),
     ("files", "files", "Open the file manager"),
     ("settings", "settings", "Open appearance settings"),
+    ("hardware", "hardware", "Open the hardware inventory"),
     ("sounds", "sounds [list|test NAME|volume N|mute|unmute|save]", "System voice sounds and volume"),
     ("terminal", "terminal", "Open a graphical terminal window"),
     ("uiscale", "uiscale [100|125|150]", "Save font and UI scaling for the next desktop session"),
@@ -128,6 +135,7 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("windowtest", "windowtest", "Run the legacy window/launcher diagnostic"),
     ("mouse", "mouse", "Test PS/2 mouse, buttons and right-click menu; Escape exits"),
     ("graphics", "graphics", "Test framebuffer graphics; Escape returns to text"),
+    ("audio", "audio [probe|test]", "Show audio hardware or test HD Audio from the console"),
     ("bios", "bios", "Show boot-firmware disk and VESA diagnostics"),
     ("about", "about", "About Xinyi"),
     ("clear", "clear", "Clear the screen"),
@@ -179,6 +187,7 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ),
     ("disk", "disk [scan|select]", "Test, scan, or explicitly select an IDE disk"),
     ("install", "install [NUMBER]", "Preview installation and copying /APPS to a drive"),
+    ("setup", "setup", "Open the graphical installer from the physical console"),
     ("reboot", "reboot", "Reboot the machine"),
     ("shutdown", "shutdown [confirm]", "Flush disks and power off or halt"),
 ];
@@ -503,6 +512,7 @@ fn run_command(input: &str) {
             println!("Total tasks: {}", task::task_count());
         }
 
+        "audio" => audio::command(argument),
         "bios"=>{
             println!("BIOS bridge: {}",if bios::available() {"available"}else{"unavailable (boot the disk/USB image)"});
             if let Some(drive)=multiboot::bios_drive() {println!("Boot drive: {:02x}; sectors: {}; last disk status: {:02x}",drive,bios_disk::BOOT.block_count(),bios_disk::BOOT.status());}
@@ -542,6 +552,7 @@ fn run_command(input: &str) {
         "notepad" => {launch_program("notepad", argument);},
         "files" => {launch_program("files", argument);},
         "settings" => {launch_program("settings", argument);},
+        "hardware" => {launch_program("hardware", argument);},
         "terminal" => {launch_program("terminal", argument);},
         "disks" => diskfs::list_drives(),
         "use" => match argument.parse::<usize>() {
@@ -737,7 +748,7 @@ fn run_command(input: &str) {
         "format" => match argument {
             "" => match diskfs::prepare_format() {
                 Ok(plan) => {
-                    println!("Target: selected IDE disk, {} sectors ({} MiB).", plan.disk_sectors, plan.disk_sectors / 2048);
+                    println!("Target: selected disk, {} sectors ({} MiB).", plan.disk_sectors, plan.disk_sectors / 2048);
                     diskfs::report_target();
                     println!("WARNING: removes all partitions, files, and bootability on this disk.");
                     println!("This includes any installed OS. Quick format is not a secure erase.");
@@ -759,11 +770,12 @@ fn run_command(input: &str) {
             _ => println!("Usage: format, then format confirm. Unmount first."),
         },
 
+        "setup" => setup::run(),
         "install" => {
             match argument {
                 "" => match installer::prepare_friendly(None) {
                     Ok(plan) => {
-                        println!("Target: selected IDE disk, {} MiB.", plan.disk_sectors/2048);
+                        println!("Target: selected disk, {} MiB.", plan.disk_sectors/2048);
                         diskfs::report_target();
                         println!("Installs the BIOS bootloader and {} kernel bytes.",plan.kernel.bytes);
                         if plan.preserve_data {
@@ -795,6 +807,9 @@ fn run_command(input: &str) {
                         Ok(plan)=>{
                             println!("Install on drive {}: {} MiB. {}",number,plan.disk_sectors/2048,
                                 if plan.preserve_data {"Existing FAT16 files are preserved; matching apps replaced."}else{"WARNING: all partitions and files on this drive will be replaced."});
+                            if plan.disk_sectors > fat16::FormatPlan::START + fat16::FormatPlan::MAX_VOLUME_SECTORS {
+                                println!("Capacity warning: Xinyi can use only the {} MiB FAT16 partition.", plan.volume_sectors/2048);
+                            }
                             println!("To install, enter: install confirm");
                         }
                         Err(error)=>println!("Install refused: {}",error.message()),
@@ -884,17 +899,28 @@ pub extern "C" fn rust_main(magic: u32, info_addr: u32) -> ! {
     println!("Welcome to Xinyi.");
     println!("32-bit Rust kernel");
     println!("Type 'help' to see commands.");
+    hardware::init();
     diskfs::startup_mount();
     theme::load();
     display::load();
     power::init();
     audio::init();
     network::init();
+    graphics_timing::init();
     system_sounds::load();
     system_sounds::play(system_sounds::Event::Startup);
     println!();
 
-    multitask::desktop();
+    if diskfs::boot_selected() && diskfs::file_size("/SETUP.CFG") == Ok(5) {
+        let mut mode = [0; 5];
+        if diskfs::read_at("/SETUP.CFG", 0, &mut mode) == Ok(5) && &mode == b"setup" {
+            setup::run();
+        } else {
+            multitask::desktop();
+        }
+    } else {
+        multitask::desktop();
+    }
     // Returning from the desktop (or unsupported graphics) keeps diagnostics usable.
     debug::write_str("Boot: console ready\n");
     shell::Shell::physical()

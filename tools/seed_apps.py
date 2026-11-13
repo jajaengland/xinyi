@@ -5,7 +5,7 @@ import struct
 from folders_qemu import inspect_tree
 
 
-def seed_apps(image,package,root_name="APPS"):
+def seed_apps(image,package,root_name="APPS",*,installer=False):
     assert root_name.isalpha() and 1<=len(root_name)<=8
     root_name=root_name.upper()
     image=Path(image);package=Path(package)
@@ -84,6 +84,14 @@ def seed_apps(image,package,root_name="APPS"):
             if clusters:set_fat(clusters[-1],cluster)
             clusters.append(cluster);chunk=payload[offset:offset+spc*512];at=sector(cluster);data[at:at+len(chunk)]=chunk
         create(parent,encoded,0x20,clusters[0],len(payload))
+    if installer:
+        name = b"SETUP   CFG"
+        assert find(0, name) is None
+        cluster = allocate()
+        offset = sector(cluster)
+        data[offset:offset+5] = b"setup"
+        create(0, name, 0x20, cluster, 5)
+        expected["SETUP.CFG"] = b"setup"
     with image.open("r+b") as stream:stream.write(data)
     files,_=inspect_tree(image,start)
     assert all(files[path]==content for path,content in before.items())

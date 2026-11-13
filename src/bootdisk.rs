@@ -60,6 +60,7 @@ pub fn checksum(bytes: &[u8]) -> u32 {
 pub struct InstallPlan {
     pub disk_sectors: u32,
     pub preserve_data: bool,
+    pub volume_sectors: u32,
     pub kernel: Kernel,
     pub target: Target,
     original_mbr: u32,
@@ -109,14 +110,19 @@ pub fn plan(device: &dyn BlockDevice, kernel: Kernel) -> Result<InstallPlan> {
         }
         ranges[i] = (start, end);
     }
-    preserve &= Fat16::new(device).map_or(false, |fs| fs.start_sector() >= 2048);
-    if !preserve {
+    let fs = Fat16::new(device).ok().filter(|fs| fs.start_sector() >= 2048);
+    preserve &= fs.is_some();
+    let volume_sectors = if preserve {
+        let start = fs.unwrap().start_sector();
+        ranges.iter().find(|&&(lba, _)| lba == start).ok_or(Error::InvalidVolume)?.1 - start
+    } else {
         fat16::require_full_disk(device)?;
-        FormatPlan::new(device.block_count())?;
-    }
+        FormatPlan::new(device.block_count())?.volume_sectors
+    };
     Ok(InstallPlan {
         disk_sectors: device.block_count(),
         preserve_data: preserve,
+        volume_sectors,
         kernel,
         target: Target::legacy(false, false),
         original_mbr: checksum(&mbr),

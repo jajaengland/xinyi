@@ -283,6 +283,7 @@ pub extern "C" fn xinyi_syscall_handler(frame: &crate::syscall_frame::SyscallFra
         87=>crate::user_memory::heap(frame.cs,arg1,arg2,arg3),
         83=>crate::file_clipboard::syscall(frame.cs,arg1,arg2,arg3),
         106=>crate::wallpaper::syscall(frame.cs,arg1,arg2,arg3),
+        107=>crate::hardware::query(frame.cs,arg1,arg2,arg3),
         84=>crate::theme::syscall(frame.cs,arg1,arg2,arg3),
         78..=82=>crate::directory_api::syscall(frame.cs,syscall_num,arg1,arg2,arg3),
         69..=71=>crate::terminal_service::syscall(frame.cs,syscall_num,arg1,arg2,arg3),

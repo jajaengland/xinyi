@@ -39,10 +39,13 @@ pub fn background(c:&mut Canvas<'_>,s:&Shell,color:u32) {
     let subtle=tint(color);
     let (w,h)=(crate::display_layout::width(),Shell::work_area().h);
     // Quiet diagonal bands follow the work area rather than a fixed resolution.
-    if !image {for y in 0..h {
+    if !image {
+        let band = mix(color, 0x8bd1cf, 7);
+        let accent = mix(color, 0x8bd1cf, 3);
+        for y in c.visible_rows().take_while(|&y| y < h) {
         let x=w*2/3+(y-h/2)/3;
-        c.rect(x,y,w/7,1,mix(color,0x8bd1cf,7));
-        c.rect(x+w/7,y,w/9,1,mix(color,0x8bd1cf,3));
+        c.rect(x,y,w/7,1,band);
+        c.rect(x+w/7,y,w/9,1,accent);
     }
     }
     let ink=if image{0xffffff}else{crate::theme_model::ink(color)};

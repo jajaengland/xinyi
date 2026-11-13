@@ -17,13 +17,14 @@ from smoke import Guest, ROOT
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--disk',type=Path,required=True)
+    p.add_argument('--hda',action='store_true')
     a=p.parse_args()
-    out=ROOT/'target/smoke';out.mkdir(exist_ok=True)
+    out=ROOT/('target/smoke/hda-playback' if a.hda else 'target/smoke');out.mkdir(parents=True,exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='voices-',dir=out) as tmp:
         d=Path(tmp);disk=d/'system.img';shutil.copyfile(a.disk,disk)
         capture=d/'voices.wav'
-        args=['-audiodev',f'wav,id=voice,path={capture.as_posix()},out.frequency=48000,out.channels=2,out.format=s16',
-              '-device','AC97,audiodev=voice']
+        devices=['-device','intel-hda','-device','hda-output,audiodev=voice'] if a.hda else ['-device','AC97,audiodev=voice']
+        args=['-audiodev',f'wav,id=voice,path={capture.as_posix()},out.frequency=48000,out.channels=2,out.format=s16',*devices]
         g=Guest(r'C:\Program Files\qemu\qemu-system-i386.exe',None,d,disk=disk,extra_args=args)
         def log():return (d/'debug.log').read_text(errors='replace')
         def until(fn,description):

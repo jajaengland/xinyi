@@ -137,6 +137,8 @@ unsafe fn device_command(byte: u8) -> bool {
     }
     false
 }
+pub fn enabled() -> bool { ENABLED.load(Ordering::Acquire) }
+
 pub fn init() -> bool {
     if ENABLED.load(Ordering::Acquire) {
         return true;

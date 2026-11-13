@@ -158,7 +158,7 @@ pub fn default_target() -> Option<crate::disk_target::Target> {
     }
 }
 pub fn target_channel(target: crate::disk_target::Target) -> Option<IdeChannel> {
-    if !target.valid() {
+    if !target.valid() || target.sata_port().is_some() {
         return None;
     }
     if target.bdf == u32::MAX {

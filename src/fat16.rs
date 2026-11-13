@@ -55,7 +55,7 @@ impl Error {
             Self::ImageTooLarge => "application image exceeds 1 MiB",
             Self::ProgramTooLarge => "program exceeds 64 KiB",
             Self::OutOfMemory => "not enough memory",
-            Self::FirmwareDestination => "choose an IDE destination with install NUMBER; drive 0 is the BIOS boot source",
+            Self::FirmwareDestination => "choose a separate IDE or SATA destination; the BIOS boot disk is protected",
             Self::Corrupt => "invalid FAT chain or inconsistent metadata",
             Self::ReadOnly => "file is read-only",
             Self::NotFile => "path is a directory (expected a regular file)",
