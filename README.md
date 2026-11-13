@@ -2,6 +2,8 @@
 
 Xinyi is an experimental 32-bit x86 operating system written in Rust and x86 assembly. It includes a text shell, a small multitasking desktop, FAT16 storage and protected filesystem applications.
 
+> **Xinyi is a vibe-coded OS.** Much of the code was written with AI coding tools, guided and tested by the project maintainer. It is an experimental hobby project.
+
 ## Build and run
 
 Requirements: Rust nightly with `rust-src`, Cargo, NASM, Python 3 and `qemu-system-i386` on `PATH`. The build scripts are primarily tested on Windows with MSYS2; some tools include Windows-specific QEMU defaults.
